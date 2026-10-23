@@ -36,14 +36,14 @@ async function resolveRobloxAccount(input){
  const value=String(input||"").trim().replace(/^@/,"");
  if(isUserId(value))return {id:value,name:null};
  if(!/^[A-Za-z0-9_]{3,20}$/.test(value))return null;
- const r=await fetch("https://users.roblox.com/v1/usernames/users",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({usernames:[value],excludeBannedUsers:false}),signal:AbortSignal.timeout(2500)});
+ const r=await fetch("https://users.roblox.com/v1/usernames/users",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({usernames:[value],excludeBannedUsers:false}),signal:AbortSignal.timeout(1800)});
  if(!r.ok)throw new Error("Roblox lookup HTTP "+r.status);
  const data=await r.json();
  const account=data?.data?.[0];
  if(!account?.id||!isUserId(String(account.id)))return null;
  return {id:String(account.id),name:account.name};
 }
-async function getkey(i,env,overrideId) {
+async function getkey(i,env,overrideId,ctx) {
  const discordId=i.member?.user?.id;
  const input=String(overrideId||i.data?.options?.find(o=>o.name==="roblox_id")?.value||"");
  if(!discordId)return reply("Discord member information was unavailable.");
@@ -66,8 +66,7 @@ async function getkey(i,env,overrideId) {
    env.DB.prepare("INSERT INTO discord_key_issuance(discord_user_id,guild_id,roblox_user_id,key_hash,issued_at,expires_at) VALUES(?,?,?,?,?,?)").bind(discordId,GUILD_ID,robloxId,digest,now,"LIFETIME")
   ]);
  }catch(e){console.error("issue",e);return reply("❌ Could not generate a key. An active key may already exist. Try again or contact an administrator.")}
- await audit(env,"key_issued",robloxId);
- await discordLog(env,"KEY_LOG_CHANNEL_ID","🔑 Lifetime key issued • Discord <@"+discordId+"> • Roblox `"+robloxId+"` • Prefix `"+key.slice(0,13)+"`");
+ ctx.waitUntil(Promise.allSettled([audit(env,"key_issued",robloxId),discordLog(env,"KEY_LOG_CHANNEL_ID","🔑 Lifetime key issued • Discord <@"+discordId+"> • Roblox `"+robloxId+"` • Prefix `"+key.slice(0,13)+"`")]));
  return reply("🔑 **Syndicate Hub Lifetime Key**\nRoblox ID: `"+robloxId+"`"+(account.name?"\nUsername: `"+account.name+"`":"")+"\nKey: `"+key+"`\n**Keep this key private.** It remains valid until revoked.");
 }
 async function listKeys(env) {
@@ -106,7 +105,7 @@ export default {
   await env.DB.prepare("INSERT OR REPLACE INTO discord_setup_status (id,status,response,checked_at) VALUES (1,?,?,?)").bind(r.status,resultText,new Date().toISOString()).run();
   if(!r.ok)console.error("Discord command registration failed",r.status,(await r.text()).slice(0,500));
  },
- async fetch(req,env) {
+ async fetch(req,env,ctx) {
   const url=new URL(req.url);
   if(req.method==="GET"&&url.pathname==="/health")return new Response(JSON.stringify({ok:true,app:APPLICATION_ID}),{headers:{"content-type":"application/json"}});
   if(req.method!=="POST"||url.pathname!=="/discord/interactions")return new Response("Not found",{status:404});
@@ -120,10 +119,10 @@ export default {
    if(i.type===3&&i.data?.custom_id==="syndicate_generate_key")return modal();
    if(i.type===5&&i.data?.custom_id==="syndicate_key_modal"){
     const id=i.data.components?.flatMap(x=>x.components||[]).find(x=>x.custom_id==="roblox_id")?.value;
-    return await getkey(i,env,id);
+    return await getkey(i,env,id,ctx);
    }
    switch(i.data?.name){
-    case "getkey":return await getkey(i,env);
+    case "getkey":return await getkey(i,env,undefined,ctx);
     case "panel":return isAdmin(i)?await postPanel(i,env):reply("Administrator permission required.");
     case "keys":return isAdmin(i)?await listKeys(env):reply("Administrator permission required.");
     case "revoke":return isAdmin(i)?await revoke(i,env):reply("Administrator permission required.");
