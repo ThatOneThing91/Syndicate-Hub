@@ -362,7 +362,6 @@ local function GetGarageByNameForArea(areaName, garageName)
                                                                                 
         for _, garage in ipairs(garages:GetChildren()) do
             if garage.Name == garageName
-                and garage ~= FarmingCompletedGarage
                 and (not ThisHubInstance.IsFarmGarageAvailable
                     or ThisHubInstance.IsFarmGarageAvailable(garage)) then
 
@@ -379,10 +378,23 @@ local function GetGarageByNameForArea(areaName, garageName)
         if area then
             for _, object in ipairs(area:GetDescendants()) do
                 if object.Name == garageName
-                    and object ~= FarmingCompletedGarage
                     and (not ThisHubInstance.IsFarmGarageAvailable
                         or ThisHubInstance.IsFarmGarageAvailable(object)) then
 
+                    return object
+                end
+            end
+        end
+    end
+
+                                                                      
+    if areaName == "\067\097\114\103\111\032\084\114\097\105\110" then
+        local trainStop = workspace:FindFirstChild("\067\097\114\103\111\084\114\097\105\110\083\116\111\112")
+        if trainStop then
+            for _, object in ipairs(trainStop:GetDescendants()) do
+                if object.Name == garageName
+                    and (not ThisHubInstance.IsFarmGarageAvailable
+                        or ThisHubInstance.IsFarmGarageAvailable(object)) then
                     return object
                 end
             end
@@ -667,10 +679,54 @@ end
 
 ThisHubInstance.FarmCompletedInstances = setmetatable({}, {__mode = "\107"})
 ThisHubInstance.IsFarmGarageAvailable = function(garage)
-    if FarmingCompletedGarage then ThisHubInstance.FarmCompletedInstances[FarmingCompletedGarage] = true end
-    if not garage or ThisHubInstance.FarmCompletedInstances[garage] or not garage.Parent then return false end
+                                                                            
+                                                                              
+                                                                         
+    if FarmingCompletedGarage and FarmingCompletedGarage.Parent then
+        local completed = ThisHubInstance.FarmCompletedInstances[FarmingCompletedGarage]
+        if type(completed) ~= "\116\097\098\108\101" then
+            ThisHubInstance.FarmCompletedInstances[FarmingCompletedGarage] = {
+                at = os.clock(),
+                prompt = GetGaragePrompt(FarmingCompletedGarage),
+                sawUnavailable = false,
+            }
+        end
+    end
+
+    if not garage or not garage.Parent then
+        return false
+    end
+
     local prompt = GetGaragePrompt(garage)
-    return prompt ~= nil and prompt.Enabled ~= false and GetGarageDestination(garage) ~= nil
+    local destination = GetGarageDestination(garage)
+    local completed = ThisHubInstance.FarmCompletedInstances[garage]
+
+    if not prompt or prompt.Enabled == false or not destination then
+        if type(completed) == "\116\097\098\108\101" then
+            completed.sawUnavailable = true
+        end
+        return false
+    end
+
+    if type(completed) == "\116\097\098\108\101" then
+                                                                               
+                                                                    
+        local refreshed =
+            completed.sawUnavailable
+            or (completed.prompt ~= nil and completed.prompt ~= prompt)
+            or os.clock() - (completed.at or 0) >= 12
+
+        if refreshed then
+            ThisHubInstance.FarmCompletedInstances[garage] = nil
+            if FarmingCompletedGarage == garage then
+                FarmingCompletedGarage = nil
+            end
+        else
+            return false
+        end
+    end
+
+    return true
 end
 
 ThisHubInstance.CheckAuctionFunds = function(price, kind, cash, worth)
@@ -719,7 +775,7 @@ do
         Position = UDim2.new(1, -3, 1, -3),
         Size = UDim2.fromOffset(28, 28),
         BackgroundTransparency = 1,
-        Text = "◢",
+        Text = "\226\151\162",
         TextColor3 = Color3.fromRGB(190, 190, 195),
         TextSize = 23,
         Font = Enum.Font.GothamBold,
@@ -795,7 +851,7 @@ local ThemeButton = New("\084\101\120\116\066\117\116\116\111\110", {
     Size = UDim2.fromOffset(34, 28),
     Position = UDim2.new(1, -106, 0, 7),
     BackgroundColor3 = ButtonBackground,
-    Text = "🎨",
+    Text = "\240\159\142\168",
     TextColor3 = TextColor,
     TextSize = 16,
     BorderSizePixel = 0,
@@ -862,7 +918,7 @@ local MinimizeButton = New("\084\101\120\116\066\117\116\116\111\110", {
     Size = UDim2.fromOffset(34, 28),
     Position = UDim2.new(1, -72, 0, 7),
     BackgroundColor3 = ButtonBackground,
-    Text = "—",
+    Text = "\226\128\148",
     TextColor3 = TextColor,
     TextSize = 18,
     BorderSizePixel = 0,
@@ -874,7 +930,7 @@ local CloseButton = New("\084\101\120\116\066\117\116\116\111\110", {
     Size = UDim2.fromOffset(34, 28),
     Position = UDim2.new(1, -38, 0, 7),
     BackgroundColor3 = ButtonBackground,
-    Text = "×",
+    Text = "\195\151",
     TextColor3 = TextColor,
     TextSize = 20,
     BorderSizePixel = 0,
@@ -5973,7 +6029,7 @@ do
         Size = UDim2.new(1, 0, 0, 36),
         BackgroundColor3 = ButtonBackground,
         BorderSizePixel = 0,
-        Text = "\071\097\114\100\101\110\032\065\117\116\111\109\097\116\105\111\110\032\032▼",
+        Text = "\071\097\114\100\101\110\032\065\117\116\111\109\097\116\105\111\110\032\032\226\150\188",
         TextColor3 = TextColor,
         TextSize = 14,
         Font = Enum.Font.GothamBold,
@@ -5999,7 +6055,7 @@ do
     end
     TrackConnection(header.MouseButton1Click:Connect(function()
         content.Visible = not content.Visible
-        header.Text = content.Visible and "\071\097\114\100\101\110\032\065\117\116\111\109\097\116\105\111\110\032\032▼" or "\071\097\114\100\101\110\032\065\117\116\111\109\097\116\105\111\110\032\032▶"
+        header.Text = content.Visible and "\071\097\114\100\101\110\032\065\117\116\111\109\097\116\105\111\110\032\032\226\150\188" or "\071\097\114\100\101\110\032\065\117\116\111\109\097\116\105\111\110\032\032\226\150\182"
     end))
 
     local halloweenSection = New("\070\114\097\109\101", {
@@ -6014,7 +6070,7 @@ do
         Size = UDim2.new(1, 0, 0, 36),
         BackgroundColor3 = ButtonBackground,
         BorderSizePixel = 0,
-        Text = "\072\097\108\108\111\119\101\101\110\032\069\118\101\110\116\032\032▼",
+        Text = "\072\097\108\108\111\119\101\101\110\032\069\118\101\110\116\032\032\226\150\188",
         TextColor3 = TextColor,
         TextSize = 14,
         Font = Enum.Font.GothamBold,
@@ -6085,7 +6141,7 @@ do
     TrackConnection(halloweenHeader.MouseButton1Click:Connect(function()
         halloweenContent.Visible = not halloweenContent.Visible
         halloweenHeader.Text = halloweenContent.Visible
-            and "\072\097\108\108\111\119\101\101\110\032\069\118\101\110\116\032\032▼" or "\072\097\108\108\111\119\101\101\110\032\069\118\101\110\116\032\032▶"
+            and "\072\097\108\108\111\119\101\101\110\032\069\118\101\110\116\032\032\226\150\188" or "\072\097\108\108\111\119\101\101\110\032\069\118\101\110\116\032\032\226\150\182"
     end))
 end
 
@@ -6303,48 +6359,9 @@ end
 
 
 local function GetNextGarageAfter(currentGarage)
-    if not currentGarage then
-        return nil
-    end
-
-    local auctions = ThisHubInstance.GetAllowedAreaAuctions(State.SelectedArea, State.SelectedAuction)
-    local currentIndex
-
-    for index, garageName in ipairs(auctions) do
-        if garageName == currentGarage.Name then
-            currentIndex = index
-            break
-        end
-    end
-
-    if not currentIndex or #auctions <= 1 then
-        return nil
-    end
-
-                                                                            
-                                                                                 
-    for offset = 1, #auctions - 1 do
-        local index = ((currentIndex - 1 + offset) % #auctions) + 1
-        local garageName = auctions[index]
-
-        if not WasNetWorthRejected
-            or not WasNetWorthRejected(State.SelectedArea, garageName) then
-
-            local nextGarage = GetGarageByNameForArea(
-                State.SelectedArea,
-                garageName
-            )
-
-            if nextGarage
-                and nextGarage ~= currentGarage
-                and CanAffordGarage(nextGarage) then
-
-                return nextGarage
-            end
-        end
-    end
-
-    return nil
+                                                                               
+    local _, garage = ThisHubInstance.FindFarmableAuction(State.SelectedArea, currentGarage)
+    return garage
 end
 
 local function StageAtNextGarage(currentGarage)
@@ -6572,13 +6589,31 @@ do
                     if message:find("\115\111\108\100\032\116\111", 1, true)
                         and message:find(LocalPlayer.Name:lower(), 1, true) then
                         ThisHubInstance.AuctioneerSoldSerial += 1
-                                                                           
-                                                                            
-                        if FarmingCurrentGarage and
-                            ThisHubInstance.StagedWonGarage ~= FarmingCurrentGarage then
-                            ThisHubInstance.StagedWonGarage = FarmingCurrentGarage
-                            FarmingCompletedGarage = FarmingCurrentGarage
+
+                                                                              
                                                                              
+                                                                            
+                                                        
+                        local completedGarage = FarmingCurrentGarage
+
+                        if completedGarage
+                            and ThisHubInstance.StagedWonGarage ~= completedGarage then
+
+                            ThisHubInstance.StagedWonGarage = completedGarage
+                            FarmingCompletedGarage = completedGarage
+
+                                                                                 
+                                                                                
+                                                                            
+                            ThisHubInstance.AuctionSnapshots[State.SelectedArea] = nil
+                            ThisHubInstance.FarmFallbackMissingSince[State.SelectedArea] = nil
+
+                                                                                  
+                            FarmingBidGarage = nil
+                            FarmingCurrentGarage = nil
+                            ThisHubInstance.ActiveAuctionAreaOpen = false
+
+                            StageAtNextGarage(completedGarage)
                         end
                         return
                     end
@@ -6630,7 +6665,9 @@ local function WaitForAuctionFinished(runId, pickupSerialAtStart, soldSerialAtSt
             or ThisHubInstance.AuctioneerSoldSerial ~= soldSerialAtStart
             or AuctionWonSerial ~= wonSerialAtStart) then
             ThisHubInstance.ActiveAuctionAreaOpen = false
-            FarmingCompletedGarage = FarmingCurrentGarage
+            if FarmingCurrentGarage then
+                FarmingCompletedGarage = FarmingCurrentGarage
+            end
             return true
         end
 
@@ -6729,6 +6766,10 @@ ThisHubInstance.AuctionPriceHistory = {}
 ThisHubInstance.AuctionPriceKinds = {}
 ThisHubInstance.AuctionSnapshots = {}
 ThisHubInstance.FarmEntryRetryAfter = setmetatable({}, {__mode = "\107"})
+ThisHubInstance.SelectedTierRetryArea = nil
+ThisHubInstance.SelectedTierRetryName = nil
+ThisHubInstance.SelectedTierRetryUntil = 0
+ThisHubInstance.FarmFallbackMissingSince = {}
 
 ThisHubInstance.ScanFarmAuctions = function(areaName, force)
     local now = os.clock()
@@ -6752,7 +6793,7 @@ ThisHubInstance.ScanFarmAuctions = function(areaName, force)
     local seen = {}
     local function inspect(garage)
         local row = snapshot.byName[garage.Name]
-        if not row or seen[garage] or garage == FarmingCompletedGarage then return end
+        if not row or seen[garage] then return end
         seen[garage] = true
         row.spawned = row.spawned + 1
         local price, kind = ThisHubInstance.GetKnownAuctionRequirement(areaName, row.name)
@@ -6788,40 +6829,75 @@ ThisHubInstance.ScanFarmAuctions = function(areaName, force)
             if index % 500 == 0 then task.wait() end
         end
     end
+                                                                      
+    local movingAreaName = areaName == "\067\097\114\103\111\032\084\114\097\105\110" and "\067\097\114\103\111\084\114\097\105\110\083\116\111\112"
+        or (areaName == "\067\097\114\103\111\032\083\104\105\112" and "\067\097\114\103\111\083\104\105\112")
+    local movingArea = movingAreaName and workspace:FindFirstChild(movingAreaName)
+    if movingArea then
+        for index, object in ipairs(movingArea:GetDescendants()) do
+            if snapshot.byName[object.Name] then inspect(object) end
+            if index % 500 == 0 then task.wait() end
+        end
+    end
     ThisHubInstance.AuctionSnapshots[areaName] = snapshot
     return snapshot
 end
 
-local function FindFarmableAuction(areaName)
-    local snapshot = ThisHubInstance.ScanFarmAuctions(areaName)
-    local candidates = {}
+ThisHubInstance.FindFarmableAuction = function(areaName, excludedGarage)
     local now = os.clock()
-    local numbered = areaName == "\072\097\108\108\111\119\101\101\110" or areaName == "\080\111\119\101\114\032\080\108\097\110\116"
-        or areaName == "\067\097\114\103\111\032\084\114\097\105\110"
+    local selectedName = State.SelectedAuction
+                                                                              
+                                                                              
+    local snapshot = ThisHubInstance.ScanFarmAuctions(areaName, true)
+    local candidates = {}
     for _, candidate in ipairs(snapshot.entries) do
-        if candidate.available and candidate.affordable
+        if candidate.garage ~= excludedGarage
+            and candidate.available
+            and candidate.affordable
             and ThisHubInstance.IsFarmGarageAvailable(candidate.garage)
             and not WasNetWorthRejected(areaName, candidate.name)
-            and now >= (ThisHubInstance.FarmEntryRetryAfter[candidate.garage] or 0) then
+            and (candidate.name == selectedName
+                or now >= (ThisHubInstance.FarmEntryRetryAfter[candidate.garage] or 0)) then
             candidates[#candidates + 1] = candidate
         end
     end
+
     table.sort(candidates, function(left, right)
-        local leftSelected = left.name == State.SelectedAuction
-        local rightSelected = right.name == State.SelectedAuction
+        local leftSelected = left.name == selectedName
+        local rightSelected = right.name == selectedName
         if leftSelected ~= rightSelected then return leftSelected end
-        if numbered and left.index ~= right.index then return left.index > right.index end
-        if (left.price ~= nil) ~= (right.price ~= nil) then return left.price ~= nil end
-        if left.kind ~= right.kind then
-            local rank = {cash = 2, networth = 1}
-            return (rank[left.kind] or 0) > (rank[right.kind] or 0)
-        end
-        if left.price and right.price and left.price ~= right.price then
+        if left.price ~= nil and right.price ~= nil and left.price ~= right.price then
             return left.price > right.price
+        end
+        if (left.price ~= nil) ~= (right.price ~= nil) then
+            return left.price ~= nil
         end
         return left.index > right.index
     end)
+
     local best = candidates[1]
+    if best and best.name == selectedName then
+        ThisHubInstance.SelectedTierRetryArea = nil
+        ThisHubInstance.SelectedTierRetryName = nil
+        ThisHubInstance.SelectedTierRetryUntil = 0
+        ThisHubInstance.FarmFallbackMissingSince[areaName] = nil
+        return best.name, best.garage
+    end
+
+                                                                                
+    if ThisHubInstance.SelectedTierRetryArea == areaName
+        and ThisHubInstance.SelectedTierRetryName == selectedName
+        and now < (ThisHubInstance.SelectedTierRetryUntil or 0) then
+        return nil, nil
+    end
+                                                                             
+                                                                                  
+    local missing = ThisHubInstance.FarmFallbackMissingSince[areaName]
+    if not missing or missing.name ~= selectedName then
+        ThisHubInstance.FarmFallbackMissingSince[areaName] = {name = selectedName, at = now}
+        return nil, nil
+    end
+    if now - missing.at < 0.8 then return nil, nil end
     return best and best.name, best and best.garage
 end
 
@@ -6867,6 +6943,10 @@ do
                     if completedGarage then
                         FarmingCompletedGarage = completedGarage
                     end
+
+                                                                      
+                    ThisHubInstance.AuctionSnapshots[State.SelectedArea] = nil
+                    ThisHubInstance.FarmFallbackMissingSince[State.SelectedArea] = nil
 
                     AuctionWonSerial += 1
 
@@ -6914,26 +6994,40 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
     end
 
     local garage = selectedGarage or GetGarageByNameForArea(areaName, garageName)
+    local isFallback = garageName ~= State.SelectedAuction
+
+    local function SelectedGarageReady()
+        if not isFallback then
+            return nil
+        end
+
+        local selectedName, selected = ThisHubInstance.FindFarmableAuction(areaName)
+        if selectedName == State.SelectedAuction and selected and selected ~= garage then
+            return selectedName, selected
+        end
+
+        return nil
+    end
 
     if not ThisHubInstance.IsFarmGarageAvailable(garage) then
         return "\117\110\097\118\097\105\108\097\098\108\101"
+    end
+
+                                                                           
+                                                                     
+    if isFallback and SelectedGarageReady() then
+        ThisHubInstance.AuctionSnapshots[areaName] = nil
+        return "\112\114\105\111\114\105\116\121\095\099\104\097\110\103\101\100"
     end
 
                                                                          
                                                        
     local pickupSerialForAuction, soldSerialForAuction, wonSerialForAuction
 
-                                                                        
-                                                                            
-    if AuctionIsOpen() then
-        ThisHubInstance.EnsureBidPosition()
-        return "\097\117\099\116\105\111\110\095\097\099\116\105\118\101"
-    end
-
+                         
                                                                                
-    if ThisHubInstance.ActiveAuctionAreaOpen
-        and ThisHubInstance.ActiveAuctionAreaGarage
-        and ThisHubInstance.ActiveAuctionAreaGarage ~= garage then
+                                                                                 
+    if AuctionIsOpen() or ThisHubInstance.ActiveAuctionAreaOpen then
         ThisHubInstance.EnsureBidPosition()
         return "\097\117\099\116\105\111\110\095\097\099\116\105\118\101"
     end
@@ -6973,6 +7067,14 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
         return "\115\116\111\112\112\101\100"
     end
 
+                                                                       
+                                                                 
+    if isFallback and SelectedGarageReady() then
+        FarmingWaitingGarage = nil
+        ThisHubInstance.AuctionSnapshots[areaName] = nil
+        return "\112\114\105\111\114\105\116\121\095\099\104\097\110\103\101\100"
+    end
+
     if not CanAffordGarage(garage) then
         return "\117\110\097\102\102\111\114\100\097\098\108\101"
     end
@@ -6984,20 +7086,24 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
         RunId = runId,
     }
 
+                                                                        
+                                                                              
                                                                                
-                                                                               
-                                                                            
     FarmingBidGarage = garage
     FarmingBidRunId = runId
 
     local started = false
     local auctionStart = os.clock()
+    local promptSent = false
     local lastPromptAttempt = 0
+    local promptAttempts = 0
+    local PROMPT_CONFIRM_WINDOW = 1.25
+    local MAX_PROMPT_ATTEMPTS = 3
 
     while not HubDestroyed
         and State.Farming
         and RunIds.Farming == runId
-        and os.clock() - auctionStart < 5 do
+        and os.clock() - auctionStart < 6 do
 
         if WasNetWorthRejected(areaName, garageName) then
             PendingGarageEntry = nil
@@ -7005,25 +7111,61 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
             return "\117\110\097\102\102\111\114\100\097\098\108\101"
         end
 
-        if AuctionIsOpen() and GetBidButton() then
+                                                                                
+                                                                         
+        if ThisHubInstance.ActiveAuctionAreaOpen then
+            if ThisHubInstance.ActiveAuctionAreaGarage
+                and ThisHubInstance.ActiveAuctionAreaGarage ~= garage then
+
+                PendingGarageEntry = nil
+                FarmingBidGarage = nil
+                return "\097\117\099\116\105\111\110\095\097\099\116\105\118\101"
+            end
+
             started = true
             break
         end
 
+        if AuctionIsOpen() then
+            started = true
+            break
+        end
+
+                                                                          
+                                                                            
+        if not promptSent and isFallback and SelectedGarageReady() then
+            PendingGarageEntry = nil
+            FarmingBidGarage = nil
+            FarmingWaitingGarage = nil
+            ThisHubInstance.AuctionSnapshots[areaName] = nil
+            return "\112\114\105\111\114\105\116\121\095\099\104\097\110\103\101\100"
+        end
+
         local now = os.clock()
 
-        if now - lastPromptAttempt >= 0.45 then
+        if not promptSent
+            or (promptAttempts < MAX_PROMPT_ATTEMPTS
+                and now - lastPromptAttempt >= PROMPT_CONFIRM_WINDOW) then
+
                                                                                 
+                                                                               
+                                  
+            if AuctionIsOpen() or ThisHubInstance.ActiveAuctionAreaOpen then
+                started = true
+                break
+            end
+
             local currentPrompt = GetGaragePrompt(garage)
 
             if currentPrompt and currentPrompt.Enabled ~= false then
                 FireGaragePrompt(garage)
+                promptSent = true
+                promptAttempts += 1
+                lastPromptAttempt = now
             end
-
-            lastPromptAttempt = now
         end
 
-        task.wait(0.02)
+        task.wait(0.03)
     end
 
     if started then
@@ -7042,6 +7184,18 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
 
     if not started then
         FarmingBidGarage = nil
+
+        if garageName == State.SelectedAuction then
+                                                                               
+                                                                               
+                                                                            
+            ThisHubInstance.SelectedTierRetryArea = areaName
+            ThisHubInstance.SelectedTierRetryName = garageName
+            ThisHubInstance.SelectedTierRetryUntil = os.clock() + 4
+            ThisHubInstance.AuctionSnapshots[areaName] = nil
+            return "\115\101\108\101\099\116\101\100\095\114\101\116\114\121"
+        end
+
         return "\115\116\097\114\116\095\102\097\105\108\101\100"
     end
 
@@ -7086,11 +7240,13 @@ local function StartFarming(runId)
                     ThisHubInstance.AuctioneerSoldSerial, AuctionWonSerial)
                 if callOk then result = result and "\102\105\110\105\115\104\101\100" or "\115\116\111\112\112\101\100" end
             elseif ThisHubInstance.ActiveAuctionAreaOpen then
+                                                                              
+                                                                   
                 callOk, result = true, "\097\117\099\116\105\111\110\095\097\099\116\105\118\101"
             else
                                                                                 
                                                                               
-                local garageName, garage = FindFarmableAuction(areaName)
+                local garageName, garage = ThisHubInstance.FindFarmableAuction(areaName)
                 if garageName then
                     attemptedGarage = garage
                     callOk, result = pcall(FarmGarage, garageName, areaName, runId, garage)
@@ -7101,7 +7257,15 @@ local function StartFarming(runId)
             if HubDestroyed or not State.Farming or RunIds.Farming ~= runId then return end
             if attemptedGarage and (not callOk or result == "\115\116\097\114\116\095\102\097\105\108\101\100")
                 and not AuctionIsOpen() and not ThisHubInstance.ActiveAuctionAreaOpen then
-                ThisHubInstance.FarmEntryRetryAfter[attemptedGarage] = os.clock() + 8
+
+                                                                                 
+                                                                              
+                if attemptedGarage.Name == State.SelectedAuction then
+                    ThisHubInstance.FarmEntryRetryAfter[attemptedGarage] = nil
+                else
+                    ThisHubInstance.FarmEntryRetryAfter[attemptedGarage] = os.clock() + 8
+                end
+
                 ThisHubInstance.AuctionSnapshots[areaName] = nil
             end
             if not callOk then
@@ -7124,8 +7288,22 @@ local function StartFarming(runId)
                 FarmingBidGarage = nil
                 FarmingWaitingGarage = nil
                 task.wait(0.5)
+            elseif result == "\115\101\108\101\099\116\101\100\095\114\101\116\114\121" then
+                                                                           
+                                                                              
+                FarmingBidGarage = nil
+                FarmingWaitingGarage = nil
+                FarmingCurrentGarage = nil
+                task.wait(0.12)
+            elseif result == "\112\114\105\111\114\105\116\121\095\099\104\097\110\103\101\100" then
+                                                                             
+                                                                      
+                FarmingBidGarage = nil
+                FarmingWaitingGarage = nil
+                FarmingCurrentGarage = nil
+                task.wait(0.02)
             else
-                task.wait(0.1)
+                task.wait(result == "\097\117\099\116\105\111\110\095\097\099\116\105\118\101" and 0.15 or 0.1)
             end
         end
     end)
@@ -7573,6 +7751,9 @@ AuctionDropdown = CreateDropdown(
         State.SelectedAuction = value
         FarmingPreferredAuction = value
         ThisHubInstance.AuctionSelections[State.SelectedArea] = value
+        ThisHubInstance.SelectedTierRetryArea = nil
+        ThisHubInstance.SelectedTierRetryName = nil
+        ThisHubInstance.SelectedTierRetryUntil = 0
     end
 )
 AuctionDropdown:SetLabelFormatter(ThisHubInstance.FormatAuctionOption)
@@ -7688,6 +7869,9 @@ CreateToggle(
                 and (ThisHubInstance.ActiveAuctionAreaGarage
                     or ThisHubInstance.InterruptedFarmingGarage) or nil
             FarmingPreferredAuction = State.SelectedAuction
+            ThisHubInstance.SelectedTierRetryArea = nil
+            ThisHubInstance.SelectedTierRetryName = nil
+            ThisHubInstance.SelectedTierRetryUntil = 0
 
             local farmingRunId = RunIds.Farming
             StartFarming(farmingRunId)
@@ -8534,7 +8718,7 @@ local function SetupTestsRuleBuilder()
         BackgroundColor3 = DarkBackground,
         BackgroundTransparency = 0.15,
         BorderSizePixel = 0,
-        Text = "—\037",
+        Text = "\226\128\148\037",
         TextColor3 = TextColor,
         TextSize = 16,
         Font = Enum.Font.GothamBold,
@@ -8985,7 +9169,7 @@ local function SetupTestsRuleBuilder()
                 Size = UDim2.fromOffset(22, 42),
                 Position = UDim2.new(1, -25, 0, 0),
                 BackgroundTransparency = 1,
-                Text = "▼",
+                Text = "\226\150\188",
                 TextColor3 = MutedText,
                 TextSize = 10,
                 Font = Enum.Font.GothamBold,
@@ -9021,7 +9205,7 @@ local function SetupTestsRuleBuilder()
                 end
 
                 summary.Text = count == 0 and "\078\111\110\101" or tostring(count) .. "\032\115\101\108\101\099\116\101\100"
-                arrow.Text = open and "▲" or "▼"
+                arrow.Text = open and "\226\150\178" or "\226\150\188"
 
                 for _, value in ipairs(values) do
                     local selected = tableForMode[value] == true
@@ -9030,7 +9214,7 @@ local function SetupTestsRuleBuilder()
                         Size = UDim2.new(1, 0, 0, 28),
                         BackgroundColor3 = selected and ThemeColor or DarkerBackground,
                         BorderSizePixel = 0,
-                        Text = (selected and "✓\032\032" or "\032\032\032\032") .. value,
+                        Text = (selected and "\226\156\147\032\032" or "\032\032\032\032") .. value,
                         TextColor3 = TextColor,
                         TextSize = 10,
                         Font = Enum.Font.Gotham,
@@ -9897,8 +10081,8 @@ New("\084\101\120\116\076\097\098\101\108", {
     Position = UDim2.fromOffset(15, 48),
     BackgroundTransparency = 1,
     Text =
-        "\084\104\105\115\032\119\105\108\108\032\115\116\111\112\032\097\110\100\032\100\101\115\116\114\111\121\032\097\108\108\032\097\099\116\105\118\101\032\102\101\097\116\117\114\101\115\044\n"
-        .. "\102\097\114\109\105\110\103\032\108\111\111\112\115\044\032\100\101\116\101\099\116\111\114\115\044\032\097\110\100\032\098\097\099\107\103\114\111\117\110\100\032\116\097\115\107\115\046\n\n"
+        "\084\104\105\115\032\119\105\108\108\032\115\116\111\112\032\097\110\100\032\100\101\115\116\114\111\121\032\097\108\108\032\097\099\116\105\118\101\032\102\101\097\116\117\114\101\115\044\010"
+        .. "\102\097\114\109\105\110\103\032\108\111\111\112\115\044\032\100\101\116\101\099\116\111\114\115\044\032\097\110\100\032\098\097\099\107\103\114\111\117\110\100\032\116\097\115\107\115\046\010\010"
         .. "\089\111\117\032\119\105\108\108\032\110\101\101\100\032\116\111\032\114\101\108\097\117\110\099\104\032\116\104\101\032\115\099\114\105\112\116\032\116\111\032\117\115\101\032\116\104\101\032\104\117\098\032\097\103\097\105\110\046",
     TextWrapped = true,
     TextColor3 = MutedText,
@@ -10038,7 +10222,7 @@ ThisHubInstance.RestoreButton = New("\084\101\120\116\066\117\116\116\111\110", 
     Position = UDim2.new(0.5, -22, 0, 12),
     BackgroundColor3 = DarkerBackground,
     BorderSizePixel = 0,
-    Text = "❤",
+    Text = "\226\157\164",
     TextColor3 = Color3.fromRGB(185, 110, 255),
     TextSize = 27,
     Font = Enum.Font.GothamBold,
@@ -10252,7 +10436,7 @@ local function report(message)
     if not alive or HubDestroyed then return end
     table.insert(messages,tostring(message))
     while #messages>13 do table.remove(messages,1) end
-    log.Text=table.concat(messages,"\n")
+    log.Text=table.concat(messages,"\010")
 end
 local function invoke(name,...)
     local remote=GradingEvents:FindFirstChild(name)
@@ -11307,6 +11491,7 @@ Notify(
     "\076\111\097\100\101\100\032\045\032\080\114\101\115\115\032\044\032\116\111\032\115\104\111\119\047\104\105\100\101",
     2
 )
+
 
 
 
