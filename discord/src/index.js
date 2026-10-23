@@ -73,7 +73,7 @@ function modal(){return new Response(JSON.stringify({type:9,data:{custom_id:"syn
 async function postPanel(i,env){
  const channel=i.channel_id;
  if(!channel)return reply("No channel found.");
- const payload={embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",description:"**Unlock Your Lifetime Access**\\n\\nClick the button below to generate your personal Syndicate Hub key. You will be asked for your numeric Roblox User ID.\\n\\n**One active key per member and Roblox ID.** Your key will only be shown to you.",color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],components:[{type:1,components:[{type:2,style:1,label:"Generate My Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}}]}]};
+ const payload={embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",description:"**Unlock Your Lifetime Access**\\n\\nClick the button below to generate your personal Syndicate Hub key. You will be asked for your numeric Roblox User ID.\n\n**One active key per member and Roblox ID.** Your key will only be shown to you.",color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],components:[{type:1,components:[{type:2,style:1,label:"Generate My Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}}]}]};
  const r=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{method:"POST",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},body:JSON.stringify(payload)});
  if(!r.ok){console.error("panel",r.status,(await r.text()).slice(0,500));return reply("Could not post panel. Check bot permissions: View Channel, Send Messages, Embed Links.")}
  return reply("✅ Key-generation panel posted in this channel.");
