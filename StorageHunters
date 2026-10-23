@@ -3,6 +3,7 @@ if not (function()
     if not game:IsLoaded() then game.Loaded:Wait() end
     local players = game:GetService("\080\108\097\121\101\114\115")
     local httpService = game:GetService("\072\116\116\112\083\101\114\118\105\099\101")
+    local userInputService = game:GetService("\085\115\101\114\073\110\112\117\116\083\101\114\118\105\099\101")
     local player = players.LocalPlayer
     if not player then return false end
     local environment = getgenv and getgenv() or _G
@@ -185,6 +186,33 @@ if not (function()
             end
         end)
     end
+                                                                                         
+    local dragHandle = make("\084\101\120\116\066\117\116\116\111\110", {
+        Name = "\068\114\097\103\072\097\110\100\108\101", BackgroundTransparency = 1, Text = "",
+        Size = UDim2.new(1, 0, 0, 53), Position = UDim2.fromOffset(0, 0),
+        AutoButtonColor = false, ZIndex = 2,
+    }, frame)
+    local dragInput, dragStart, frameStart
+    connections[#connections + 1] = dragHandle.InputBegan:Connect(function(event)
+        if closed or dragInput then return end
+        if event.UserInputType ~= Enum.UserInputType.MouseButton1
+            and event.UserInputType ~= Enum.UserInputType.Touch then return end
+        dragInput, dragStart, frameStart = event, event.Position, frame.Position
+    end)
+    connections[#connections + 1] = userInputService.InputChanged:Connect(function(event)
+        if closed or not dragInput then return end
+        local mouseDrag = dragInput.UserInputType == Enum.UserInputType.MouseButton1
+            and event.UserInputType == Enum.UserInputType.MouseMovement
+        if not mouseDrag and event ~= dragInput then return end
+        local delta = event.Position - dragStart
+        frame.Position = UDim2.new(frameStart.X.Scale, frameStart.X.Offset + delta.X,
+            frameStart.Y.Scale, frameStart.Y.Offset + delta.Y)
+    end)
+    connections[#connections + 1] = userInputService.InputEnded:Connect(function(event)
+        if event == dragInput then
+            dragInput = nil
+        end
+    end)
     connections[#connections + 1] = unlock.Activated:Connect(submit)
     connections[#connections + 1] = cancel.Activated:Connect(gate.Cancel)
     connections[#connections + 1] = input.FocusLost:Connect(function(enterPressed)
