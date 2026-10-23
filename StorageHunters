@@ -1,4 +1,13 @@
                                                                     
+-- Remove any previous Syndicate Hub instance before opening the key gate.
+do
+    local env = getgenv and getgenv() or _G
+    local old = env["\095\095\083\116\111\114\097\103\101\072\117\110\116\101\114\115\072\117\098\073\110\115\116\097\110\099\101"]
+    if type(old) == "\116\097\098\108\101" and type(old.Destroy) == "\102\117\110\099\116\105\111\110" then
+        pcall(old.Destroy)
+    end
+end
+
 if not (function()
     if not game:IsLoaded() then game.Loaded:Wait() end
     local players = game:GetService("\080\108\097\121\101\114\115")
@@ -68,10 +77,10 @@ if not (function()
     end
     local frame = make("\070\114\097\109\101", {
         AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-        Size = UDim2.new(0.9, 0, 0, 300), BackgroundColor3 = Color3.fromRGB(24, 22, 31),
+        Size = UDim2.new(0.9, 0, 0, 348), BackgroundColor3 = Color3.fromRGB(24, 22, 31),
         BorderSizePixel = 0, Visible = savedKey == nil,
     }, gui)
-    make("\085\073\083\105\122\101\067\111\110\115\116\114\097\105\110\116", {MaxSize = Vector2.new(380, 300)}, frame)
+    make("\085\073\083\105\122\101\067\111\110\115\116\114\097\105\110\116", {MaxSize = Vector2.new(380, 348)}, frame)
     make("\085\073\067\111\114\110\101\114", {CornerRadius = UDim.new(0, 12)}, frame)
     local function label(text, y, height, size, color)
         return make("\084\101\120\116\076\097\098\101\108", {
@@ -108,6 +117,23 @@ if not (function()
         Font = Enum.Font.Gotham, TextSize = 14,
     }, frame)
     make("\085\073\067\111\114\110\101\114", {CornerRadius = UDim.new(0, 6)}, cancel)
+    local discord = make("\084\101\120\116\066\117\116\116\111\110", {
+        Position = UDim2.new(0, 20, 0, 290), Size = UDim2.new(1, -40, 0, 40),
+        BackgroundColor3 = Color3.fromRGB(77, 85, 173), BorderSizePixel = 0,
+        Text = "\068\105\115\099\111\114\100\032\083\101\114\118\101\114\032\045\032\067\111\112\121\032\073\110\118\105\116\101", TextColor3 = Color3.fromRGB(255, 255, 255),
+        Font = Enum.Font.GothamBold, TextSize = 13,
+    }, frame)
+    make("\085\073\067\111\114\110\101\114", {CornerRadius = UDim.new(0, 6)}, discord)
+    connections[#connections + 1] = discord.Activated:Connect(function()
+        local invite = "\104\116\116\112\115\058\047\047\100\105\115\099\111\114\100\046\103\103\047\051\103\099\055\106\065\071\075\116\114"
+        local clipboard = setclipboard or toclipboard or (syn and syn.write_clipboard)
+        if type(clipboard) == "\102\117\110\099\116\105\111\110" then
+            local ok = pcall(clipboard, invite)
+            status.Text = ok and "\068\105\115\099\111\114\100\032\105\110\118\105\116\101\032\099\111\112\105\101\100\032\116\111\032\099\108\105\112\098\111\097\114\100\033" or invite
+        else
+            status.Text = invite
+        end
+    end)
     local function finish(allowed)
         if closed then return end
         closed, finished, granted = true, true, allowed == true
