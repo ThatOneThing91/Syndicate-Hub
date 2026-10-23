@@ -11724,3 +11724,57 @@ Notify(
 
 
 
+
+
+-- Live key revocation monitor. Only an explicit valid=false response closes the hub.
+task.spawn(function()
+    local env = getgenv and getgenv() or _G
+    local userId = tostring(game:GetService("Players").LocalPlayer.UserId)
+    local cacheFile = "SyndicateHub_Key_" .. userId .. ".json"
+    local cacheName = "__SyndicateHubMemberKeys"
+    local endpoint = "https://syndicate-auth.loganmatthewsmall.workers.dev/verify"
+    local httpService = game:GetService("HttpService")
+    local function currentKey()
+        local keys = env[cacheName]
+        local key = type(keys) == "table" and keys[userId] or nil
+        if type(key) == "string" then return key end
+        if type(readfile) == "function" then
+            local ok, record = pcall(function() return httpService:JSONDecode(readfile(cacheFile)) end)
+            if ok and type(record) == "table" and record.userId == userId then return record.key end
+        end
+        return nil
+    end
+    while not HubDestroyed and env[HubInstanceKey] == ThisHubInstance do
+        task.wait(60)
+        if HubDestroyed or env[HubInstanceKey] ~= ThisHubInstance then break end
+        local key = currentKey()
+        local send = request or http_request or (syn and syn.request)
+            or (http and http.request) or (fluxus and fluxus.request)
+        if type(key) == "string" and type(send) == "function" then
+            local ok, response = pcall(send, {
+                Url = endpoint, Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = httpService:JSONEncode({key = key, userId = userId})
+            })
+            if ok and type(response) == "table" and tonumber(response.StatusCode or response.Status) == 200 then
+                local decoded, data = pcall(function() return httpService:JSONDecode(response.Body) end)
+                if decoded and type(data) == "table" and data.valid == false
+                    and not HubDestroyed and env[HubInstanceKey] == ThisHubInstance then
+                    local keys = env[cacheName]
+                    if type(keys) == "table" then keys[userId] = nil end
+                    if type(delfile) == "function" then pcall(delfile, cacheFile) end
+                    if type(writefile) == "function" then pcall(writefile, cacheFile, "{}") end
+                    if type(ThisHubInstance.Destroy) == "function" then
+                        pcall(ThisHubInstance.Destroy)
+                    end
+                    pcall(function()
+                        game:GetService("StarterGui"):SetCore("SendNotification", {
+                            Title = "Syndicate Hub", Text = "Your key was revoked. Hub stopped.", Duration = 8
+                        })
+                    end)
+                    break
+                end
+            end
+        end
+    end
+end)
