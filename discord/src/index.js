@@ -32,10 +32,25 @@ async function discordLog(env,channel,content) {
  const id=env[channel];if(!id||!env.DISCORD_BOT_TOKEN)return;
  try {await fetch("https://discord.com/api/v10/channels/"+id+"/messages",{method:"POST",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},body:JSON.stringify({content,allowed_mentions:{parse:[]}})})}catch(e){console.error("log",e)}
 }
+async function resolveRobloxAccount(input){
+ const value=String(input||"").trim().replace(/^@/,"");
+ if(isUserId(value))return {id:value,name:null};
+ if(!/^[A-Za-z0-9_]{3,20}$/.test(value))return null;
+ const r=await fetch("https://users.roblox.com/v1/usernames/users",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({usernames:[value],excludeBannedUsers:false}),signal:AbortSignal.timeout(2500)});
+ if(!r.ok)throw new Error("Roblox lookup HTTP "+r.status);
+ const data=await r.json();
+ const account=data?.data?.[0];
+ if(!account?.id||!isUserId(String(account.id)))return null;
+ return {id:String(account.id),name:account.name};
+}
 async function getkey(i,env,overrideId) {
  const discordId=i.member?.user?.id;
- const robloxId=String(overrideId||i.data?.options?.find(o=>o.name==="roblox_id")?.value||"");
- if(!discordId||!isUserId(robloxId))return reply("Enter a valid numeric Roblox User ID.");
+ const input=String(overrideId||i.data?.options?.find(o=>o.name==="roblox_id")?.value||"");
+ if(!discordId)return reply("Discord member information was unavailable.");
+ let account;
+ try{account=await resolveRobloxAccount(input)}catch(e){console.error("Roblox lookup",e);return reply("❌ Roblox username lookup is temporarily unavailable. Please try your numeric Roblox User ID instead.")}
+ if(!account)return reply("❌ Roblox account not found. Enter the exact **username** (not display name) or your numeric Roblox User ID.");
+ const robloxId=account.id;
  const active=await env.DB.prepare("SELECT key_prefix FROM member_keys WHERE user_id=? AND revoked=0 AND (expires_at IS NULL OR expires_at>?) LIMIT 1").bind(robloxId,new Date().toISOString()).first();
  if(active)return reply("❌ An active key already exists for Roblox ID `"+robloxId+"`. Contact an administrator to revoke it before requesting another.");
  const existing=await env.DB.prepare("SELECT 1 FROM discord_key_issuance d JOIN member_keys m ON d.key_hash=m.key_hash WHERE d.discord_user_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(discordId,new Date().toISOString()).first();
@@ -53,7 +68,7 @@ async function getkey(i,env,overrideId) {
  }catch(e){console.error("issue",e);return reply("❌ Could not generate a key. An active key may already exist. Try again or contact an administrator.")}
  await audit(env,"key_issued",robloxId);
  await discordLog(env,"KEY_LOG_CHANNEL_ID","🔑 Lifetime key issued • Discord <@"+discordId+"> • Roblox `"+robloxId+"` • Prefix `"+key.slice(0,13)+"`");
- return reply("🔑 **Syndicate Hub Lifetime Key**\nRoblox ID: `"+robloxId+"`\nKey: `"+key+"`\n**Keep this key private.** It remains valid until revoked.");
+ return reply("🔑 **Syndicate Hub Lifetime Key**\nRoblox ID: `"+robloxId+"`"+(account.name?"\nUsername: `"+account.name+"`":"")+"\nKey: `"+key+"`\n**Keep this key private.** It remains valid until revoked.");
 }
 async function listKeys(env) {
  const r=await env.DB.prepare("SELECT key_prefix,user_id,created_at FROM member_keys WHERE revoked=0 AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at DESC LIMIT 15").bind(new Date().toISOString()).all();
@@ -69,11 +84,11 @@ async function revoke(i,env) {
  await discordLog(env,"SECURITY_LOG_CHANNEL_ID","🚫 Key revoked • Roblox `"+uid+"` • by Discord <@"+i.member.user.id+">");
  return reply("✅ Revoked active key for Roblox ID `"+uid+"`.");
 }
-function modal(){return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_key_modal",title:"Generate Syndicate Hub Key",components:[{type:1,components:[{type:4,custom_id:"roblox_id",label:"Your Roblox User ID",style:1,min_length:1,max_length:20,required:true,placeholder:"Enter your numeric Roblox User ID"}]}]}}),{headers:{"content-type":"application/json"}})}
+function modal(){return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_key_modal",title:"Generate Syndicate Hub Key",components:[{type:1,components:[{type:4,custom_id:"roblox_id",label:"Roblox Username or User ID",style:1,min_length:1,max_length:20,required:true,placeholder:"Username (not display name) or numeric ID"}]}]}}),{headers:{"content-type":"application/json"}})}
 async function postPanel(i,env){
  const channel=i.channel_id;
  if(!channel)return reply("No channel found.");
- const payload={embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",description:"**Unlock Your Lifetime Access**\n\nClick the button below to generate your personal Syndicate Hub key. You will be asked for your numeric Roblox User ID.\n\n**One active key per member and Roblox ID.** Your key will only be shown to you.",color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],components:[{type:1,components:[{type:2,style:1,label:"Generate My Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}}]}]};
+ const payload={embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",description:"**Unlock Your Lifetime Access**\n\nClick the button below to generate your personal Syndicate Hub key. Enter your **Roblox username** (not display name) or numeric User ID.\n\n**One active key per member and Roblox ID.** Your key will only be shown to you.",color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],components:[{type:1,components:[{type:2,style:1,label:"Generate My Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}}]}]};
  const r=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{method:"POST",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},body:JSON.stringify(payload)});
  if(!r.ok){console.error("panel",r.status,(await r.text()).slice(0,500));return reply("Could not post panel. Check bot permissions: View Channel, Send Messages, Embed Links.")}
  return reply("✅ Key-generation panel posted in this channel.");
