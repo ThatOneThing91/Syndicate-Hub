@@ -1,3 +1,8 @@
+const COMMANDS=[
+ {name:"getkey",description:"Get your lifetime Syndicate Hub key",options:[{type:3,name:"roblox_id",description:"Your numeric Roblox User ID",required:true}]},
+ {name:"keys",description:"List active Syndicate Hub keys (admins only)",default_member_permissions:"8"},
+ {name:"revoke",description:"Revoke a Roblox User ID's key (admins only)",default_member_permissions:"8",options:[{type:3,name:"roblox_id",description:"Roblox User ID to revoke",required:true}]}
+];
 // Syndicate Hub Discord interactions Worker. Deploy separately with D1 binding DB,
 // KEY_PEPPER secret, DISCORD_BOT_TOKEN secret and the public key below.
 // Do not place tokens in this source or a public repository.
@@ -64,6 +69,15 @@ async function revoke(i,env) {
  return reply("✅ Revoked active key for Roblox ID `"+uid+"`.");
 }
 export default {
+ async scheduled(event,env,ctx){
+  if(!env.DISCORD_BOT_TOKEN)return;
+  const r=await fetch("https://discord.com/api/v10/applications/"+APPLICATION_ID+"/guilds/"+GUILD_ID+"/commands",{
+   method:"PUT",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},
+   body:JSON.stringify(COMMANDS)
+  });
+  console.log("Discord command registration status",r.status);
+  if(!r.ok)console.error("Discord command registration failed",r.status,(await r.text()).slice(0,500));
+ },
  async fetch(req,env) {
   const url=new URL(req.url);
   if(req.method==="GET"&&url.pathname==="/health")return new Response(JSON.stringify({ok:true,app:APPLICATION_ID}),{headers:{"content-type":"application/json"}});
