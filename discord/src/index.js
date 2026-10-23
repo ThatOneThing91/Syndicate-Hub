@@ -87,7 +87,7 @@ function modal(){return new Response(JSON.stringify({type:9,data:{custom_id:"syn
 async function postPanel(i,env){
  const channel=i.channel_id;
  if(!channel)return reply("No channel found.");
- const payload={embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",description:"**Unlock Your Lifetime Access**\n\nClick the button below to generate your personal Syndicate Hub key. Enter your **Roblox username** (not display name) or numeric User ID.\n\n**One active key per member and Roblox ID.** Your key will only be shown to you.",color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],components:[{type:1,components:[{type:2,style:1,label:"Generate My Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}}]}]};
+ const payload={embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",description:"**Unlock Your Lifetime Access**\n\nClick the button below to generate your personal Syndicate Hub key. Enter your **Roblox username** (not display name) or numeric User ID.\n\n**One active key per member and Roblox ID.** Your key will only be shown to you.",color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],components:[{type:1,components:[{type:2,style:1,label:"Generate My Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}},{type:2,style:2,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}}]}]};
  const r=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{method:"POST",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},body:JSON.stringify(payload)});
  if(!r.ok){console.error("panel",r.status,(await r.text()).slice(0,500));return reply("Could not post panel. Check bot permissions: View Channel, Send Messages, Embed Links.")}
  return reply("✅ Key-generation panel posted in this channel.");
@@ -117,6 +117,7 @@ export default {
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
   try {
    if(i.type===3&&i.data?.custom_id==="syndicate_generate_key")return modal();
+   if(i.type===3&&i.data?.custom_id==="syndicate_get_script")return reply("📜 **Syndicate Hub**\n```lua\nloadstring(game:HttpGet(\"https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/StorageHunters\"))()\n```");
    if(i.type===5&&i.data?.custom_id==="syndicate_key_modal"){
     const id=i.data.components?.flatMap(x=>x.components||[]).find(x=>x.custom_id==="roblox_id")?.value;
     return await getkey(i,env,id,ctx);
