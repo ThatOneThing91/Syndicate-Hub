@@ -11804,3 +11804,44 @@ task.spawn(function()
         end
     end
 end)
+
+
+-- Authenticated execution telemetry and active-session heartbeat.
+task.spawn(function()
+    local env = getgenv and getgenv() or _G
+    local httpService = game:GetService("HttpService")
+    local uid = tostring(game:GetService("Players").LocalPlayer.UserId)
+    local sessionId = httpService:GenerateGUID(false):gsub("[^%w]", "")
+    local endpoint = "https://syndicate-auth.loganmatthewsmall.workers.dev/verify"
+    local function memberKey()
+        local cached = env.__SyndicateHubMemberKeys
+        local key = type(cached) == "table" and cached[uid] or nil
+        if type(key) == "string" then return key end
+        if type(readfile) == "function" then
+            local ok, record = pcall(function()
+                return httpService:JSONDecode(readfile("SyndicateHub_Key_" .. uid .. ".json"))
+            end)
+            if ok and type(record) == "table" and record.userId == uid then return record.key end
+        end
+    end
+    local function ping(activity)
+        local key = memberKey()
+        local send = request or http_request or (syn and syn.request)
+            or (http and http.request) or (fluxus and fluxus.request)
+        if type(key) ~= "string" or type(send) ~= "function" then return end
+        pcall(send, {
+            Url = endpoint, Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = httpService:JSONEncode({
+                key = key, userId = uid, sessionId = sessionId, activity = activity
+            })
+        })
+    end
+    if HubDestroyed or env[HubInstanceKey] ~= ThisHubInstance then return end
+    ping("launch")
+    while not HubDestroyed and env[HubInstanceKey] == ThisHubInstance do
+        task.wait(60)
+        if HubDestroyed or env[HubInstanceKey] ~= ThisHubInstance then break end
+        ping("heartbeat")
+    end
+end)
