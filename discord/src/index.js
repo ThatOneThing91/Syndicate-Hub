@@ -83,11 +83,24 @@ async function revoke(i,env) {
  await discordLog(env,"SECURITY_LOG_CHANNEL_ID","🚫 Key revoked • Roblox `"+uid+"` • by Discord <@"+i.member.user.id+">");
  return reply("✅ Revoked active key for Roblox ID `"+uid+"`.");
 }
+async function revokeOwnKey(i,env,ctx){
+ const discordId=i.member?.user?.id;
+ if(!discordId)return reply("Discord member information was unavailable.");
+ const owned=await env.DB.prepare("SELECT m.key_hash,m.user_id FROM discord_key_issuance d JOIN member_keys m ON d.key_hash=m.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) ORDER BY d.issued_at DESC LIMIT 1").bind(discordId,GUILD_ID,new Date().toISOString()).first();
+ if(!owned)return reply("You don't have an active Syndicate Hub key issued to this Discord account.");
+ const result=await env.DB.prepare("UPDATE member_keys SET revoked=1 WHERE key_hash=? AND revoked=0 AND EXISTS (SELECT 1 FROM discord_key_issuance WHERE key_hash=? AND discord_user_id=? AND guild_id=?)").bind(owned.key_hash,owned.key_hash,discordId,GUILD_ID).run();
+ if(!(result.meta?.changes>0))return reply("Your key is already revoked or unavailable.");
+ ctx.waitUntil(Promise.allSettled([audit(env,"key_self_revoked",owned.user_id),discordLog(env,"SECURITY_LOG_CHANNEL_ID","🚫 Member self-revoked key • Roblox `"+owned.user_id+"` • Discord <@"+discordId+">")]));
+ return reply("✅ Your Syndicate Hub key has been revoked. Your running hub will shut down after its next verification check. You can generate a new key using the panel.");
+}
+function confirmOwnRevoke(){
+ return new Response(JSON.stringify({type:4,data:{flags:64,content:"⚠️ **Revoke your Syndicate Hub key?** This will disable your current key and stop the hub at its next verification check. This only affects the key issued to your Discord account.",components:[{type:1,components:[{type:2,style:4,label:"Yes, Revoke My Key",custom_id:"syndicate_confirm_self_revoke"},{type:2,style:2,label:"Cancel",custom_id:"syndicate_cancel_self_revoke"}]}],allowed_mentions:{parse:[]}}}),{headers:{"content-type":"application/json"}});
+}
 function modal(){return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_key_modal",title:"Generate Syndicate Hub Key",components:[{type:1,components:[{type:4,custom_id:"roblox_id",label:"Roblox Username or User ID",style:1,min_length:1,max_length:20,required:true,placeholder:"Username (not display name) or numeric ID"}]}]}}),{headers:{"content-type":"application/json"}})}
 async function postPanel(i,env){
  const channel=i.channel_id;
  if(!channel)return reply("No channel found.");
- const payload={embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",description:"**Unlock Your Lifetime Access**\n\nClick the button below to generate your personal Syndicate Hub key. Enter your **Roblox username** (not display name) or numeric User ID.\n\n**One active key per member and Roblox ID.** Your key will only be shown to you.",color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],components:[{type:1,components:[{type:2,style:1,label:"Generate My Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}},{type:2,style:2,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}}]}]};
+ const payload={embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",description:"**Unlock Your Lifetime Access**\n\nClick the button below to generate your personal Syndicate Hub key. Enter your **Roblox username** (not display name) or numeric User ID.\n\n**One active key per member and Roblox ID.** Your key will only be shown to you.",color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],components:[{type:1,components:[{type:2,style:1,label:"Generate My Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}},{type:2,style:2,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}},{type:2,style:4,label:"Revoke My Key",custom_id:"syndicate_revoke_own_key",emoji:{name:"🚫"}}]}]};
  const r=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{method:"POST",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},body:JSON.stringify(payload)});
  if(!r.ok){console.error("panel",r.status,(await r.text()).slice(0,500));return reply("Could not post panel. Check bot permissions: View Channel, Send Messages, Embed Links.")}
  return reply("✅ Key-generation panel posted in this channel.");
@@ -117,6 +130,9 @@ export default {
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
   try {
    if(i.type===3&&i.data?.custom_id==="syndicate_generate_key")return modal();
+   if(i.type===3&&i.data?.custom_id==="syndicate_revoke_own_key")return confirmOwnRevoke();
+   if(i.type===3&&i.data?.custom_id==="syndicate_confirm_self_revoke")return await revokeOwnKey(i,env,ctx);
+   if(i.type===3&&i.data?.custom_id==="syndicate_cancel_self_revoke")return reply("Cancelled. Your key is still active.");
    if(i.type===3&&i.data?.custom_id==="syndicate_get_script")return reply("📜 **Syndicate Hub**\n```lua\nloadstring(game:HttpGet(\"https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/StorageHunters\"))()\n```");
    if(i.type===5&&i.data?.custom_id==="syndicate_key_modal"){
     const id=i.data.components?.flatMap(x=>x.components||[]).find(x=>x.custom_id==="roblox_id")?.value;
