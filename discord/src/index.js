@@ -5,7 +5,7 @@ const COMMANDS=[
  {name:"revoke",description:"Revoke a Roblox User ID's key (admins only)",default_member_permissions:"8",options:[{type:3,name:"roblox_id",description:"Roblox User ID to revoke",required:true}]}
 ];
 // Syndicate Hub Discord interactions Worker. Deploy separately with D1 binding DB,
-// KEY_PEPPER secret, DISCORD_BOT_TOKEN secret and the public key below.
+// KEY_ISSUER service binding, DISCORD_BOT_TOKEN secret and the public key below.
 // Do not place tokens in this source or a public repository.
 const PUBLIC_KEY = "1eb2b56f7eaa6faf6180f687e9bca30369c0073718fd93247e743c36b5f1707b";
 const GUILD_ID = "1563067666170646558";
@@ -58,7 +58,7 @@ async function getkey(i,env,overrideId,ctx) {
  const bytes=crypto.getRandomValues(new Uint8Array(16));
  const hex=[...bytes].map(x=>x.toString(16).padStart(2,"0").toUpperCase()).join("");
  const key="SYND-"+hex.match(/.{8}/g).join("-");
- const digest=await sha(env.KEY_PEPPER+":"+key);
+ const digest=await env.KEY_ISSUER.hashKey(key);
  const now=new Date().toISOString();
  try {
   await env.DB.batch([
@@ -114,7 +114,7 @@ export default {
   let i;try{i=JSON.parse(raw)}catch{return new Response("Invalid JSON",{status:400})}
   if(i.type===1)return new Response(JSON.stringify({type:1}),{headers:{"content-type":"application/json"}});
   if(![2,3,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
-  if(!env.DB||!env.KEY_PEPPER)return reply("Authentication database is not configured.");
+  if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
   try {
    if(i.type===3&&i.data?.custom_id==="syndicate_generate_key")return modal();
    if(i.type===5&&i.data?.custom_id==="syndicate_key_modal"){
