@@ -76,6 +76,9 @@ export default {
    body:JSON.stringify(COMMANDS)
   });
   console.log("Discord command registration status",r.status);
+  const resultText=(await r.clone().text()).slice(0,1200);
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_setup_status (id INTEGER PRIMARY KEY, status INTEGER, response TEXT, checked_at TEXT)").run();
+  await env.DB.prepare("INSERT OR REPLACE INTO discord_setup_status (id,status,response,checked_at) VALUES (1,?,?,?)").bind(r.status,resultText,new Date().toISOString()).run();
   if(!r.ok)console.error("Discord command registration failed",r.status,(await r.text()).slice(0,500));
  },
  async fetch(req,env) {
