@@ -1,27 +1,37 @@
-# Syndicate Hub authentication backend
+# Syndicate Hub member keys
 
-A Cloudflare Worker with a D1 database. Keys are generated server-side and stored only as SHA-256 hashes with a private pepper. The `/verify` endpoint checks a key and a claimed Roblox UserId. **A Roblox executor can spoof UserId; this is not proof of Roblox identity or copy protection.**
+Worker: https://syndicate-auth.loganmatthewsmall.workers.dev
 
-## Deploy
+The root StorageHunters script now presents a member-key window before starting the hub. It posts the key and the player's claimed Roblox UserId to `/verify`. Only HTTP 200 with JSON `{"valid":true}` opens the hub. Server errors, timeouts, invalid responses, expired keys, and revoked keys do not grant access. Closing the window cancels that launch. Re-executing replaces an older pending key window.
 
-1. Install Node.js and run `npx wrangler login`.
-2. In this directory run `npx wrangler d1 create syndicate-keys`; copy the returned database ID into `wrangler.toml`.
-3. Run `npx wrangler d1 execute syndicate-keys --remote --file=schema.sql`.
-4. Generate **two different random secrets**, then run `npx wrangler secret put ADMIN_TOKEN` and `npx wrangler secret put KEY_PEPPER`. Do not commit these values.
-5. Run `npx wrangler deploy`. Note the deployed `https://...workers.dev` URL.
+Keys are checked at launch. Revoking a key blocks subsequent launches; it does not terminate an already-running hub.
 
-## Admin operations
+## Member launch
 
-Use an HTTP client or curl, replacing URL, token, and UserId:
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/StorageHunters"))()
+```
 
-Issue: `POST /admin/issue`, header `Authorization: Bearer <ADMIN_TOKEN>`, JSON `{"userId":"12345678","expiresAt":"2027-01-01T00:00:00Z"}`. Omit expiresAt for a non-expiring key. **Copy the generated key immediately: it is only returned once.**
+Enter the individual member key. The window displays the numeric Roblox User ID needed when issuing it. The executor must support an HTTP request function.
 
-Revoke: `POST /admin/revoke` with same authorization and JSON `{"key":"SYND-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX"}`.
+## Administration
 
-List: `GET /admin/keys` with same authorization. Only prefixes are listed, never full keys.
+The Worker uses the `syndicate-keys` D1 database through the `DB` binding. `ADMIN_TOKEN` and `KEY_PEPPER` are configured as Cloudflare secrets. Never put either secret in Lua, this repository, a member loadstring, or a public message. The private administrator credential handout is separate from this repository.
 
-Verify: `POST /verify` JSON `{"userId":"12345678","key":"SYND-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX"}`. Response `{"valid":true/false}`.
+Using an HTTP client:
 
-## Security notes
+- Issue: `POST /admin/issue`, header `Authorization: Bearer <ADMIN_TOKEN>`, JSON `{"userId":"12345678"}`. Optionally include `"expiresAt":"2027-01-01T00:00:00Z"`. The full generated key is returned only once; copy it immediately.
+- List: `GET /admin/keys` with the same authorization. Returns key prefixes, User IDs, expiry, creation time, and revoked status. It never returns full keys.
+- Revoke: `POST /admin/revoke` with the same authorization and JSON `{"key":"SYND-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX"}`.
+- Verify: `POST /verify`, JSON `{"userId":"12345678","key":"SYND-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX"}`.
+- Health: `GET /health` returns `{"ok":true}` when required bindings and secrets are present.
 
-The verification endpoint is public and does not currently implement rate limiting. Configure Cloudflare WAF/rate limiting before wide distribution. Never embed `ADMIN_TOKEN` or `KEY_PEPPER` in Lua. Key verification on an untrusted client is bypassable, even with this backend. Private GitHub files cannot be fetched by a normal public raw loadstring. No changes to the existing Lua hub are included yet: wire in the endpoint only after deployment, to avoid disabling the currently stored build.
+The private handout includes PowerShell examples. The admin token can be replaced in Cloudflare without changing member keys. Do not replace KEY_PEPPER casually: existing key hashes depend on it.
+
+## Deployment
+
+`wrangler.toml` references the deployed database. For source deployments use `npx wrangler login` and `npx wrangler deploy` from this directory. Retain the existing secrets and database. `schema.sql` creates the member_keys table and index for a new deployment.
+
+## Limits
+
+This is server-verified licensing for normal client use, not tamper-proof copy protection. Executors control their client code and can spoof the supplied UserId or bypass local checks. The obfuscated script is still distributed publicly. The verification endpoint currently has no application rate limiter; configure appropriate rate limits before wide distribution.
