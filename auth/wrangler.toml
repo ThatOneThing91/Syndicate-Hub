@@ -1,8 +1,8 @@
 name = "syndicate-auth"
 main = "src/index.js"
-compatibility_date = "2026-10-01"
+compatibility_date = "2026-10-23"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "syndicate-keys"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "4ae648c9-a16f-4669-9e66-b19e646ad166"
