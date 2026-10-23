@@ -13,6 +13,42 @@ if not (function()
     end
     local gate = {}
     environment[registryKey] = gate
+    local userId = tostring(player.UserId)
+    local cacheName = "\095\095\083\121\110\100\105\099\097\116\101\072\117\098\077\101\109\098\101\114\075\101\121\115"
+    if type(environment[cacheName]) ~= "\116\097\098\108\101" then environment[cacheName] = {} end
+    local memory = environment[cacheName]
+    local cacheFile = "\083\121\110\100\105\099\097\116\101\072\117\098\095\075\101\121\095" .. userId .. "\046\106\115\111\110"
+    local function normalizeKey(value)
+        if type(value) ~= "\115\116\114\105\110\103" then return nil end
+        local key = value:match("\094\037\115\042\040\046\045\041\037\115\042\036"):upper()
+        local group = "\091\065\045\070\048\045\057\093\091\065\045\070\048\045\057\093\091\065\045\070\048\045\057\093\091\065\045\070\048\045\057\093\091\065\045\070\048\045\057\093\091\065\045\070\048\045\057\093\091\065\045\070\048\045\057\093\091\065\045\070\048\045\057\093"
+        if key:match("\094\083\089\078\068\037\045" .. group .. "\037\045" .. group .. "\037\045" .. group .. "\037\045" .. group .. "\036") then
+            return key
+        end
+    end
+    local savedKey = normalizeKey(memory[userId])
+    if not savedKey and type(readfile) == "\102\117\110\099\116\105\111\110" then
+        local ok, record = pcall(function()
+            return httpService:JSONDecode(readfile(cacheFile))
+        end)
+        if ok and type(record) == "\116\097\098\108\101" and record.userId == userId then
+            savedKey = normalizeKey(record.key)
+        end
+    end
+    local function rememberKey(key)
+        memory[userId] = key
+        if type(writefile) == "\102\117\110\099\116\105\111\110" then
+            pcall(function()
+                writefile(cacheFile, httpService:JSONEncode({userId = userId, key = key}))
+            end)
+        end
+    end
+    local function forgetKey()
+        memory[userId] = nil
+        if type(delfile) == "\102\117\110\099\116\105\111\110" then pcall(delfile, cacheFile) end
+                                                                                 
+        if type(writefile) == "\102\117\110\099\116\105\111\110" then pcall(writefile, cacheFile, "\123\125") end
+    end
     local finished, granted, busy, closed = false, false, false, false
     local attempt = 0
     local connections = {}
@@ -32,7 +68,7 @@ if not (function()
     local frame = make("\070\114\097\109\101", {
         AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.new(0.9, 0, 0, 300), BackgroundColor3 = Color3.fromRGB(24, 22, 31),
-        BorderSizePixel = 0,
+        BorderSizePixel = 0, Visible = savedKey == nil,
     }, gui)
     make("\085\073\083\105\122\101\067\111\110\115\116\114\097\105\110\116", {MaxSize = Vector2.new(380, 300)}, frame)
     make("\085\073\067\111\114\110\101\114", {CornerRadius = UDim.new(0, 12)}, frame)
@@ -50,7 +86,7 @@ if not (function()
     local input = make("\084\101\120\116\066\111\120", {
         Position = UDim2.new(0, 20, 0, 119), Size = UDim2.new(1, -40, 0, 43),
         BackgroundColor3 = Color3.fromRGB(38, 34, 48), BorderSizePixel = 0,
-        Text = "", PlaceholderText = "\083\089\078\068\045\088\088\088\088\088\088\088\088\045\088\088\088\088\088\088\088\088\045\088\088\088\088\088\088\088\088\045\088\088\088\088\088\088\088\088",
+        Text = savedKey or "", PlaceholderText = "\083\089\078\068\045\088\088\088\088\088\088\088\088\045\088\088\088\088\088\088\088\088\045\088\088\088\088\088\088\088\088\045\088\088\088\088\088\088\088\088",
         TextColor3 = Color3.fromRGB(245, 240, 250), PlaceholderColor3 = Color3.fromRGB(151, 143, 165),
         Font = Enum.Font.Gotham, TextSize = 12, ClearTextOnFocus = false,
         TextTruncate = Enum.TextTruncate.AtEnd,
@@ -88,8 +124,9 @@ if not (function()
     end
     local function submit()
         if closed or busy then return end
-        local key = input.Text:match("\094\037\115\042\040\046\045\041\037\115\042\036"):upper()
-        if not key:match("\094\083\089\078\068\037\045\091\065\045\070\048\045\057\093\043\037\045\091\065\045\070\048\045\057\093\043\037\045\091\065\045\070\048\045\057\093\043\037\045\091\065\045\070\048\045\057\093\043\036") or #key ~= 40 then
+        local key = normalizeKey(input.Text)
+        if not key then
+            frame.Visible = true
             status.Text = "\069\110\116\101\114\032\097\032\099\111\109\112\108\101\116\101\032\083\089\078\068\032\109\101\109\098\101\114\032\107\101\121\046"
             return
         end
@@ -97,6 +134,7 @@ if not (function()
             or (syn and syn.request) or (http and http.request)
             or (fluxus and fluxus.request)
         if type(requestFunction) ~= "\102\117\110\099\116\105\111\110" then
+            frame.Visible = true
             status.Text = "\084\104\105\115\032\101\120\101\099\117\116\111\114\032\100\111\101\115\032\110\111\116\032\115\117\112\112\111\114\116\032\072\084\084\080\032\118\101\114\105\102\105\099\097\116\105\111\110\046"
             return
         end
@@ -108,7 +146,8 @@ if not (function()
             if closed or attempt ~= currentAttempt or not busy then return end
             attempt = attempt + 1
             setBusy(false)
-            status.Text = "\086\101\114\105\102\105\099\097\116\105\111\110\032\116\105\109\101\100\032\111\117\116\046\032\080\108\101\097\115\101\032\116\114\121\032\097\103\097\105\110\046"
+            frame.Visible = true
+            status.Text = "\086\101\114\105\102\105\099\097\116\105\111\110\032\116\105\109\101\100\032\111\117\116\046\032\089\111\117\114\032\115\097\118\101\100\032\107\101\121\032\105\115\032\107\101\112\116\059\032\112\114\101\115\115\032\085\110\108\111\099\107\032\116\111\032\114\101\116\114\121\046"
         end)
         task.spawn(function()
             local ok, response = pcall(requestFunction, {
@@ -120,13 +159,23 @@ if not (function()
             attempt = attempt + 1
             setBusy(false)
             if not ok or type(response) ~= "\116\097\098\108\101" then
+                frame.Visible = true
                 status.Text = "\067\097\110\110\111\116\032\114\101\097\099\104\032\116\104\101\032\107\101\121\032\115\101\114\118\101\114\046\032\080\108\101\097\115\101\032\116\114\121\032\097\103\097\105\110\046"
                 return
             end
             local code = tonumber(response.StatusCode or response.Status)
             local decoded, result = pcall(function() return httpService:JSONDecode(response.Body) end)
             if code == 200 and decoded and type(result) == "\116\097\098\108\101" and result.valid == true then
+                rememberKey(key)
                 finish(true)
+                return
+            end
+            frame.Visible = true
+            if (code == 200 or code == 400) and decoded
+                and type(result) == "\116\097\098\108\101" and result.valid == false then
+                forgetKey()
+                input.Text = ""
+                status.Text = "\075\101\121\032\105\110\118\097\108\105\100\044\032\101\120\112\105\114\101\100\044\032\114\101\118\111\107\101\100\044\032\111\114\032\097\115\115\105\103\110\101\100\032\116\111\032\097\110\111\116\104\101\114\032\082\111\098\108\111\120\032\097\099\099\111\117\110\116\046"
             elseif code == 429 then
                 status.Text = "\084\111\111\032\109\097\110\121\032\097\116\116\101\109\112\116\115\046\032\087\097\105\116\032\097\032\109\111\109\101\110\116\044\032\116\104\101\110\032\114\101\116\114\121\046"
             elseif code == 200 or code == 400 or code == 401 or code == 403 then
@@ -142,6 +191,8 @@ if not (function()
         if enterPressed then submit() end
     end)
     connections[#connections + 1] = gui.Destroying:Connect(gate.Cancel)
+                                                                                         
+    if savedKey then submit() end
     while not finished do task.wait(0.05) end
     return granted
 end)() then
