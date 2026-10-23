@@ -5489,14 +5489,14 @@ do
     local function apply(button, record)
         if not active() or not button.Parent or currentGui ~= record.gui
             or not button:IsDescendantOf(record.gui) then return end
-        local position = record.original
+        local size = record.original
         record.target = UDim2.new(
-            position.X.Scale, position.X.Offset - 20,
-            position.Y.Scale, position.Y.Offset - 20
+            size.X.Scale * 1.5, math.round(size.X.Offset * 1.5),
+            size.Y.Scale * 1.5, math.round(size.Y.Offset * 1.5)
         )
-        if button.Position ~= record.target then
+        if button.Size ~= record.target then
             record.writing = true
-            button.Position = record.target
+            button.Size = record.target
             record.writing = false
         end
     end
@@ -5509,15 +5509,15 @@ do
         if not button or not button:IsA("\071\117\105\079\098\106\101\099\116") then return end
         local record = records[button]
         if not record then
-            record = {original = button.Position, gui = currentGui}
+            record = {original = button.Size, gui = currentGui}
             records[button] = record
-            watch(button:GetPropertyChangedSignal("\080\111\115\105\116\105\111\110"), function()
+            watch(button:GetPropertyChangedSignal("\083\105\122\101"), function()
                 if not active() or record.writing or currentGui ~= record.gui
                     or not button:IsDescendantOf(record.gui)
-                    or button.Position == record.target then return end
+                    or button.Size == record.target then return end
                                                                            
                                                                                     
-                record.original = button.Position
+                record.original = button.Size
                 apply(button, record)
             end)
         end
@@ -5555,7 +5555,7 @@ do
         for button, record in pairs(records) do
             if button.Parent then
                 pcall(function()
-                    if button.Position ~= record.original then button.Position = record.original end
+                    if button.Size ~= record.original then button.Size = record.original end
                 end)
             end
         end
@@ -5568,7 +5568,7 @@ do
         stop()
     end
 
-    CreateToggle(MainPage, "\077\111\118\101\032\074\117\109\112\032\066\117\116\116\111\110\032\085\112\045\076\101\102\116", "\077\111\118\101\074\117\109\112\066\117\116\116\111\110", function(enabled)
+    CreateToggle(MainPage, "\074\117\109\112\032\066\117\116\116\111\110\032\049\046\053\120\032\083\105\122\101", "\077\111\118\101\074\117\109\112\066\117\116\116\111\110", function(enabled)
         if HubDestroyed or State.MoveJumpButton ~= enabled then return end
         stop()
         if not enabled then return end
