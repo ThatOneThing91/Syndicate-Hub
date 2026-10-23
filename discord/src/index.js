@@ -67,7 +67,7 @@ async function getkey(i,env,overrideId,ctx) {
   ]);
  }catch(e){console.error("issue",e);return reply("❌ Could not generate a key. An active key may already exist. Try again or contact an administrator.")}
  ctx.waitUntil(Promise.allSettled([audit(env,"key_issued",robloxId),discordLog(env,"KEY_LOG_CHANNEL_ID","🔑 Lifetime key issued • Discord <@"+discordId+"> • Roblox `"+robloxId+"` • Prefix `"+key.slice(0,13)+"`")]));
- return reply("🔑 **Syndicate Hub Lifetime Key**\nRoblox ID: `"+robloxId+"`"+(account.name?"\nUsername: `"+account.name+"`":"")+"\n**Your key (use the copy icon):**\n```text\n"+key+"\n```\n**Keep this key private.** It remains valid until revoked.");
+ return reply("🔑 **Syndicate Hub Lifetime Key**\nRoblox ID: `"+robloxId+"`"+(account.name?"\nUsername: `"+account.name+"`":"")+"\n**Your key (use the copy icon):**\n```text\n"+key+"\n```\n**📱 Mobile — press and hold to copy:**\n`"+key+"`\n**Keep this key private.** It remains valid until revoked.");
 }
 async function listKeys(env) {
  const r=await env.DB.prepare("SELECT key_prefix,user_id,created_at FROM member_keys WHERE revoked=0 AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at DESC LIMIT 15").bind(new Date().toISOString()).all();
