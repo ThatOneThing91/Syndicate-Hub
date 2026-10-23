@@ -1,6 +1,7 @@
 const COMMANDS=[
  {name:"getkey",description:"Get your lifetime Syndicate Hub key",options:[{type:3,name:"roblox_id",description:"Your numeric Roblox User ID",required:true}]},
  {name:"keys",description:"List active Syndicate Hub keys (admins only)",default_member_permissions:"8"},
+ {name:"panel",description:"Post the permanent key generation panel (admins only)",default_member_permissions:"8"},
  {name:"revoke",description:"Revoke a Roblox User ID's key (admins only)",default_member_permissions:"8",options:[{type:3,name:"roblox_id",description:"Roblox User ID to revoke",required:true}]}
 ];
 // Syndicate Hub Discord interactions Worker. Deploy separately with D1 binding DB,
@@ -31,9 +32,9 @@ async function discordLog(env,channel,content) {
  const id=env[channel];if(!id||!env.DISCORD_BOT_TOKEN)return;
  try {await fetch("https://discord.com/api/v10/channels/"+id+"/messages",{method:"POST",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},body:JSON.stringify({content,allowed_mentions:{parse:[]}})})}catch(e){console.error("log",e)}
 }
-async function getkey(i,env) {
+async function getkey(i,env,overrideId) {
  const discordId=i.member?.user?.id;
- const robloxId=String(i.data?.options?.find(o=>o.name==="roblox_id")?.value||"");
+ const robloxId=String(overrideId||i.data?.options?.find(o=>o.name==="roblox_id")?.value||"");
  if(!discordId||!isUserId(robloxId))return reply("Enter a valid numeric Roblox User ID.");
  const active=await env.DB.prepare("SELECT key_prefix FROM member_keys WHERE user_id=? AND revoked=0 AND (expires_at IS NULL OR expires_at>?) LIMIT 1").bind(robloxId,new Date().toISOString()).first();
  if(active)return reply("❌ An active key already exists for Roblox ID `"+robloxId+"`. Contact an administrator to revoke it before requesting another.");
@@ -68,6 +69,15 @@ async function revoke(i,env) {
  await discordLog(env,"SECURITY_LOG_CHANNEL_ID","🚫 Key revoked • Roblox `"+uid+"` • by Discord <@"+i.member.user.id+">");
  return reply("✅ Revoked active key for Roblox ID `"+uid+"`.");
 }
+function modal(){return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_key_modal",title:"Generate Syndicate Hub Key",components:[{type:1,components:[{type:4,custom_id:"roblox_id",label:"Your Roblox User ID",style:1,min_length:1,max_length:20,required:true,placeholder:"Enter your numeric Roblox User ID"}]}]}}),{headers:{"content-type":"application/json"}})}
+async function postPanel(i,env){
+ const channel=i.channel_id;
+ if(!channel)return reply("No channel found.");
+ const payload={embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",description:"**Unlock Your Lifetime Access**\\n\\nClick the button below to generate your personal Syndicate Hub key. You will be asked for your numeric Roblox User ID.\\n\\n**One active key per member and Roblox ID.** Your key will only be shown to you.",color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],components:[{type:1,components:[{type:2,style:1,label:"Generate My Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}}]}]};
+ const r=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{method:"POST",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},body:JSON.stringify(payload)});
+ if(!r.ok){console.error("panel",r.status,(await r.text()).slice(0,500));return reply("Could not post panel. Check bot permissions: View Channel, Send Messages, Embed Links.")}
+ return reply("✅ Key-generation panel posted in this channel.");
+}
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
@@ -89,11 +99,17 @@ export default {
   if(!await validSignature(req,raw))return new Response("Invalid Discord signature",{status:401});
   let i;try{i=JSON.parse(raw)}catch{return new Response("Invalid JSON",{status:400})}
   if(i.type===1)return new Response(JSON.stringify({type:1}),{headers:{"content-type":"application/json"}});
-  if(i.type!==2||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
+  if(![2,3,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
   if(!env.DB||!env.KEY_PEPPER)return reply("Authentication database is not configured.");
   try {
+   if(i.type===3&&i.data?.custom_id==="syndicate_generate_key")return modal();
+   if(i.type===5&&i.data?.custom_id==="syndicate_key_modal"){
+    const id=i.data.components?.flatMap(x=>x.components||[]).find(x=>x.custom_id==="roblox_id")?.value;
+    return await getkey(i,env,id);
+   }
    switch(i.data?.name){
     case "getkey":return await getkey(i,env);
+    case "panel":return isAdmin(i)?await postPanel(i,env):reply("Administrator permission required.");
     case "keys":return isAdmin(i)?await listKeys(env):reply("Administrator permission required.");
     case "revoke":return isAdmin(i)?await revoke(i,env):reply("Administrator permission required.");
     default:return reply("Unknown command.");
