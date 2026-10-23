@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json","cache-control":"no-store"}});
 const hash=async(v)=>{const bytes=new TextEncoder().encode(v);const digest=await crypto.subtle.digest("SHA-256",bytes);return [...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,"0")).join("")};
 const auth=(req,env)=>env.ADMIN_TOKEN&&req.headers.get("authorization")==="Bearer "+env.ADMIN_TOKEN;
@@ -43,3 +44,11 @@ export default {
   return json({error:"Not found"},404);
  }
 };
+
+export class KeyIssuer extends WorkerEntrypoint {
+ async hashKey(key) {
+  if (typeof key !== "string" || !/^SYND-[A-F0-9]{8}(?:-[A-F0-9]{8}){3}$/.test(key)) throw new Error("Invalid key format");
+  if (!this.env.KEY_PEPPER) throw new Error("Authentication secret unavailable");
+  return digestKey(key,this.env);
+ }
+}
