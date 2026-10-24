@@ -123,8 +123,10 @@ async function sendExecutionLogs(env){
    ?"✅ **Syndicate Hub execution notifications enabled.** Successful script launches will appear in this channel."
    :"🚀 **Syndicate Hub executed** • Roblox ID `"+e.roblox_user_id+"` • <https://www.roblox.com/users/"+e.roblox_user_id+"/profile> • <t:"+Math.floor(Date.parse(e.created_at)/1000)+":F>";
   const r=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{method:"POST",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},body:JSON.stringify({content,allowed_mentions:{parse:[]},nonce:String(e.id),enforce_nonce:true}),signal:AbortSignal.timeout(10000)});
+  const result=await r.json().catch(()=>({}));
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_execution_delivery(id INTEGER PRIMARY KEY CHECK(id=1),event_id INTEGER,status INTEGER,message_id TEXT,error TEXT,checked_at TEXT)").run();
+  await env.DB.prepare("INSERT OR REPLACE INTO discord_execution_delivery(id,event_id,status,message_id,error,checked_at) VALUES(1,?,?,?,?,?)").bind(e.id,r.status,r.ok?result.id||null:null,r.ok?null:String(result.message||"Unknown Discord error").slice(0,500),new Date().toISOString()).run();
   if(!r.ok){console.error("execution notification rejected",{status:r.status,eventId:e.id});throw Error("Discord execution notification HTTP "+r.status);}
-  await r.body?.cancel();
   await env.DB.prepare("UPDATE discord_activity_cursor SET last_row=? WHERE id=1").bind(e.id).run();
  }
 }
