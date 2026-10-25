@@ -11411,47 +11411,79 @@ do
                             if vehicleFull(vehicle, cargo) then error("\084\114\117\099\107\032\105\115\032\102\117\108\108\046\032\085\110\108\111\097\100\032\105\116\032\098\101\102\111\114\101\032\114\101\115\116\097\114\116\105\110\103\032\065\117\116\111\032\076\111\097\100\032\080\111\116\105\111\110\115\046") end
                             local inventory = itemMap(inventoryRemote:InvokeServer())
                             if not active(run) then return end
-                            local pending = {}
+                            local pending, cargoGuids = {}, {}
+                            for guid, data in pairs(cargo) do
+                                cargoGuids[tostring(guid)] = true
+                                if type(data) == "\116\097\098\108\101" then
+                                    local itemGuid = data.GUID or data.Guid or data.guid
+                                    if itemGuid then cargoGuids[tostring(itemGuid)] = true end
+                                end
+                            end
                             for guid, data in pairs(inventory) do
-                                if type(guid) == "\115\116\114\105\110\103" and isPotion(data) and not contains(cargo, guid) then
+                                if type(guid) == "\115\116\114\105\110\103" and isPotion(data) and not cargoGuids[guid] then
                                     pending[#pending + 1] = guid
                                 end
                             end
                             table.sort(pending)
-                            local guid = pending[1]
-                            if guid then
-                                if not active(run) then return end
-                                if State.AutoPlacePotions or State.InstantUnload then
-                                    error("\084\117\114\110\032\111\102\102\032\065\117\116\111\032\080\108\097\099\101\032\080\111\116\105\111\110\115\032\097\110\100\032\073\110\115\116\097\110\116\032\085\110\108\111\097\100\032\098\101\102\111\114\101\032\108\111\097\100\105\110\103\032\112\111\116\105\111\110\115\046")
+                            if #pending > 0 then
+                                local batch = {}
+                                local capacity = tonumber(vehicle:GetAttribute("\067\097\114\103\111\067\097\112\097\099\105\116\121"))
+                                    or tonumber(vehicle:GetAttribute("\073\116\101\109\067\097\112\097\099\105\116\121"))
+                                    or tonumber(vehicle:GetAttribute("\083\116\111\114\097\103\101\067\097\112\097\099\105\116\121"))
+                                local batchLimit = 8
+                                if capacity and capacity > 0 then
+                                    local count = 0
+                                    for _ in pairs(cargo) do count = count + 1 end
+                                    batchLimit = math.min(batchLimit, math.max(0, capacity - count))
                                 end
-                                local requestOK, result = pcall(function()
-                                    return transfer:InvokeServer(guid)
-                                end)
-                                if not active(run) then return end
-                                local confirmed = false
+                                for index = 1, math.min(#pending, batchLimit) do
+                                    if not active(run) then return end
+                                    if State.AutoPlacePotions or State.InstantUnload then
+                                        error("\084\117\114\110\032\111\102\102\032\065\117\116\111\032\080\108\097\099\101\032\080\111\116\105\111\110\115\032\097\110\100\032\073\110\115\116\097\110\116\032\085\110\108\111\097\100\032\098\101\102\111\114\101\032\108\111\097\100\105\110\103\032\112\111\116\105\111\110\115\046")
+                                    end
+                                    if vehicleFull(vehicle, cargo) then break end
+                                    local guid = pending[index]
+                                    local requestOK, result = pcall(function()
+                                        return transfer:InvokeServer(guid)
+                                    end)
+                                    batch[#batch + 1] = {guid = guid, requestOK = requestOK, result = result}
+                                    if not active(run) then return end
+                                    if not requestOK or result == false or (type(result) == "\116\097\098\108\101" and result.success == false) then break end
+                                    -- Server calls already yield; allow one frame between submissions.
+                                    task.wait()
+                                end
+                                local latest, allConfirmed
                                 for attempt = 1, 3 do
-                                    task.wait(0.5)
+                                    if attempt > 1 then task.wait(0.15) end
                                     if not active(run) then return end
-                                    local latest = itemMap(getVehicleItems:InvokeServer(vehicleId))
+                                    latest = itemMap(getVehicleItems:InvokeServer(vehicleId))
                                     if not active(run) then return end
-                                    if contains(latest, guid) then confirmed = true; break end
+                                    allConfirmed = true
+                                    for _, item in ipairs(batch) do
+                                        if not contains(latest, item.guid) then allConfirmed = false; break end
+                                    end
+                                    if allConfirmed then break end
                                     if vehicleFull(vehicle, latest) then error("\084\114\117\099\107\032\105\115\032\102\117\108\108\046\032\085\110\108\111\097\100\032\105\116\032\098\101\102\111\114\101\032\114\101\115\116\097\114\116\105\110\103\032\065\117\116\111\032\076\111\097\100\032\080\111\116\105\111\110\115\046") end
                                 end
-                                if confirmed then
-                                    failures[guid] = nil
-                                else
-                                    failures[guid] = (failures[guid] or 0) + 1
-                                    local reason = type(result) == "\116\097\098\108\101" and (result.message or result.error or result.reason)
-                                        or type(result) == "\115\116\114\105\110\103" and result or nil
-                                    if failures[guid] >= 3 then
-                                        error("\080\111\116\105\111\110\032\116\114\097\110\115\102\101\114\032\119\097\115\032\110\111\116\032\099\111\110\102\105\114\109\101\100\032\097\102\116\101\114\032\051\032\097\116\116\101\109\112\116\115\046"
-                                            .. (reason and ("\032" .. tostring(reason)) or "\032\067\104\101\099\107\032\116\104\097\116\032\121\111\117\114\032\116\114\117\099\107\032\105\115\032\115\112\097\119\110\101\100\032\097\110\100\032\104\097\115\032\114\111\111\109\046"))
+                                for _, item in ipairs(batch) do
+                                    if contains(latest, item.guid) then
+                                        failures[item.guid] = nil
+                                    else
+                                        failures[item.guid] = (failures[item.guid] or 0) + 1
+                                        local result = item.result
+                                        local reason = type(result) == "\116\097\098\108\101" and (result.message or result.error or result.reason)
+                                            or type(result) == "\115\116\114\105\110\103" and result or nil
+                                        if failures[item.guid] >= 3 then
+                                            error("\080\111\116\105\111\110\032\116\114\097\110\115\102\101\114\032\119\097\115\032\110\111\116\032\099\111\110\102\105\114\109\101\100\032\097\102\116\101\114\032\051\032\097\116\116\101\109\112\116\115\046"
+                                                .. (reason and ("\032" .. tostring(reason)) or "\032\067\104\101\099\107\032\116\104\097\116\032\121\111\117\114\032\116\114\117\099\107\032\105\115\032\115\112\097\119\110\101\100\032\097\110\100\032\104\097\115\032\114\111\111\109\046"))
+                                        end
+                                        if not item.requestOK then warn("\091\065\117\116\111\032\076\111\097\100\032\080\111\116\105\111\110\115\093\032\084\114\097\110\115\102\101\114\032\114\101\113\117\101\115\116\032\102\097\105\108\101\100\046") end
                                     end
-                                    if not requestOK then warn("\091\065\117\116\111\032\076\111\097\100\032\080\111\116\105\111\110\115\093\032\084\114\097\110\115\102\101\114\032\114\101\113\117\101\115\116\032\102\097\105\108\101\100\046") end
-                                    task.wait(2)
                                 end
+                                if vehicleFull(vehicle, latest) then error("\084\114\117\099\107\032\105\115\032\102\117\108\108\046\032\085\110\108\111\097\100\032\105\116\032\098\101\102\111\114\101\032\114\101\115\116\097\114\116\105\110\103\032\065\117\116\111\032\076\111\097\100\032\080\111\116\105\111\110\115\046") end
+                                if not allConfirmed then task.wait(0.75) end
                             else
-                                task.wait(2)
+                                task.wait(0.5)
                             end
                         end
                     end
