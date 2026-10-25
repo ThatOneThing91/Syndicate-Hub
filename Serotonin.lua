@@ -228,6 +228,171 @@ local function httpRequestForHub(scheduler)
     end
 end
 
+-- Translate the syntax used by this hub; strings and comments are left untouched.
+local function translateHubSyntax(source)
+    local tokens, edits, blocks, loops, declarations = {}, {}, {}, {}, {}
+    local index, size = 1, #source
+    local function addEdit(first, last, replacement)
+        edits[#edits+1] = {first=first,last=last,text=replacement}
+    end
+    while index <= size do
+        local char = source:sub(index,index)
+        if char:match("%s") then
+            index=index+1
+        elseif source:sub(index,index+1) == "--" then
+            local equals=source:sub(index+2):match("^%[(=*)%[")
+            if equals then
+                local closing="]"..equals.."]"
+                local finish=source:find(closing,index+4+#equals,true)
+                if not finish then error("Unclosed long comment.") end
+                index=finish+#closing
+            else
+                index=source:find("\n",index+2,true) or (size+1)
+            end
+        elseif char == '"' or char == "'" then
+            local quote=char
+            index=index+1
+            while index<=size do
+                local c=source:sub(index,index)
+                if c=="\\" then index=index+2
+                elseif c==quote then index=index+1;break
+                else index=index+1 end
+            end
+        elseif char=="[" and source:sub(index):match("^%[(=*)%[") then
+            local equals=source:sub(index):match("^%[(=*)%[")
+            local closing="]"..equals.."]"
+            local finish=source:find(closing,index+2+#equals,true)
+            if not finish then error("Unclosed long string.") end
+            index=finish+#closing
+        else
+            local word=source:sub(index):match("^[%a_][%w_]*")
+            local two=source:sub(index,index+1)
+            local value=word or ((two=="+=" or two=="-=" or two=="*=" or two=="/=" or two=="%=") and two) or char
+            tokens[#tokens+1]={value=value,first=index,last=index+#value-1}
+            index=index+#value
+        end
+    end
+    local function enclosingLoop()
+        for n=#blocks,1,-1 do
+            local block=blocks[n]
+            if block.kind=="function" then return nil end
+            if block.kind=="loop" or block.kind=="repeat" then return block end
+        end
+    end
+    local compoundCount, continueCount=0,0
+    for number,token in ipairs(tokens) do
+        local value=token.value
+        if value=="local" and #blocks==0 then
+            local nextToken=tokens[number+1]
+            local names, cursor={},number+1
+            local isFunction=nextToken and nextToken.value=="function"
+            if isFunction then cursor=cursor+1 end
+            while tokens[cursor] and tokens[cursor].value:match("^[%a_][%w_]*$") do
+                names[#names+1]=tokens[cursor].value
+                cursor=cursor+1
+                if not tokens[cursor] or tokens[cursor].value~="," then break end
+                cursor=cursor+1
+            end
+            if #names>0 then declarations[#declarations+1]={token=token,names=names,
+                eligible=isFunction or (tokens[cursor] and tokens[cursor].value=="=")} end
+        end
+        if value=="function" then
+            blocks[#blocks+1]={kind="function"}
+        elseif value=="if" then
+            blocks[#blocks+1]={kind="if"}
+        elseif value=="for" or value=="while" then
+            blocks[#blocks+1]={kind="pendingLoop",breaks={},continues={}}
+        elseif value=="repeat" then
+            local block={kind="repeat",breaks={},continues={}}
+            blocks[#blocks+1]=block;loops[#loops+1]=block
+        elseif value=="do" then
+            local block=blocks[#blocks]
+            if block and block.kind=="pendingLoop" then
+                block.kind,block.open="loop",token
+                loops[#loops+1]=block
+            else
+                blocks[#blocks+1]={kind="do"}
+            end
+        elseif value=="end" or value=="until" then
+            local block=blocks[#blocks]
+            if not block then error("Unbalanced block near byte "..token.first) end
+            if value=="until" and block.kind~="repeat" then error("Unexpected until.") end
+            block.close=token
+            blocks[#blocks]=nil
+        elseif value=="continue" or value=="break" then
+            local block=enclosingLoop()
+            if not block then error("Loop control outside a loop.") end
+            local list=value=="continue" and block.continues or block.breaks
+            list[#list+1]=token
+        elseif value=="+=" or value=="-=" or value=="*=" or value=="/=" or value=="%=" then
+            local last=number-1
+            if not tokens[last] or not tokens[last].value:match("^[%a_][%w_]*$") then
+                error("Unsupported compound-assignment target.")
+            end
+            local first=last
+            while first>=3 and tokens[first-1].value=="."
+                and tokens[first-2].value:match("^[%a_][%w_]*$") do first=first-2 end
+            local lineStart=(source:sub(1,tokens[first].first-1):match(".*()\n") or 0)+1
+            if not source:sub(lineStart,tokens[first].first-1):match("^%s*$") then
+                error("Unsupported inline compound assignment.")
+            end
+            local lineEnd=source:find("\n",token.last+1,true) or (#source+1)
+            local rhs=source:sub(token.last+1,lineEnd-1):match("^%s*(.-)%s*$")
+            if not rhs:match("^[%w_%.]+$") then error("Compound assignment needs an explicit expression port.") end
+            local lhs=source:sub(tokens[first].first,tokens[last].last)
+            addEdit(token.first,token.last,"= "..lhs.." "..value:sub(1,1))
+            compoundCount=compoundCount+1
+        end
+    end
+    if #blocks~=0 then error("Unclosed block in downloaded hub.") end
+    for number,block in ipairs(loops) do
+        if #block.continues>0 then
+            if block.kind=="repeat" then error("Repeat-loop continue needs an explicit port.") end
+            local flag="__syndicateLoopBreak"..number
+            addEdit(block.open.last+1,block.open.last," local "..flag.." = false repeat ")
+            addEdit(block.close.first,block.close.first-1," until true if "..flag.." then break end ")
+            for _,token in ipairs(block.continues) do
+                addEdit(token.first,token.last,"do break end")
+                continueCount=continueCount+1
+            end
+            for _,token in ipairs(block.breaks) do
+                addEdit(token.first,token.last,"do "..flag.." = true; break end")
+            end
+        end
+    end
+    -- Lua 5.1 has a lower active-local ceiling than this Luau hub.
+    -- Move only unique, outermost declarations into an isolated function environment.
+    local counts, firstUse, moved={},{},0
+    for _,token in ipairs(tokens) do
+        if not firstUse[token.value] then firstUse[token.value]=token.first end
+    end
+    for _,decl in ipairs(declarations) do
+        for _,name in ipairs(decl.names) do counts[name]=(counts[name] or 0)+1 end
+    end
+    if #declarations>150 then
+        for _,decl in ipairs(declarations) do
+            local unique=decl.eligible
+            for _,name in ipairs(decl.names) do
+                if counts[name]~=1 or firstUse[name]<decl.token.first then unique=false end
+            end
+            if unique and moved<80 then
+                addEdit(decl.token.first,decl.token.last,"")
+                moved=moved+1
+            end
+        end
+    end
+    table.sort(edits,function(a,b) return a.first<b.first end)
+    local output, position={},1
+    for _,edit in ipairs(edits) do
+        if edit.first<position then error("Overlapping compatibility edits.") end
+        output[#output+1]=source:sub(position,edit.first-1)
+        output[#output+1]=edit.text
+        position=edit.last+1
+    end
+    output[#output+1]=source:sub(position)
+    return table.concat(output),compoundCount,continueCount,moved
+end
+
 local function main()
     local ok, players = pcall(function() return game:GetService("Players") end)
     if not ok or not players then
@@ -273,11 +438,23 @@ local function main()
     if not source then
         return report("Could not download the hub: " .. table.concat(errors, "; "))
     end
+    local translated, compounds, continues, moved = translateHubSyntax(source)
+    source = translated
+    print("[Syndicate / Serotonin] Translated " .. compounds .. " compound assignments and " .. continues .. " continue statements.")
+    if moved > 0 and (type(setfenv) ~= "function" or type(getfenv) ~= "function") then
+        return report("Lua 5.1 compatibility requires setfenv/getfenv to isolate the hub's state.")
+    end
     -- Pass the scheduler as a local parameter; do not overwrite executor globals.
     local wrappedSource = "return function(task, request)\n" .. source .. "\nend"
     local success, chunk, compileError = pcall(compile, wrappedSource, "=SyndicateHub")
     if not success or type(chunk) ~= "function" then
         return report("The hub could not compile in this runtime: " .. tostring(success and compileError or chunk))
+    end
+    if moved > 0 then
+        local base = getfenv(1)
+        local scope = setmetatable({}, {__index=base})
+        scope._G = type(base._G) == "table" and base._G or base
+        setfenv(chunk, scope)
     end
     local constructed, launch = pcall(chunk)
     if not constructed or type(launch) ~= "function" then
@@ -300,5 +477,6 @@ local function main()
     return true
 end
 
+print("[Syndicate / Serotonin] Compatibility build: syntax-3")
 local ok, result = pcall(main)
 if not ok then report("Compatibility check failed: " .. tostring(result)) end
