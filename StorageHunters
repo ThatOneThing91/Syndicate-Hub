@@ -11430,28 +11430,45 @@ do
                                 local capacity = tonumber(vehicle:GetAttribute("\067\097\114\103\111\067\097\112\097\099\105\116\121"))
                                     or tonumber(vehicle:GetAttribute("\073\116\101\109\067\097\112\097\099\105\116\121"))
                                     or tonumber(vehicle:GetAttribute("\083\116\111\114\097\103\101\067\097\112\097\099\105\116\121"))
-                                local batchLimit = 8
+                                local batchLimit = 16
                                 if capacity and capacity > 0 then
                                     local count = 0
                                     for _ in pairs(cargo) do count = count + 1 end
                                     batchLimit = math.min(batchLimit, math.max(0, capacity - count))
                                 end
-                                for index = 1, math.min(#pending, batchLimit) do
-                                    if not active(run) then return end
-                                    if State.AutoPlacePotions or State.InstantUnload then
-                                        error("\084\117\114\110\032\111\102\102\032\065\117\116\111\032\080\108\097\099\101\032\080\111\116\105\111\110\115\032\097\110\100\032\073\110\115\116\097\110\116\032\085\110\108\111\097\100\032\098\101\102\111\114\101\032\108\111\097\100\105\110\103\032\112\111\116\105\111\110\115\046")
-                                    end
-                                    if vehicleFull(vehicle, cargo) then break end
-                                    local guid = pending[index]
-                                    local requestOK, result = pcall(function()
-                                        return transfer:InvokeServer(guid)
+                                local limit = math.min(#pending, batchLimit)
+                                local nextIndex, stopped, workerError = 1, false, nil
+                                local workerCount = math.min(4, limit)
+                                local remaining = workerCount
+                                for worker = 1, workerCount do
+                                    task.spawn(function()
+                                        local workerOK, message = pcall(function()
+                                            while active(run) and not stopped and nextIndex <= limit do
+                                                if State.AutoPlacePotions or State.InstantUnload then
+                                                    error("\084\117\114\110\032\111\102\102\032\065\117\116\111\032\080\108\097\099\101\032\080\111\116\105\111\110\115\032\097\110\100\032\073\110\115\116\097\110\116\032\085\110\108\111\097\100\032\098\101\102\111\114\101\032\108\111\097\100\105\110\103\032\112\111\116\105\111\110\115\046")
+                                                end
+                                                if vehicleFull(vehicle, cargo) then stopped = true; break end
+                                                -- Claim each GUID before yielding; at most four requests are in flight.
+                                                local guid = pending[nextIndex]
+                                                nextIndex = nextIndex + 1
+                                                local requestOK, result = pcall(function()
+                                                    return transfer:InvokeServer(guid)
+                                                end)
+                                                batch[#batch + 1] = {guid = guid, requestOK = requestOK, result = result}
+                                                if not requestOK or result == false
+                                                    or (type(result) == "\116\097\098\108\101" and result.success == false) then
+                                                    stopped = true
+                                                end
+                                            end
+                                        end)
+                                        if not workerOK then workerError = message; stopped = true end
+                                        remaining = remaining - 1
                                     end)
-                                    batch[#batch + 1] = {guid = guid, requestOK = requestOK, result = result}
-                                    if not active(run) then return end
-                                    if not requestOK or result == false or (type(result) == "\116\097\098\108\101" and result.success == false) then break end
-                                    -- Server calls already yield; allow one frame between submissions.
-                                    task.wait()
                                 end
+                                -- Drain already-sent requests before an OFF/ON can start another run.
+                                while remaining > 0 do task.wait(0.01) end
+                                if not active(run) then return end
+                                if workerError then error(workerError) end
                                 local latest, allConfirmed
                                 for attempt = 1, 3 do
                                     if attempt > 1 then task.wait(0.15) end
