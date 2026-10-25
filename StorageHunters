@@ -11340,12 +11340,91 @@ do
     end
     ThisHubInstance.StopPotionLoader = stop
 
-    local function isPotion(data)
-        if type(data) ~= "\116\097\098\108\101" or data.Lost then return false end
-        local id = tostring(data.ItemId or data.itemId or data.ID or data.Id or "")
-        if potionIds[id] then return true end
-        local name = tostring(data.Name or data.ItemName or ""):lower()
-        return name:find("\112\111\116\105\111\110", 1, true) ~= nil or name == "\108\117\099\107\032\100\114\105\110\107\032\049"
+    local definitionPotions = {}
+    local wrappers = {Data=true, data=true, Item=true, item=true, Details=true, details=true,
+        ItemData=true, itemData=true, Metadata=true, metadata=true}
+    local containers = {Inventory=true, inventory=true, Items=true, items=true,
+        Favorites=true, favorites=true, Favourites=true, favourites=true,
+        Potions=true, potions=true, Consumables=true, consumables=true}
+    local function potionName(value)
+        if type(value) ~= "\115\116\114\105\110\103" then return false end
+        local name = value:lower():gsub("\091\037\115\037\112\095\093", "")
+        return name:find("\112\111\116\105\111\110", 1, true) ~= nil or name == "\108\117\099\107\100\114\105\110\107\049"
+    end
+    local function readGuid(data, depth)
+        if type(data) ~= "\116\097\098\108\101" then return nil end
+        depth = depth or 0
+        if depth > 5 then return nil end
+        local guid = data.GUID or data.Guid or data.guid or data.UUID or data.Uuid or data.uuid
+            or data.UniqueId or data.uniqueId or data.InventoryId or data.inventoryId
+        if type(guid) == "\115\116\114\105\110\103" and guid ~= "" then return guid end
+        local id = data.ID or data.Id or data.id
+        if type(id) == "\115\116\114\105\110\103" and id:match("\094\037\120\043\037\045\037\120\043\037\045\037\120\043\037\045\037\120\043\037\045\037\120\043\036") then return id end
+        for name in pairs(wrappers) do
+            local nested = readGuid(data[name], depth + 1)
+            if nested then return nested end
+        end
+    end
+    local function potionDefinition(data)
+        if type(data) ~= "\116\097\098\108\101" then return false end
+        return potionName(data.Name or data.name or data.ItemName or data.itemName or data.DisplayName)
+            or potionName(data.Category or data.category or data.ItemType or data.itemType or data.Type or data.type)
+            or potionName(data.Interactive or data.interactive)
+    end
+    local function isPotion(data, depth, seen)
+        if type(data) == "\115\116\114\105\110\103" or type(data) == "\110\117\109\098\101\114" then
+            local id = tostring(data)
+            return potionIds[id] == true or definitionPotions[id] == true
+        end
+        if type(data) ~= "\116\097\098\108\101" then return false end
+        depth, seen = depth or 0, seen or {}
+        if depth > 5 or seen[data] then return false end
+        seen[data] = true
+        local id = data.ItemId or data.ItemID or data.itemId or data.itemID
+            or data.item_id or data.ID or data.Id or data.id
+        if id ~= nil and (potionIds[tostring(id)] or definitionPotions[tostring(id)]) then return true end
+        if potionDefinition(data) then return true end
+        for name in pairs(wrappers) do
+            if isPotion(data[name], depth + 1, seen) then return true end
+        end
+        return false
+    end
+    local function potionInventory(result, run)
+        if type(result) ~= "\116\097\098\108\101" then error("\073\110\118\101\110\116\111\114\121\032\114\101\115\112\111\110\115\101\032\099\111\117\108\100\032\110\111\116\032\098\101\032\118\101\114\105\102\105\101\100\046") end
+        local found, seen, scanned = {}, {}, 0
+        local function scan(node, fallbackGuid, lost, depth)
+            if not active(run) or depth > 12 then return end
+            if type(node) ~= "\116\097\098\108\101" then
+                if fallbackGuid and fallbackGuid:match("\094\037\120\043\037\045\037\120\043\037\045\037\120\043\037\045\037\120\043\037\045\037\120\043\036")
+                    and not lost and isPotion(node) then found[fallbackGuid] = node end
+                return
+            end
+            if seen[node] then return end
+            seen[node] = true
+            scanned = scanned + 1
+            if scanned % 200 == 0 then task.wait(); if not active(run) then return end end
+            local guid = readGuid(node) or fallbackGuid
+            lost = lost or node.Lost == true or node.lost == true
+            if guid and isPotion(node) then
+                if not lost then found[guid] = node end
+                return
+            end
+            for name, child in pairs(node) do
+                if type(child) == "\116\097\098\108\101" or type(child) == "\115\116\114\105\110\103" or type(child) == "\110\117\109\098\101\114" then
+                    local childGuid
+                    if wrappers[name] then
+                        childGuid = guid
+                    elseif type(name) == "\115\116\114\105\110\103" and not containers[name] then
+                        childGuid = name
+                    end
+                    scan(child, childGuid, lost, depth + 1)
+                end
+            end
+        end
+        -- Scan the whole response, including separate favorites and array-shaped item lists.
+        -- Favorite flags never exclude an item or change its favorite setting.
+        scan(result, nil, false, 0)
+        return found
     end
     local function itemMap(result)
         if type(result) ~= "\116\097\098\108\101" then error("\073\116\101\109\032\108\105\115\116\032\099\111\117\108\100\032\110\111\116\032\098\101\032\118\101\114\105\102\105\101\100\046") end
@@ -11356,8 +11435,11 @@ do
     local function contains(items, guid)
         if items[guid] ~= nil then return true end
         for _, item in pairs(items) do
-            if type(item) == "\116\097\098\108\101" and tostring(item.GUID or item.Guid or item.guid or "") == guid then
-                return true
+            if type(item) == "\116\097\098\108\101" then
+                if readGuid(item) == guid then return true end
+                for name in pairs(wrappers) do
+                    if readGuid(item[name]) == guid then return true end
+                end
             end
         end
         return false
@@ -11393,6 +11475,20 @@ do
                 if not inventoryRemote or not transfer or not transfer:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") or not getVehicleItems then
                     error("\080\111\116\105\111\110\032\116\114\097\110\115\102\101\114\032\114\101\109\111\116\101\115\032\097\114\101\032\117\110\097\118\097\105\108\097\098\108\101\046")
                 end
+                local modules = ReplicatedStorage:FindFirstChild("\077\111\100\117\108\101\115")
+                local definitions = modules and modules:FindFirstChild("\073\116\101\109\115")
+                if definitions then
+                    local loaded, items = pcall(require, definitions)
+                    if loaded and type(items) == "\116\097\098\108\101" then
+                        for id, definition in pairs(items) do
+                            if potionDefinition(definition) then
+                                definitionPotions[tostring(id)] = true
+                                local itemId = definition.ItemId or definition.ItemID or definition.Id or definition.ID or definition.id
+                                if itemId ~= nil then definitionPotions[tostring(itemId)] = true end
+                            end
+                        end
+                    end
+                end
                 local failures = {}
                 while active(run) do
                     if State.AutoPlacePotions then error("\084\117\114\110\032\111\102\102\032\065\117\116\111\032\080\108\097\099\101\032\080\111\116\105\111\110\115\032\098\101\102\111\114\101\032\108\111\097\100\105\110\103\032\112\111\116\105\111\110\115\046") end
@@ -11409,18 +11505,22 @@ do
                             local cargo = itemMap(getVehicleItems:InvokeServer(vehicleId))
                             if not active(run) then return end
                             if vehicleFull(vehicle, cargo) then error("\084\114\117\099\107\032\105\115\032\102\117\108\108\046\032\085\110\108\111\097\100\032\105\116\032\098\101\102\111\114\101\032\114\101\115\116\097\114\116\105\110\103\032\065\117\116\111\032\076\111\097\100\032\080\111\116\105\111\110\115\046") end
-                            local inventory = itemMap(inventoryRemote:InvokeServer())
+                            local inventory = potionInventory(inventoryRemote:InvokeServer(), run)
                             if not active(run) then return end
                             local pending, cargoGuids = {}, {}
                             for guid, data in pairs(cargo) do
                                 cargoGuids[tostring(guid)] = true
                                 if type(data) == "\116\097\098\108\101" then
-                                    local itemGuid = data.GUID or data.Guid or data.guid
+                                    local itemGuid = readGuid(data)
                                     if itemGuid then cargoGuids[tostring(itemGuid)] = true end
+                                    for name in pairs(wrappers) do
+                                        local nestedGuid = readGuid(data[name])
+                                        if nestedGuid then cargoGuids[nestedGuid] = true end
+                                    end
                                 end
                             end
                             for guid, data in pairs(inventory) do
-                                if type(guid) == "\115\116\114\105\110\103" and isPotion(data) and not cargoGuids[guid] then
+                                if type(guid) == "\115\116\114\105\110\103" and not cargoGuids[guid] then
                                     pending[#pending + 1] = guid
                                 end
                             end
