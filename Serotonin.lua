@@ -206,10 +206,15 @@ local function CreateToggle(_,label,key,callback)
         State[key]=value;feature.value=value
         setValue(SHOP,label,value)
     end
-    if feature.available then
-        uiAPI.check(TAB,SHOP,label);owned(SHOP,label);setValue(SHOP,label,false)
-        feature.created=true
-        if uiAPI.visible then pcall(uiAPI.visible,TAB,SHOP,label,false) end
+    -- Register every implemented control even when the corresponding remote
+    -- is temporarily unavailable; showFeature controls visibility and access.
+    if uiAPI.check then
+        local ok=pcall(uiAPI.check,TAB,SHOP,label)
+        if ok then
+            owned(SHOP,label);setValue(SHOP,label,false)
+            feature.created=true
+            if uiAPI.visible then pcall(uiAPI.visible,TAB,SHOP,label,false) end
+        end
     end
     return feature
 end
