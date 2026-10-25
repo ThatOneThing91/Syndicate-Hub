@@ -393,6 +393,109 @@ local function translateHubSyntax(source)
     return table.concat(output),compoundCount,continueCount,moved
 end
 
+local function gameForHub(scheduler)
+    local nativeGame, bridge = game, {}
+    local function read(object, key)
+        local ok, value=pcall(function() return object[key] end)
+        if ok then return value end
+    end
+    local function member(object, key)
+        local value=read(object,key)
+        if type(value) ~= "function" then return value end
+        return function(self,...)
+            if self==bridge then return value(nativeGame,...) end
+            return value(self,...)
+        end
+    end
+    local function service(name)
+        local native=read(nativeGame,"GetService")
+        if type(native)=="function" then
+            local ok,result=pcall(native,nativeGame,name)
+            if ok and result then return result end
+            ok,result=pcall(native,name)
+            if ok and result then return result end
+        end
+        local direct=read(nativeGame,name)
+        if direct then return direct end
+        local dataModel=read(nativeGame,"DataModel")
+        native=dataModel and read(dataModel,"GetService")
+        if type(native)=="function" then
+            local ok,result=pcall(native,dataModel,name)
+            if ok then return result end
+        end
+    end
+    local function localPlayer(players)
+        return read(players,"LocalPlayer") or read(nativeGame,"LocalPlayer")
+    end
+    local function playerGui(player)
+        local gui=read(player,"PlayerGui")
+        if gui then return gui end
+        local find=read(player,"FindFirstChild")
+        if type(find)=="function" then
+            local ok,result=pcall(find,player,"PlayerGui")
+            if ok then return result end
+        end
+    end
+    local playersProxy, playersTarget
+    local function playersForHub(players)
+        if read(players,"LocalPlayer") then return players end
+        if playersProxy and playersTarget==players then return playersProxy end
+        playersTarget=players
+        playersProxy=setmetatable({}, {__index=function(_,key)
+            if key=="LocalPlayer" then return localPlayer(players) end
+            local value=read(players,key)
+            if type(value)~="function" then return value end
+            return function(self,...)
+                if self==playersProxy then return value(players,...) end
+                return value(self,...)
+            end
+        end})
+        return playersProxy
+    end
+    bridge.GetService=function(self,name)
+        if self~=bridge then name=self end
+        if type(name)~="string" then error("GetService requires a service name.") end
+        local result=service(name)
+        if not result then error("Serotonin does not expose the "..name.." service required by this hub.") end
+        if name=="Players" then return playersForHub(result) end
+        return result
+    end
+    bridge.IsLoaded=function()
+        local native=read(nativeGame,"IsLoaded")
+        if type(native)=="function" then
+            local ok,result=pcall(native,nativeGame)
+            if ok and type(result)=="boolean" then return result end
+            ok,result=pcall(native)
+            if ok and type(result)=="boolean" then return result end
+        end
+        local dataModel=read(nativeGame,"DataModel")
+        native=dataModel and read(dataModel,"IsLoaded")
+        if type(native)=="function" then
+            local ok,result=pcall(native,dataModel)
+            if ok and type(result)=="boolean" then return result end
+        end
+        -- Require real objects the hub needs, rather than pretending the client loaded.
+        local players=service("Players")
+        local player=players and localPlayer(players)
+        return player~=nil and playerGui(player)~=nil
+            and service("Workspace")~=nil and service("ReplicatedStorage")~=nil
+    end
+    bridge.Loaded={Wait=function()
+        local elapsed=0
+        while not bridge:IsLoaded() do
+            if elapsed>=60 then
+                error("Timed out waiting for LocalPlayer, PlayerGui, Workspace and ReplicatedStorage.")
+            end
+            elapsed=elapsed+math.max(0.05,tonumber(scheduler.wait(0.05)) or 0.05)
+        end
+    end}
+    return setmetatable(bridge,{__index=function(_,key)
+        if key=="PlaceId" then return read(nativeGame,"PlaceId") or read(nativeGame,"PlaceID") end
+        if key=="GameId" then return read(nativeGame,"GameId") or read(nativeGame,"GameID") end
+        return member(nativeGame,key)
+    end})
+end
+
 local function main()
     local ok, players = pcall(function() return game:GetService("Players") end)
     if not ok or not players then
@@ -410,6 +513,7 @@ local function main()
         return report("loadstring is unavailable in this runtime. The original hub cannot be compiled here.")
     end
 
+    local compatibleGame = gameForHub(scheduler)
     local requestFunction = httpRequestForHub(scheduler)
     if not requestFunction then
         return report("No HTTP transport is available: expected a native request API or Serotonin http.Get/http.Post.")
@@ -445,7 +549,7 @@ local function main()
         return report("Lua 5.1 compatibility requires setfenv/getfenv to isolate the hub's state.")
     end
     -- Pass the scheduler as a local parameter; do not overwrite executor globals.
-    local wrappedSource = "return function(task, request)\n" .. source .. "\nend"
+    local wrappedSource = "return function(task, request, game, workspace)\n" .. source .. "\nend"
     local success, chunk, compileError = pcall(compile, wrappedSource, "=SyndicateHub")
     if not success or type(chunk) ~= "function" then
         return report("The hub could not compile in this runtime: " .. tostring(success and compileError or chunk))
@@ -461,7 +565,7 @@ local function main()
         return report("Could not prepare the hub: " .. tostring(launch))
     end
     scheduler.spawn(function()
-        local executed, runtimeError = pcall(launch, scheduler, requestFunction)
+        local executed, runtimeError = pcall(launch, scheduler, requestFunction, compatibleGame, compatibleGame:GetService("Workspace"))
         if not executed then
             if scheduler.stop then scheduler.stop() end
             report("The hub stopped during startup: " .. tostring(runtimeError))
@@ -477,6 +581,6 @@ local function main()
     return true
 end
 
-print("[Syndicate / Serotonin] Compatibility build: syntax-3")
+print("[Syndicate / Serotonin] Compatibility build: startup-4")
 local ok, result = pcall(main)
 if not ok then report("Compatibility check failed: " .. tostring(result)) end
