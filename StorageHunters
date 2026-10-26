@@ -7250,6 +7250,7 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
 
     local garage = selectedGarage or GetGarageByNameForArea(areaName, garageName)
     local isFallback = garageName ~= State.SelectedAuction
+    local selectedAtEntry = State.SelectedAuction
 
     local function SelectedGarageReady()
         if not isFallback then
@@ -7324,14 +7325,8 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
 
                                                                        
                                                                  
-    if isFallback and SelectedGarageReady() then
-        FarmingWaitingGarage = nil
-        ThisHubInstance.AuctionSnapshots[areaName] = nil
+    if State.SelectedArea ~= areaName or State.SelectedAuction ~= selectedAtEntry then
         return "\112\114\105\111\114\105\116\121\095\099\104\097\110\103\101\100"
-    end
-
-    if not CanAffordGarage(garage) then
-        return "\117\110\097\102\102\111\114\100\097\098\108\101"
     end
 
     PendingGarageEntry = {
@@ -7348,17 +7343,13 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
     FarmingBidRunId = runId
 
     local started = false
-    local auctionStart = os.clock()
-    local promptSent = false
-    local lastPromptAttempt = 0
-    local promptAttempts = 0
+    local lastPromptAttempt = -math.huge
+    local missingSince = nil
     local PROMPT_CONFIRM_WINDOW = 1.25
-    local MAX_PROMPT_ATTEMPTS = 3
 
     while not HubDestroyed
         and State.Farming
-        and RunIds.Farming == runId
-        and os.clock() - auctionStart < 6 do
+        and RunIds.Farming == runId do
 
         if WasNetWorthRejected(areaName, garageName) then
             PendingGarageEntry = nil
@@ -7388,34 +7379,49 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
 
                                                                           
                                                                             
-        if not promptSent and isFallback and SelectedGarageReady() then
+        -- Stay committed after arrival, including while the prompt is disabled
+        -- during the server's auction-start transition. Only real invalidation
+        -- or an explicit user selection change releases this garage.
+        if State.SelectedArea ~= areaName or State.SelectedAuction ~= selectedAtEntry then
             PendingGarageEntry = nil
             FarmingBidGarage = nil
             FarmingWaitingGarage = nil
-            ThisHubInstance.AuctionSnapshots[areaName] = nil
             return "\112\114\105\111\114\105\116\121\095\099\104\097\110\103\101\100"
         end
 
         local now = os.clock()
-
-        if not promptSent
-            or (promptAttempts < MAX_PROMPT_ATTEMPTS
-                and now - lastPromptAttempt >= PROMPT_CONFIRM_WINDOW) then
-
-                                                                                
-                                                                               
-                                  
-            if AuctionIsOpen() or ThisHubInstance.ActiveAuctionAreaOpen then
-                started = true
-                break
+        if not garage.Parent or not garage:IsDescendantOf(workspace) then
+            missingSince = missingSince or now
+            if now - missingSince >= 3 then
+                PendingGarageEntry = nil
+                FarmingBidGarage = nil
+                ThisHubInstance.AuctionSnapshots[areaName] = nil
+                return "\117\110\097\118\097\105\108\097\098\108\101"
             end
-
+        else
+            missingSince = nil
             local currentPrompt = GetGaragePrompt(garage)
-
-            if currentPrompt and currentPrompt.Enabled ~= false then
-                FireGaragePrompt(garage)
-                promptSent = true
-                promptAttempts += 1
+            if currentPrompt and currentPrompt.Enabled ~= false
+                and now - lastPromptAttempt >= math.max(PROMPT_CONFIRM_WINDOW, currentPrompt.HoldDuration + 0.4) then
+                -- Recheck the server/UI state before every retry. A disabled
+                -- prompt alone is not evidence of an affordability failure.
+                if not AuctionIsOpen() and not ThisHubInstance.ActiveAuctionAreaOpen then
+                    if not CanAffordGarage(garage) then
+                        PendingGarageEntry = nil
+                        FarmingBidGarage = nil
+                        return "\117\110\097\102\102\111\114\100\097\098\108\101"
+                    end
+    
+                    local root = GetRoot()
+                    local destination = GetGarageDestination(garage)
+                    if root and destination then
+                        local reach = math.max(3, math.min(10, currentPrompt.MaxActivationDistance - 1))
+                        if (root.Position - destination.Position).Magnitude > reach then
+                            TeleportToGarage(garage)
+                        end
+                        FireGaragePrompt(garage)
+                    end
+                end
                 lastPromptAttempt = now
             end
         end
@@ -7439,28 +7445,9 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
 
     if not started then
         FarmingBidGarage = nil
-
-        if garageName == State.SelectedAuction then
-                                                                               
-                                                                               
-                                                                            
-            ThisHubInstance.SelectedTierRetryArea = areaName
-            ThisHubInstance.SelectedTierRetryName = garageName
-            ThisHubInstance.SelectedTierRetryUntil = os.clock() + 4
-            ThisHubInstance.AuctionSnapshots[areaName] = nil
-            return "\115\101\108\101\099\116\101\100\095\114\101\116\114\121"
-        end
-
-        return "\115\116\097\114\116\095\102\097\105\108\101\100"
+        return "\115\116\111\112\112\101\100"
     end
 
-                                                                
-                   
-                                 
-                                                                
-
-                                                         
-                                                    
     local finished = WaitForAuctionFinished(runId, pickupSerialForAuction, soldSerialForAuction, wonSerialForAuction)
 
     FarmingBidGarage = nil
@@ -12151,3 +12138,4 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
