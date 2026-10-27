@@ -992,7 +992,8 @@ ThisHubInstance.CheckAuctionFunds = function(price, kind, cash, worth)
 end
 
 local function CanAffordGarage(garage)
-    if not ThisHubInstance.IsFarmGarageAvailable(garage) then return false end
+    -- Prompt visibility is availability, not an affordability signal.
+    if not garage or not garage.Parent then return false end
     local price, kind = ThisHubInstance.GetKnownAuctionRequirement(State.SelectedArea, garage.Name)
     if price == nil then price, kind = GetGaragePrice(garage) end
     local worth = ThisHubInstance.GetPlayerAuctionNetWorth()
@@ -6868,7 +6869,7 @@ do
                             FarmingCurrentGarage = nil
                             ThisHubInstance.ActiveAuctionAreaOpen = false
 
-                            StageAtNextGarage(completedGarage)
+                            -- The farm worker chooses and commits the next garage after confirming the win.
                         end
                         return
                     end
@@ -7265,7 +7266,9 @@ local function FarmGarage(garageName, areaName, runId, selectedGarage)
         return nil
     end
 
-    if not ThisHubInstance.IsFarmGarageAvailable(garage) then
+    local committed = ThisHubInstance.FarmEntryTarget
+    if not (committed and committed.garage == garage)
+        and not ThisHubInstance.IsFarmGarageAvailable(garage) then
         return "\117\110\097\118\097\105\108\097\098\108\101"
     end
 
@@ -7488,8 +7491,22 @@ local function StartFarming(runId)
             else
                                                                                 
                                                                               
-                local garageName, garage = ThisHubInstance.FindFarmableAuction(areaName)
+                local target = ThisHubInstance.FarmEntryTarget
+                if target and (target.area ~= areaName
+                    or target.selection ~= State.SelectedAuction
+                    or not target.garage.Parent) then
+                    ThisHubInstance.FarmEntryTarget = nil
+                    target = nil
+                end
+                local garageName, garage
+                if target then
+                    garageName, garage = target.name, target.garage
+                else
+                    garageName, garage = ThisHubInstance.FindFarmableAuction(areaName)
+                end
                 if garageName then
+                    ThisHubInstance.FarmEntryTarget = {area = areaName, name = garageName,
+                        garage = garage, selection = State.SelectedAuction}
                     attemptedGarage = garage
                     callOk, result = pcall(FarmGarage, garageName, areaName, runId, garage)
                 else
@@ -7497,17 +7514,10 @@ local function StartFarming(runId)
                 end
             end
             if HubDestroyed or not State.Farming or RunIds.Farming ~= runId then return end
-            if attemptedGarage and (not callOk or result == "\115\116\097\114\116\095\102\097\105\108\101\100")
-                and not AuctionIsOpen() and not ThisHubInstance.ActiveAuctionAreaOpen then
-
-                                                                                 
-                                                                              
-                if attemptedGarage.Name == State.SelectedAuction then
-                    ThisHubInstance.FarmEntryRetryAfter[attemptedGarage] = nil
-                else
-                    ThisHubInstance.FarmEntryRetryAfter[attemptedGarage] = os.clock() + 8
-                end
-
+            -- An exception or failed teleport keeps the same target for the next pass.
+            if callOk and (result == "\102\105\110\105\115\104\101\100" or result == "\117\110\097\102\102\111\114\100\097\098\108\101"
+                or result == "\117\110\097\118\097\105\108\097\098\108\101" or result == "\112\114\105\111\114\105\116\121\095\099\104\097\110\103\101\100") then
+                ThisHubInstance.FarmEntryTarget = nil
                 ThisHubInstance.AuctionSnapshots[areaName] = nil
             end
             if not callOk then
@@ -7616,26 +7626,36 @@ local function IsVehicleFull()
     local vehicleEvents = events and events:FindFirstChild("\086\101\104\105\099\108\101\115")
     local getItems = vehicleEvents and vehicleEvents:FindFirstChild("\071\101\116\086\101\104\105\099\108\101\073\116\101\109\115")
 
-    if vehicleId and getItems then
-        local ok, items = pcall(function()
-            return getItems:InvokeServer(vehicleId)
+    -- Never block the shutdown monitor on a server InvokeServer response.
+    local cache = ThisHubInstance.FarmCapacityCache
+    if cache and cache.vehicle == vehicle and os.clock() - cache.at < 3
+        and cache.full then return true end
+    if vehicleId and getItems and getItems:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110")
+        and not ThisHubInstance.FarmCapacityQuery
+        and (not cache or cache.vehicle ~= vehicle or os.clock() - cache.at >= 1) then
+        local ticket = {}
+        local runId = RunIds.Farming
+        ThisHubInstance.FarmCapacityQuery = ticket
+        ThisHubInstance.FarmingCapacityThread = task.defer(function()
+            local ok, result = pcall(function() return getItems:InvokeServer(vehicleId) end)
+            if ThisHubInstance.FarmCapacityQuery ~= ticket then return end
+            ThisHubInstance.FarmCapacityQuery = nil
+            ThisHubInstance.FarmingCapacityThread = nil
+            if HubDestroyed or RunIds.Farming ~= runId then return end
+            local full = false
+            if ok and type(result) == "\116\097\098\108\101" then
+                local items = result.Items or result.items or result.Inventory or result
+                local count = 0
+                if type(items) == "\116\097\098\108\101" then
+                    for _ in pairs(items) do count += 1 end
+                end
+                local capacity = tonumber(vehicle:GetAttribute("\067\097\114\103\111\067\097\112\097\099\105\116\121"))
+                    or tonumber(vehicle:GetAttribute("\073\116\101\109\067\097\112\097\099\105\116\121"))
+                    or tonumber(vehicle:GetAttribute("\083\116\111\114\097\103\101\067\097\112\097\099\105\116\121"))
+                full = capacity ~= nil and capacity > 0 and count >= capacity
+            end
+            ThisHubInstance.FarmCapacityCache = {vehicle = vehicle, at = os.clock(), full = full}
         end)
-
-        if ok and type(items) == "\116\097\098\108\101" then
-            local count = 0
-            for _ in pairs(items) do
-                count += 1
-            end
-
-            local capacity =
-                tonumber(vehicle:GetAttribute("\067\097\114\103\111\067\097\112\097\099\105\116\121"))
-                or tonumber(vehicle:GetAttribute("\073\116\101\109\067\097\112\097\099\105\116\121"))
-                or tonumber(vehicle:GetAttribute("\083\116\111\114\097\103\101\067\097\112\097\099\105\116\121"))
-
-            if capacity and capacity > 0 and count >= capacity then
-                return true, count, capacity
-            end
-        end
     end
 
     return false, weight, limit
@@ -7667,19 +7687,54 @@ end
                                                                       
                                                                      
 ThisHubInstance.StopFarmingWorkers = function()
-    for _, key in ipairs({"\070\097\114\109\105\110\103\084\104\114\101\097\100", "\070\097\114\109\105\110\103\077\111\110\105\116\111\114\084\104\114\101\097\100"}) do
+    for _, key in ipairs({"\070\097\114\109\105\110\103\084\104\114\101\097\100", "\070\097\114\109\105\110\103\077\111\110\105\116\111\114\084\104\114\101\097\100", "\070\097\114\109\105\110\103\067\097\112\097\099\105\116\121\084\104\114\101\097\100"}) do
         local thread = ThisHubInstance[key]
         ThisHubInstance[key] = nil
         if thread and thread ~= coroutine.running() then
             pcall(task.cancel, thread)
         end
     end
+    ThisHubInstance.FarmEntryTarget = nil
+    ThisHubInstance.FarmCapacityQuery = nil
+    ThisHubInstance.FarmCapacityCache = nil
     PendingGarageEntry = nil
     FarmingBidGarage = nil
     FarmingBidRunId = 0
     FarmingWaitingGarage = nil
     FarmingCurrentGarage = nil
     ThisHubInstance.StagedWonGarage = nil
+end
+
+-- The game can reject an item before numeric capacity is exactly reached.
+do
+    local events = ReplicatedStorage:FindFirstChild("\069\118\101\110\116\115")
+    local ui = events and events:FindFirstChild("\085\073")
+    local remote = ui and ui:FindFirstChild("\078\111\116\105\102\121")
+    if remote and remote:IsA("\082\101\109\111\116\101\069\118\101\110\116") then
+        TrackConnection(remote.OnClientEvent:Connect(function(...)
+            if HubDestroyed or not State.Farming then return end
+            local function isFull(value, depth)
+                if type(value) == "\116\097\098\108\101" and depth < 3 then
+                    for _, child in pairs(value) do
+                        if isFull(child, depth + 1) then return true end
+                    end
+                elseif type(value) == "\115\116\114\105\110\103" then
+                    local text = value:lower()
+                    local container = text:find("\105\110\118\101\110\116\111\114\121", 1, true)
+                        or text:find("\098\097\099\107\112\097\099\107", 1, true) or text:find("\118\101\104\105\099\108\101", 1, true)
+                        or text:find("\116\114\117\099\107", 1, true) or text:find("\099\097\114\103\111", 1, true)
+                    return container and (text:find("\102\117\108\108", 1, true)
+                        or text:find("\110\111\032\115\112\097\099\101", 1, true) or text:find("\110\111\116\032\101\110\111\117\103\104\032\115\112\097\099\101", 1, true)
+                        or text:find("\110\111\116\032\101\110\111\117\103\104\032\114\111\111\109", 1, true)
+                        or text:find("\116\111\111\032\104\101\097\118\121", 1, true) or text:find("\119\101\105\103\104\116\032\108\105\109\105\116", 1, true))
+                end
+                return false
+            end
+            for _, value in pairs({...}) do
+                if isFull(value, 0) then PauseFarmingForFullVehicle(); return end
+            end
+        end))
+    end
 end
 
 local function StartFarmingVehicleFullMonitor(runId)
@@ -7692,8 +7747,8 @@ local function StartFarmingVehicleFullMonitor(runId)
             and RunIds.Farming == runId
             and FarmingVehicleMonitorSerial == serial do
 
-            local full = IsVehicleFull()
-            if full then
+            local ok, full = pcall(IsVehicleFull)
+            if ok and full then
                 PauseFarmingForFullVehicle()
                 return
             end
@@ -12138,4 +12193,5 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
 
