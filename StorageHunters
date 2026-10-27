@@ -5313,6 +5313,7 @@ do
         local trip = activeTrip
         activeTrip = nil
         if not trip then return true end
+        if trip.purchaseThread then pcall(task.cancel, trip.purchaseThread) end
         if trip.connection then trip.connection:Disconnect() end
         local ok = pcall(function()
             if not trip.vehicle.Parent then error("\086\101\104\105\099\108\101\032\110\111\032\108\111\110\103\101\114\032\101\120\105\115\116\115") end
@@ -5336,7 +5337,7 @@ do
     local function applyAtShop(guid)
         if HubDestroyed or applying then return end
         applying = true
-        local applied, confirmed = false, false
+        local applied, confirmed, submitted = false, false, false
         local ok, problem = pcall(function()
             local character = LocalPlayer.Character
             local humanoid = character and character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
@@ -5356,8 +5357,10 @@ do
             local folder = customization()
             local apply = folder and folder:FindFirstChild("\065\112\112\108\121\084\114\097\105\108\101\114")
             local open = folder and folder:FindFirstChild("\079\112\101\110\067\117\115\116\111\109\105\122\097\116\105\111\110")
+            local purchase = folder and folder:FindFirstChild("\080\117\114\099\104\097\115\101\067\117\115\116\111\109\105\122\097\116\105\111\110")
             if not apply or not apply:IsA("\082\101\109\111\116\101\069\118\101\110\116")
-                or not open or not open:IsA("\082\101\109\111\116\101\069\118\101\110\116") then
+                or not open or not open:IsA("\082\101\109\111\116\101\069\118\101\110\116")
+                or not purchase or not purchase:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") then
                 error("\084\104\101\032\099\117\115\116\111\109\105\122\097\116\105\111\110\032\101\118\101\110\116\115\032\097\114\101\032\117\110\097\118\097\105\108\097\098\108\101\046", 0)
             end
             local shops = workspace:FindFirstChild("\083\104\111\112\115")
@@ -5380,7 +5383,7 @@ do
                 trip.openSerial = trip.openSerial + 1
                 -- Preserve nil as unknown; only an explicit empty string confirms no trailer.
                 trip.reportedGuid = type(trailerGuid) == "\115\116\114\105\110\103" and trailerGuid or nil
-                if applied and trip.reportedGuid == guid then confirmed = true end
+                -- OpenCustomization describes the preview; the confirmation remote commits it.
             end)
             TrackConnection(trip.connection)
             local shopPivot = CFrame.new(spot - seat.Position) * trip.origin
@@ -5402,58 +5405,40 @@ do
                 error("\084\104\101\032\115\104\111\112\032\100\105\100\032\110\111\116\032\111\112\101\110\032\099\117\115\116\111\109\105\122\097\116\105\111\110\046\032\082\101\116\117\114\110\101\100\032\119\105\116\104\111\117\116\032\097\112\112\108\121\105\110\103\032\097\032\116\114\097\105\108\101\114\046", 0)
             end
             if HubDestroyed or activeTrip ~= trip then return end
-            if trip.opened and trip.reportedGuid == guid then
-                confirmed = true
-                applied = true
-                return
-            end
             applied = true
             apply:FireServer(guid)
-            -- A successful FireServer only means sent. Read the equipped GUID back
-            -- from a fresh server OpenCustomization response before reporting success.
-            local settleUntil = os.clock() + 0.6
+            -- ApplyTrailer selects the preview. This is the game's Confirm action.
+            -- Submit once; retrying a timed-out purchase could charge twice.
+            local completed, invokeOk, result = false, false, nil
+            trip.purchaseThread = task.defer(function()
+                invokeOk, result = pcall(function() return purchase:InvokeServer() end)
+                completed = true
+            end)
+            local deadline = os.clock() + 8
             repeat
                 task.wait(0.05)
                 if HubDestroyed or activeTrip ~= trip then return end
-            until confirmed or os.clock() >= settleUntil
-            for attempt = 1, 2 do
-                if confirmed then break end
-                if not touch or not touch:IsA("\066\097\115\101\080\097\114\116") then
-                    error("\067\104\097\110\103\101\032\115\101\110\116\044\032\098\117\116\032\116\104\101\032\115\104\111\112\032\116\111\117\099\104\032\112\097\114\116\032\105\115\032\109\105\115\115\105\110\103\059\032\099\111\110\102\105\114\109\097\116\105\111\110\032\117\110\097\118\097\105\108\097\098\108\101\046", 0)
-                end
-                if not vehicle.Parent or humanoid.SeatPart ~= seat then
-                    error("\086\101\104\105\099\108\101\032\111\114\032\115\101\097\116\032\099\104\097\110\103\101\100\032\098\101\102\111\114\101\032\116\104\101\032\116\114\097\105\108\101\114\032\099\111\117\108\100\032\098\101\032\099\111\110\102\105\114\109\101\100\046", 0)
-                end
-                local serial = trip.openSerial
-                local clearance = touch.Size.Magnitude + vehicle:GetExtentsSize().Magnitude + 12
-                trip.moved = true
-                vehicle:PivotTo(CFrame.new(touch.CFrame.RightVector * clearance) * shopPivot)
-                stopMotion(vehicle)
-                local leaveUntil = os.clock() + 0.5
-                repeat
-                    task.wait(0.05)
-                    if HubDestroyed or activeTrip ~= trip then return end
-                until os.clock() >= leaveUntil
-                vehicle:PivotTo(shopPivot)
-                stopMotion(vehicle)
-                local confirmUntil = os.clock() + 3
-                repeat
-                    task.wait(0.05)
-                    if HubDestroyed or activeTrip ~= trip then return end
-                until confirmed or trip.openSerial > serial or os.clock() >= confirmUntil
-                if not confirmed and attempt == 1 and trip.openSerial > serial then
-                    -- One retry only when the server explicitly reports a different trailer.
-                    apply:FireServer(guid)
-                    local retryUntil = os.clock() + 0.6
-                    repeat
-                        task.wait(0.05)
-                        if HubDestroyed or activeTrip ~= trip then return end
-                    until confirmed or os.clock() >= retryUntil
-                end
+            until completed or os.clock() >= deadline
+            if not completed then
+                error("\067\111\110\102\105\114\109\097\116\105\111\110\032\116\105\109\101\100\032\111\117\116\046\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\059\032\099\104\101\099\107\032\121\111\117\114\032\116\114\097\105\108\101\114\032\098\101\102\111\114\101\032\114\101\116\114\121\105\110\103\046", 0)
             end
-            if not confirmed then
-                error("\084\114\097\105\108\101\114\032\099\104\097\110\103\101\032\119\097\115\032\110\111\116\032\099\111\110\102\105\114\109\101\100\032\098\121\032\116\104\101\032\115\101\114\118\101\114\046\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\059\032\116\114\121\032\097\103\097\105\110\046", 0)
+            trip.purchaseThread = nil
+            if not invokeOk then
+                error("\067\111\117\108\100\032\110\111\116\032\099\111\110\102\105\114\109\032\099\117\115\116\111\109\105\122\097\116\105\111\110\058\032" .. tostring(result), 0)
             end
+            if result == false or (type(result) == "\116\097\098\108\101"
+                and (result.success == false or result.Success == false)) then
+                local message = type(result) == "\116\097\098\108\101" and (result.message or result.Message or result.error)
+                error(tostring(message or "\084\104\101\032\115\104\111\112\032\114\101\106\101\099\116\101\100\032\116\104\101\032\099\117\115\116\111\109\105\122\097\116\105\111\110\046"), 0)
+            end
+            submitted = true
+            confirmed = result == true or (type(result) == "\116\097\098\108\101"
+                and (result.success == true or result.Success == true))
+            -- Do not re-enter the shop after confirming: that opens its menu again.
+            local settleUntil = os.clock() + 0.35
+            repeat
+                task.wait(0.05)
+            until HubDestroyed or activeTrip ~= trip or os.clock() >= settleUntil
         end)
         local returned, menuClosed = returnVehicle()
         applying = false
@@ -5462,9 +5447,10 @@ do
             Notify("\084\114\097\105\108\101\114\115", "\067\111\117\108\100\032\110\111\116\032\114\101\115\116\111\114\101\032\116\104\101\032\118\101\104\105\099\108\101\039\115\032\112\111\115\105\116\105\111\110\059\032\105\116\032\109\097\121\032\104\097\118\101\032\100\101\115\112\097\119\110\101\100\046", 5)
         elseif not ok then
             Notify("\084\114\097\105\108\101\114\115", tostring(problem), 5)
-        elseif applied and confirmed then
+        elseif applied and submitted then
             local action = guid == "" and "\085\110\101\113\117\105\112" or ("\069\113\117\105\112\032" .. tostring(trailers[guid] or "\116\114\097\105\108\101\114"))
-            Notify("\084\114\097\105\108\101\114\115", action .. "\032\099\111\110\102\105\114\109\101\100\046\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046"
+            Notify("\084\114\097\105\108\101\114\115", action .. (confirmed and "\032\099\111\110\102\105\114\109\101\100\046" or "\032\099\111\110\102\105\114\109\097\116\105\111\110\032\115\117\098\109\105\116\116\101\100\046")
+                .. "\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046"
                 .. (menuClosed and "" or "\032\067\111\117\108\100\032\110\111\116\032\108\111\099\097\116\101\032\116\104\101\032\099\117\115\116\111\109\105\122\097\116\105\111\110\032\109\101\110\117\032\116\111\032\099\108\111\115\101\032\105\116\046"), 4)
         end
     end
@@ -12475,6 +12461,7 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
 
 
 
