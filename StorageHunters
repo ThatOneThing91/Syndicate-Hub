@@ -5142,11 +5142,11 @@ local function ticketServerNext(value, now, depth)
     for _, key in ipairs({
         "remainingSeconds", "RemainingSeconds", "cooldownRemaining",
         "CooldownRemaining", "cooldownSeconds", "CooldownSeconds",
-        "timeLeft", "TimeLeft", "remaining", "Remaining"
+        "timeLeft", "TimeLeft"
     }) do
         local seconds = tonumber(value[key])
         if seconds and seconds >= 0 and seconds <= TICKET_DAY * 3 then
-            return now + math.max(15, math.ceil(seconds) + 10)
+            return now + math.max(120, math.ceil(seconds) + 10)
         end
     end
     for _, key in ipairs({
