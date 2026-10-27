@@ -10917,6 +10917,9 @@ local function DestroyHub()
                       
                                                               
     HubDestroyed = true
+    if ThisHubInstance.StopPlotPotionPickup then
+        pcall(ThisHubInstance.StopPlotPotionPickup)
+    end
     if ThisHubInstance.ReturnTrailerVehicle then
         pcall(ThisHubInstance.ReturnTrailerVehicle)
     end
@@ -12576,6 +12579,188 @@ end
                  
                                                                 
 
+do
+(function()
+    local key, serial, worker = "\065\117\116\111\080\105\099\107\117\112\080\108\111\116\080\111\116\105\111\110\115", 0, nil
+    local potionIds = { ["\056\057\051"]=true, ["\056\056\054"]=true, ["\056\057\049"]=true, ["\049\052\049\055"]=true,
+        ["\051\053\057"]=true, ["\056\057\052"]=true, ["\056\057\048"]=true }
+    local function potionName(value)
+        if type(value) ~= "\115\116\114\105\110\103" then return false end
+        local name = value:lower():gsub("\094\037\115\043", ""):gsub("\037\115\043\036", "")
+        return name == "\108\117\099\107\032\100\114\105\110\107\032\049" or name:match("\032\112\111\116\105\111\110\036") ~= nil
+            or name:match("\032\112\111\116\105\111\110\032\037\100\043\036") ~= nil
+    end
+    State[key] = false
+    local function active(run)
+        return not HubDestroyed and State[key] and serial == run
+    end
+    local function stop()
+        serial = serial + 1
+        State[key] = false
+        local thread = worker
+        worker = nil
+        if thread and thread ~= coroutine.running() then pcall(task.cancel, thread) end
+        if ToggleObjects[key] then ToggleObjects[key](false) end
+    end
+    ThisHubInstance.StopPlotPotionPickup = stop
+    local function ownPlot()
+        local plots = workspace:FindFirstChild("\095\080\108\111\116\115")
+        local found
+        if not plots then return nil end
+        for _, plot in ipairs(plots:GetChildren()) do
+            local owner = tonumber(plot:GetAttribute("\079\119\110\101\114\085\115\101\114\073\100"))
+            local matches = owner == LocalPlayer.UserId
+            if not owner or owner == 0 then
+                local head = plot:FindFirstChild("\079\119\110\101\114\072\101\097\100\115\104\111\116")
+                local label = head and head:FindFirstChild("\079\119\110\101\114\078\097\109\101", true)
+                local name = ""
+                if label then
+                    pcall(function() name = label.Text end)
+                    if label:IsA("\083\116\114\105\110\103\086\097\108\117\101") then name = label.Value end
+                end
+                name = tostring(name):lower()
+                matches = name == LocalPlayer.Name:lower() or name == ("\064" .. LocalPlayer.Name):lower()
+            end
+            if matches then
+                if found then return nil end
+                found = plot
+            end
+        end
+        return found
+    end
+    local definitions
+    local function isPotion(object)
+        if not (object:IsA("\077\111\100\101\108") or object:IsA("\066\097\115\101\080\097\114\116")) then return false end
+        local id = object:GetAttribute("\073\116\101\109\073\100") or object:GetAttribute("\073\116\101\109\073\068")
+            or object:GetAttribute("\105\116\101\109\073\100")
+        if id ~= nil and potionIds[tostring(id)] then return true end
+        if potionName(object.Name) then return true end
+        local definition = id ~= nil and type(definitions) == "\116\097\098\108\101"
+            and (definitions[tostring(id)] or definitions[tonumber(id)])
+        return type(definition) == "\116\097\098\108\101" and
+            (potionName(definition.Name) or potionName(definition.DisplayName)
+                or definition.Category == "\080\111\116\105\111\110" or definition.Category == "\080\111\116\105\111\110\115")
+    end
+    local events = ReplicatedStorage:FindFirstChild("\069\118\101\110\116\115")
+    local ui = events and events:FindFirstChild("\085\073")
+    local notify = ui and ui:FindFirstChild("\078\111\116\105\102\121")
+    if notify and notify:IsA("\082\101\109\111\116\101\069\118\101\110\116") then
+        TrackConnection(notify.OnClientEvent:Connect(function(...)
+            if HubDestroyed or not State[key] then return end
+            local function full(value, depth)
+                if type(value) == "\116\097\098\108\101" and depth < 3 then
+                    for _, child in pairs(value) do if full(child, depth + 1) then return true end end
+                elseif type(value) == "\115\116\114\105\110\103" then
+                    local text = value:lower()
+                    return (text:find("\105\110\118\101\110\116\111\114\121", 1, true) or text:find("\098\097\099\107\112\097\099\107", 1, true))
+                        and (text:find("\102\117\108\108", 1, true) or text:find("\110\111\032\115\112\097\099\101", 1, true)
+                            or text:find("\110\111\116\032\101\110\111\117\103\104\032\115\112\097\099\101", 1, true) or text:find("\110\111\116\032\101\110\111\117\103\104\032\114\111\111\109", 1, true))
+                end
+                return false
+            end
+            for _, value in pairs({...}) do
+                if full(value, 0) then
+                    stop()
+                    Notify("\080\105\099\107\032\085\112\032\080\108\111\116\032\080\111\116\105\111\110\115", "\073\110\118\101\110\116\111\114\121\032\102\117\108\108\046\032\080\105\099\107\117\112\032\116\117\114\110\101\100\032\079\070\070\046", 4)
+                    return
+                end
+            end
+        end))
+    end
+    CreateToggle(ShopPage, "\080\105\099\107\032\085\112\032\080\108\111\116\032\080\111\116\105\111\110\115", key, function(enabled)
+        if HubDestroyed or State[key] ~= enabled then return end
+        stop()
+        if not enabled then return end
+        State[key] = true
+        if ToggleObjects[key] then ToggleObjects[key](true) end
+        local run = serial
+        worker = task.defer(function()
+            local confirmed, failed = 0, 0
+            local ok, message = pcall(function()
+                if State.AutoPlacePotions or State.AutoLoadPotions then
+                    error("\084\117\114\110\032\065\117\116\111\032\080\108\097\099\101\032\080\111\116\105\111\110\115\032\097\110\100\032\065\117\116\111\032\076\111\097\100\032\080\111\116\105\111\110\115\032\111\102\102\032\098\101\102\111\114\101\032\112\105\099\107\105\110\103\032\117\112\032\112\108\111\116\032\112\111\116\105\111\110\115\046", 0)
+                end
+                local plot = ownPlot()
+                local stock = plot and plot:FindFirstChild("\083\116\111\099\107")
+                local plotEvents = events and events:FindFirstChild("\080\108\111\116")
+                local pickup = plotEvents and plotEvents:FindFirstChild("\080\105\099\107\085\112\083\116\111\099\107\073\116\101\109")
+                if not stock or not pickup or not pickup:IsA("\082\101\109\111\116\101\069\118\101\110\116") then
+                    error("\089\111\117\114\032\108\111\097\100\101\100\032\112\108\111\116\032\111\114\032\116\104\101\032\112\105\099\107\117\112\032\101\118\101\110\116\032\099\111\117\108\100\032\110\111\116\032\098\101\032\102\111\117\110\100\046", 0)
+                end
+                local modules = ReplicatedStorage:FindFirstChild("\077\111\100\117\108\101\115")
+                local items = modules and modules:FindFirstChild("\073\116\101\109\115")
+                if items then pcall(function() definitions = require(items) end) end
+                local pending, abandoned = {}, {}
+                while active(run) do
+                    if ownPlot() ~= plot or not stock:IsDescendantOf(plot) then
+                        error("\089\111\117\114\032\112\108\111\116\032\099\104\097\110\103\101\100\032\111\114\032\117\110\108\111\097\100\101\100\046\032\080\105\099\107\117\112\032\115\116\111\112\112\101\100\046", 0)
+                    end
+                    if State.AutoPlacePotions or State.AutoLoadPotions then
+                        error("\065\110\111\116\104\101\114\032\112\111\116\105\111\110\032\097\117\116\111\109\097\116\105\111\110\032\119\097\115\032\101\110\097\098\108\101\100\046\032\080\105\099\107\117\112\032\115\116\111\112\112\101\100\046", 0)
+                    end
+                    local seen, candidates = {}, {}
+                    for index, object in ipairs(stock:GetChildren()) do
+                        if isPotion(object) then
+                            local guid = object:GetAttribute("\071\085\073\068") or object:GetAttribute("\071\117\105\100")
+                            local placedBy = tonumber(object:GetAttribute("\080\108\097\099\101\100\066\121"))
+                            if type(guid) == "\115\116\114\105\110\103" and guid ~= "" and not seen[guid]
+                                and (not placedBy or placedBy == LocalPlayer.UserId) then
+                                seen[guid] = true
+                                if not abandoned[guid] then candidates[#candidates + 1] = {guid=guid, object=object} end
+                            end
+                        end
+                        if index % 250 == 0 then
+                            task.wait()
+                            if not active(run) then return end
+                        end
+                    end
+                    for guid in pairs(pending) do
+                        if not seen[guid] then confirmed = confirmed + 1; pending[guid] = nil end
+                    end
+                    if #candidates == 0 then return end
+                    -- Fair first passes before retries: do not let stubborn objects block the rest.
+                    table.sort(candidates, function(a,b)
+                        local left, right = pending[a.guid], pending[b.guid]
+                        local la, ra = left and left.attempts or 0, right and right.attempts or 0
+                        if la ~= ra then return la < ra end
+                        return a.guid < b.guid
+                    end)
+                    local sent = 0
+                    for _, item in ipairs(candidates) do
+                        if not active(run) then return end
+                        local previous = pending[item.guid]
+                        if not previous or os.clock() - previous.at >= 1 then
+                            if previous and previous.attempts >= 4 then
+                                failed = failed + 1
+                                abandoned[item.guid] = true
+                                pending[item.guid] = nil
+                            elseif item.object:IsDescendantOf(stock) then
+                                pending[item.guid] = {at=os.clock(), attempts=(previous and previous.attempts or 0)+1}
+                                pickup:FireServer(item.guid)
+                                sent = sent + 1
+                                if sent >= 8 then break end
+                            end
+                        end
+                    end
+                    -- Up to 80 requests/sec; removals confirm asynchronously instead of one long wait per item.
+                    task.wait(0.1)
+                end
+            end)
+            if active(run) then
+                stop()
+                if not ok then
+                    Notify("\080\105\099\107\032\085\112\032\080\108\111\116\032\080\111\116\105\111\110\115", tostring(message), 5)
+                else
+                    Notify("\080\105\099\107\032\085\112\032\080\108\111\116\032\080\111\116\105\111\110\115", "\080\105\099\107\101\100\032\117\112\032" .. confirmed .. "\032\112\111\116\105\111\110\040\115\041\046"
+                        .. (failed > 0 and ("\032" .. failed .. "\032\099\111\117\108\100\032\110\111\116\032\098\101\032\099\111\110\102\105\114\109\101\100\059\032\116\114\121\032\097\103\097\105\110\046") or "")
+                        .. "\032\084\111\103\103\108\101\032\116\117\114\110\101\100\032\079\070\070\046", 5)
+                end
+            end
+        end)
+    end)
+end)()
+end
+
 ShowMain()
 RefreshAuctionDropdown()
 UpdateAutoBidStatus()
@@ -12684,6 +12869,7 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
 
 
 
