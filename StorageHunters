@@ -1869,16 +1869,33 @@ local function StartBasketball(runId)
             return findBall(GetCharacter())
         end
         local function GetBasketballRing()
-            local assets = workspace:FindFirstChild("\066\066\079\087\032\066\117\105\108\100\101\114\032\065\115\115\101\116\115")
-            local buildings = assets and assets:FindFirstChild("\079\116\104\101\114\032\066\117\105\108\100\105\110\103\115\032\097\110\100\032\032\068\101\099\111\114\097\116\105\111\110")
-            local court = buildings and buildings:FindFirstChild("\066\097\115\107\101\116\032\066\097\108\108\032")
-            local target = court and court:GetChildren()[2]
-            local ring = target and target:FindFirstChild("\082\105\110\103")
-            if not ring then
-                local hoop = target and target:FindFirstChild("\072\111\111\112")
-                ring = hoop and hoop:FindFirstChild("\082\105\110\103")
+            local assets = workspace:FindFirstChild("BBOW Builder Assets")
+            local buildings = assets and assets:FindFirstChild("Other Buildings and  Decoration")
+            if not buildings then return nil end
+            -- GetChildren()[2] changes between sessions; locate the actual court.
+            local court = buildings:FindFirstChild("Basket Ball ")
+            if not court then
+                for _, child in ipairs(buildings:GetChildren()) do
+                    if child.Name:lower():gsub("[^%w]", "") == "basketball" then
+                        court = child
+                        break
+                    end
+                end
             end
-            if ring and ring:IsA("\066\097\115\101\080\097\114\116") then return ring end
+            if not court then return nil end
+            -- A court can have multiple hoops; select the one by the saved sweet spot.
+            local nearest, distance = nil, math.huge
+            local function consider(part)
+                if part:IsA("BasePart") and part.Name:lower() == "ring" then
+                    local d = (part.Position - shootingSpot).Magnitude
+                    if d < distance then nearest, distance = part, d end
+                end
+            end
+            consider(court)
+            for _, part in ipairs(court:GetDescendants()) do
+                consider(part)
+            end
+            return nearest
         end
 
         local function lockPosition()
@@ -4116,81 +4133,71 @@ end
                 
                                                                 
 
-local HayTargetOrder = {
-    171,
-    221,
-    314,
-    93,
-    435,
-    "\072\097\121",
-    102,
-    119,
-    174,
-    146,
-    443,
-}
+-- Hay object positions can move in GetChildren() between game loads.
+-- Locate named Hay instances instead of relying on numerical child indices.
+local function GetHayTargets(trees)
+    local targets = {}
+    for _, target in ipairs(trees:GetDescendants()) do
+        if (target:IsA("Model") or target:IsA("BasePart"))
+            and target.Name:lower():find("hay", 1, true) then
+            local parent = target.Parent
+            local insideHay = false
+            while parent and parent ~= trees do
+                if (parent:IsA("Model") or parent:IsA("BasePart"))
+                    and parent.Name:lower():find("hay", 1, true) then
+                    insideHay = true
+                    break
+                end
+                parent = parent.Parent
+            end
+            if not insideHay then table.insert(targets, target) end
+        end
+    end
+    return targets
+end
 
 local function GetTreesFolder()
-    local assets = workspace:FindFirstChild("\066\066\079\087\032\066\117\105\108\100\101\114\032\065\115\115\101\116\115")
-
-    if not assets then
-        return nil
-    end
-
-    local buildings = assets:FindFirstChild("\079\116\104\101\114\032\066\117\105\108\100\105\110\103\115\032\097\110\100\032\032\068\101\099\111\114\097\116\105\111\110")
-
-    if not buildings then
-        return nil
-    end
-
-    return buildings:FindFirstChild("\084\114\101\101\115")
+    local assets = workspace:FindFirstChild("BBOW Builder Assets")
+    local buildings = assets and assets:FindFirstChild("Other Buildings and  Decoration")
+    return buildings and buildings:FindFirstChild("Trees") or nil
 end
 
 local function StartHayCollector(runId)
     task.spawn(function()
-        while not HubDestroyed
-            and State.HayCollector
-            and RunIds.Hay == runId do
+        local targets, cachedTrees = {}, nil
+        local lastScan = -math.huge
+        local function active()
+            return not HubDestroyed and State.HayCollector and RunIds.Hay == runId
+        end
 
+        while active() do
             local trees = GetTreesFolder()
-
             if not trees then
+                cachedTrees = nil
                 task.wait(1)
-                continue
-            end
-
-            local children = trees:GetChildren()
-
-            for _, targetKey in ipairs(HayTargetOrder) do
-                if HubDestroyed
-                    or not State.HayCollector
-                    or RunIds.Hay ~= runId then
-                    return
+            else
+                if trees ~= cachedTrees or os.clock() - lastScan >= 8 then
+                    targets = GetHayTargets(trees)
+                    cachedTrees = trees
+                    lastScan = os.clock()
                 end
 
-                local target
-
-                if typeof(targetKey) == "\110\117\109\098\101\114" then
-                    target = children[targetKey]
-                else
-                    target = trees:FindFirstChild(targetKey)
-                end
-
-                if target then
-                    local root = GetRoot()
-
-                    if root then
-                        local success, pivot = pcall(function()
-                            return target:GetPivot()
-                        end)
-
-                        if success and pivot then
-                            root.CFrame = pivot + Vector3.new(0, 3, 0)
+                for _, target in ipairs(targets) do
+                    if not active() then return end
+                    if target:IsDescendantOf(trees) then
+                        local root = GetRoot()
+                        if root then
+                            local ok, pivot = pcall(function()
+                                return target:GetPivot()
+                            end)
+                            if ok and pivot then
+                                root.CFrame = pivot + Vector3.new(0, 3, 0)
+                            end
                         end
                     end
+                    task.wait(0.15)
                 end
-
-                task.wait(0.15)
+                if #targets == 0 then task.wait(1) end
             end
         end
     end)
