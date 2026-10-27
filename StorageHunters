@@ -5254,50 +5254,126 @@ do
             selectedGuid = trailers[value] and value or nil
         end)
     dropdown:SetLabelFormatter(function(value) return trailers[value] or value end)
-    CreateActionButton(MainPage, "\069\113\117\105\112\032\083\101\108\101\099\116\101\100\032\084\114\097\105\108\101\114", function()
-        if HubDestroyed or applying then return end
-        if refreshing then
-            Notify("\084\114\097\105\108\101\114\115", "\084\104\101\032\116\114\097\105\108\101\114\032\108\105\115\116\032\105\115\032\108\111\097\100\105\110\103\046\032\084\114\121\032\097\103\097\105\110\032\105\110\032\097\032\109\111\109\101\110\116\046", 3)
-            return
+    -- Move the seated vehicle into the shop, then always restore its saved pivot.
+    local activeTrip
+    local function stopMotion(vehicle)
+        for _, part in ipairs(vehicle:GetDescendants()) do
+            if part:IsA("\066\097\115\101\080\097\114\116") then
+                part.AssemblyLinearVelocity = Vector3.zero
+                part.AssemblyAngularVelocity = Vector3.zero
+            end
         end
-        applying = true
-        local requestedGuid = selectedGuid
-        local loaded = refreshTrailers()
-        if HubDestroyed then applying = false; return end
-        if not loaded or not requestedGuid or not trailers[requestedGuid] then
-            applying = false
-            if loaded then Notify("\084\114\097\105\108\101\114\115", "\083\101\108\101\099\116\032\097\110\032\111\119\110\101\100\032\116\114\097\105\108\101\114\044\032\116\104\101\110\032\112\114\101\115\115\032\069\113\117\105\112\046", 3) end
-            return
-        end
-        local folder = customization()
-        local remote = folder and folder:FindFirstChild("\065\112\112\108\121\084\114\097\105\108\101\114")
+    end
+    local function returnVehicle()
+        local trip = activeTrip
+        activeTrip = nil
+        if not trip then return true end
+        if trip.connection then trip.connection:Disconnect() end
+        if not trip.moved then return true end
         local ok = pcall(function()
-            if not remote or not remote:IsA("\082\101\109\111\116\101\069\118\101\110\116") then error("\084\114\097\105\108\101\114\032\099\111\110\116\114\111\108\115\032\117\110\097\118\097\105\108\097\098\108\101") end
-            remote:FireServer(requestedGuid)
+            if not trip.vehicle.Parent then error("\086\101\104\105\099\108\101\032\110\111\032\108\111\110\103\101\114\032\101\120\105\115\116\115") end
+            trip.vehicle:PivotTo(trip.origin)
+            stopMotion(trip.vehicle)
         end)
+        return ok
+    end
+    ThisHubInstance.ReturnTrailerVehicle = returnVehicle
+    local function applyAtShop(guid)
+        if HubDestroyed or applying then return end
+        applying = true
+        local applied, confirmed = false, false
+        local ok, problem = pcall(function()
+            local character = LocalPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
+            local seat = humanoid and humanoid.SeatPart
+            if not seat then error("\083\105\116\032\105\110\032\121\111\117\114\032\118\101\104\105\099\108\101\032\098\101\102\111\114\101\032\099\104\097\110\103\105\110\103\032\105\116\115\032\116\114\097\105\108\101\114\046", 0) end
+            local vehicle = seat:FindFirstAncestorOfClass("\077\111\100\101\108")
+            local ancestor = seat.Parent
+            while ancestor and ancestor ~= workspace do
+                if ancestor:IsA("\077\111\100\101\108") and (ancestor:GetAttribute("\086\101\104\105\099\108\101\071\085\073\068")
+                    or ancestor:GetAttribute("\071\085\073\068") or ancestor:FindFirstChild("\070\108\111\111\114\115\112\097\099\101")) then
+                    vehicle = ancestor
+                    break
+                end
+                ancestor = ancestor.Parent
+            end
+            if not vehicle then error("\067\111\117\108\100\032\110\111\116\032\105\100\101\110\116\105\102\121\032\121\111\117\114\032\115\101\097\116\101\100\032\118\101\104\105\099\108\101\046", 0) end
+            local folder = customization()
+            local apply = folder and folder:FindFirstChild("\065\112\112\108\121\084\114\097\105\108\101\114")
+            local open = folder and folder:FindFirstChild("\079\112\101\110\067\117\115\116\111\109\105\122\097\116\105\111\110")
+            if not apply or not apply:IsA("\082\101\109\111\116\101\069\118\101\110\116")
+                or not open or not open:IsA("\082\101\109\111\116\101\069\118\101\110\116") then
+                error("\084\104\101\032\099\117\115\116\111\109\105\122\097\116\105\111\110\032\101\118\101\110\116\115\032\097\114\101\032\117\110\097\118\097\105\108\097\098\108\101\046", 0)
+            end
+            local shops = workspace:FindFirstChild("\083\104\111\112\115")
+            local shop = shops and shops:FindFirstChild("\067\097\114\032\067\117\115\116\111\109\105\115\097\116\105\111\110")
+            local touch = shop and shop:FindFirstChild("\086\101\104\105\099\108\101\071\097\114\097\103\101\084\111\117\099\104\080\097\114\116", true)
+            -- Captured seated position; preserve the vehicle's current heading.
+            local spot = Vector3.new(-70.3656921, 1725.80603, 265.332977)
+            if touch and touch:IsA("\066\097\115\101\080\097\114\116") and (touch.Position - spot).Magnitude > 100 then
+                error("\084\104\101\032\115\104\111\112\032\104\097\115\032\109\111\118\101\100\032\097\119\097\121\032\102\114\111\109\032\116\104\101\032\115\097\118\101\100\032\099\111\111\114\100\105\110\097\116\101\115\046\032\084\114\097\105\108\101\114\032\116\114\105\112\032\099\097\110\099\101\108\108\101\100\046", 0)
+            end
+            local trip = {vehicle = vehicle, origin = vehicle:GetPivot(), moved = false, opened = false}
+            activeTrip = trip
+            trip.connection = open.OnClientEvent:Connect(function(openVehicle, _, _, _, _, trailerGuid)
+                if activeTrip ~= trip or openVehicle ~= vehicle then return end
+                trip.opened = true
+                if applied and tostring(trailerGuid or "") == guid then confirmed = true end
+            end)
+            TrackConnection(trip.connection)
+            local alreadyHere = (seat.Position - spot).Magnitude <= 12
+            if not alreadyHere then
+                trip.moved = true
+                vehicle:PivotTo(CFrame.new(spot - seat.Position) * trip.origin)
+                stopMotion(vehicle)
+            end
+            local deadline = os.clock() + (alreadyHere and 0.5 or 4)
+            repeat
+                task.wait(0.05)
+                if HubDestroyed or activeTrip ~= trip then return end
+                if not vehicle.Parent or humanoid.SeatPart ~= seat then
+                    error("\086\101\104\105\099\108\101\032\111\114\032\115\101\097\116\032\099\104\097\110\103\101\100\032\098\101\102\111\114\101\032\099\117\115\116\111\109\105\122\097\116\105\111\110\032\111\112\101\110\101\100\046", 0)
+                end
+            until trip.opened or os.clock() >= deadline
+            if not trip.opened and not alreadyHere then
+                error("\084\104\101\032\115\104\111\112\032\100\105\100\032\110\111\116\032\111\112\101\110\032\099\117\115\116\111\109\105\122\097\116\105\111\110\046\032\082\101\116\117\114\110\101\100\032\119\105\116\104\111\117\116\032\097\112\112\108\121\105\110\103\032\097\032\116\114\097\105\108\101\114\046", 0)
+            end
+            if HubDestroyed or activeTrip ~= trip then return end
+            apply:FireServer(guid)
+            applied = true
+            local settleUntil = os.clock() + 1.25
+            repeat
+                task.wait(0.05)
+            until confirmed or HubDestroyed or activeTrip ~= trip or os.clock() >= settleUntil
+        end)
+        local returned = returnVehicle()
         applying = false
-        if not HubDestroyed then
-            Notify("\084\114\097\105\108\101\114\115", ok and ("\069\113\117\105\112\032\114\101\113\117\101\115\116\032\115\101\110\116\058\032" .. trailers[requestedGuid])
-                or "\067\111\117\108\100\032\110\111\116\032\115\101\110\100\032\116\104\101\032\101\113\117\105\112\032\114\101\113\117\101\115\116\046\032\084\114\121\032\097\103\097\105\110\046", 3)
+        if HubDestroyed then return end
+        if not returned then
+            Notify("\084\114\097\105\108\101\114\115", "\067\111\117\108\100\032\110\111\116\032\114\101\115\116\111\114\101\032\116\104\101\032\118\101\104\105\099\108\101\039\115\032\112\111\115\105\116\105\111\110\059\032\105\116\032\109\097\121\032\104\097\118\101\032\100\101\115\112\097\119\110\101\100\046", 5)
+        elseif not ok then
+            Notify("\084\114\097\105\108\101\114\115", tostring(problem), 5)
+        elseif applied then
+            local action = guid == "" and "\085\110\101\113\117\105\112" or ("\069\113\117\105\112\032" .. tostring(trailers[guid] or "\116\114\097\105\108\101\114"))
+            Notify("\084\114\097\105\108\101\114\115", action .. (confirmed and "\032\099\111\110\102\105\114\109\101\100\046" or "\032\114\101\113\117\101\115\116\032\115\101\110\116\032\097\116\032\116\104\101\032\115\104\111\112\046")
+                .. "\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046", 4)
         end
+    end
+
+    CreateActionButton(MainPage, "\069\113\117\105\112\032\083\101\108\101\099\116\101\100\032\084\114\097\105\108\101\114", function()
+        local guid = dropdown:Get()
+        if not trailers[guid] then
+            Notify("\084\114\097\105\108\101\114\115", "\083\101\108\101\099\116\032\097\110\032\111\119\110\101\100\032\116\114\097\105\108\101\114\032\102\105\114\115\116\046\032\082\101\102\114\101\115\104\032\116\104\101\032\108\105\115\116\032\105\102\032\110\101\101\100\101\100\046", 3)
+            return
+        end
+        applyAtShop(guid)
     end)
     CreateActionButton(MainPage, "\085\110\101\113\117\105\112\032\084\114\097\105\108\101\114", function()
-        if HubDestroyed or applying then return end
-        local folder = customization()
-        local remote = folder and folder:FindFirstChild("\065\112\112\108\121\084\114\097\105\108\101\114")
-        local ok = pcall(function()
-            if not remote or not remote:IsA("\082\101\109\111\116\101\069\118\101\110\116") then error("\084\114\097\105\108\101\114\032\099\111\110\116\114\111\108\115\032\117\110\097\118\097\105\108\097\098\108\101") end
-            remote:FireServer("")
-        end)
-        if not HubDestroyed then
-            Notify("\084\114\097\105\108\101\114\115", ok and "\085\110\101\113\117\105\112\032\114\101\113\117\101\115\116\032\115\101\110\116\046"
-                or "\067\111\117\108\100\032\110\111\116\032\115\101\110\100\032\116\104\101\032\117\110\101\113\117\105\112\032\114\101\113\117\101\115\116\046\032\084\114\121\032\097\103\097\105\110\046", 3)
-        end
+        applyAtShop("")
     end)
     CreateActionButton(MainPage, "\082\101\102\114\101\115\104\032\084\114\097\105\108\101\114\115", refreshTrailers)
     task.spawn(refreshTrailers)
 end
-
 
                                                                 
                                         
@@ -10524,6 +10600,9 @@ local function DestroyHub()
                       
                                                               
     HubDestroyed = true
+    if ThisHubInstance.ReturnTrailerVehicle then
+        pcall(ThisHubInstance.ReturnTrailerVehicle)
+    end
     if ThisHubInstance.StopPotionLoader then
         pcall(ThisHubInstance.StopPotionLoader)
     end
@@ -12287,6 +12366,7 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
 
 
 
