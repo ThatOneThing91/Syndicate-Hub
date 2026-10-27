@@ -11125,77 +11125,124 @@ local function attemptAllowed(key, delay)
     return true
 end
 
+-- Track each slot's reveal/claim stage to avoid repeated reveals after success.
+local slotCollection = {}
+
+local function gradingActionRejected(ok, result)
+    if not ok or result == false then return true end
+    if type(result) == "table" then
+        return result.success == false or result.Success == false
+    end
+    return false
+end
+
+local function gradingActionReason(result)
+    if type(result) == "table" then
+        return result.message or result.Message or result.error or result.Error or result.reason
+    elseif type(result) == "string" then
+        return result
+    end
+    return nil
+end
+
 local function verifyEmpty(slot)
     local state = getState()
-
-    if not state then
-        return false
-    end
-
-    return getSlot(state, slot) == nil
+    return state ~= nil and getSlot(state, slot) == nil
 end
 
-                                                 
+local function waitForEmpty(slot)
+    for check = 1, 6 do
+        if not alive or not enabled or HubDestroyed then return false end
+        if verifyEmpty(slot) then return true end
+        if check < 6 then task.wait(0.25) end
+    end
+    return false
+end
+
 local function handleOccupied(slot, info)
+    local itemKey = tostring(info.ItemGUID or info.itemGUID or info.Guid or info.guid or "unknown")
+    local progress = slotCollection[slot]
+    if not progress or (itemKey ~= "unknown" and progress.itemKey ~= itemKey) then
+        progress = {
+            itemKey = itemKey,
+            phase = "reveal",
+            collectLast = -100,
+            claimLast = -100,
+            collectFailures = 0,
+            claimFailures = 0,
+            claimAfter = 0
+        }
+        slotCollection[slot] = progress
+    end
+
     local remaining = remainingTime(info)
-
-    if remaining == nil then
-        if attemptAllowed("\117\110\107\110\111\119\110\095" .. slot, 12) then
-            report("\083\108\111\116\032" .. slot .. "\058\032\117\110\107\110\111\119\110\032\116\105\109\101\114\047\115\116\097\116\101")
+    if remaining == nil and progress.phase ~= "claim" then
+        if attemptAllowed("unknown_" .. slot, 12) then
+            report("Slot " .. slot .. ": unknown timer/state")
         end
-
-        return "\085\110\107\110\111\119\110"
+        return "Unknown"
+    end
+    if remaining and remaining > 0 then
+        return tostring(math.ceil(remaining)) .. "s"
     end
 
-    if remaining > 0 then
-        return tostring(math.ceil(remaining)) .. "\115"
-    end
+    if progress.phase == "reveal" then
+        if os.clock() - progress.collectLast < 1.6 then return "Reveal retry" end
+        progress.collectLast = os.clock()
+        local ok, result = invoke("CollectGrade", slot)
 
-    local itemKey = tostring(info.ItemGUID or "\117\110\107\110\111\119\110")
-
-    if attemptAllowed("\099\111\108\108\101\099\116\095" .. slot .. "\095" .. itemKey, 4) then
-        report("\083\108\111\116\032" .. slot .. "\058\032\116\105\109\101\114\032\100\111\110\101\059\032\114\101\118\101\097\108\105\110\103")
-
-        local ok, result = invoke("\067\111\108\108\101\099\116\071\114\097\100\101", slot)
-
-        if not ok or result == false then
-            report("\083\108\111\116\032" .. slot .. "\058\032\099\111\108\108\101\099\116\032\102\097\105\108\101\100")
-            return "\067\111\108\108\101\099\116\032\114\101\116\114\121"
-        end
-
-        task.wait(0.4)
-    end
-
-    if not enabled or not alive then
-        return "\080\097\117\115\101\100"
-    end
-
-    if attemptAllowed("\099\108\097\105\109\095" .. slot .. "\095" .. itemKey, 4) then
-        report("\083\108\111\116\032" .. slot .. "\058\032\099\108\097\105\109\105\110\103")
-
-        local ok, result = invoke("\067\108\097\105\109\071\114\097\100\101\100\073\116\101\109", slot)
-
-        if not ok or result == false then
-            report("\083\108\111\116\032" .. slot .. "\058\032\099\108\097\105\109\032\102\097\105\108\101\100")
-            return "\067\108\097\105\109\032\114\101\116\114\121"
-        end
-
-        task.wait(0.5)
-
-        if verifyEmpty(slot) then
-            report("\083\108\111\116\032" .. slot .. "\058\032\099\108\101\097\114\101\100\032\115\117\099\099\101\115\115\102\117\108\108\121")
-            return "\069\109\112\116\121"
+        if gradingActionRejected(ok, result) then
+            progress.collectFailures += 1
+            local reason = gradingActionReason(result)
+            if progress.collectFailures >= 2 then
+                -- If already revealed, a claim may work even when reveal now fails.
+                progress.phase = "claim"
+                progress.claimAfter = os.clock() + 0.65
+                report("Slot " .. slot .. ": reveal unconfirmed; checking claim")
+            else
+                report("Slot " .. slot .. ": reveal retry" .. (reason and (" - " .. tostring(reason)) or ""))
+                return "Reveal retry"
+            end
         else
-            report("\083\108\111\116\032" .. slot ..
-                "\058\032\115\116\105\108\108\032\111\099\099\117\112\105\101\100\059\032\114\101\116\114\121\105\110\103")
-            return "\067\108\097\105\109\032\114\101\116\114\121"
+            progress.phase = "claim"
+            progress.claimAfter = os.clock() + 0.9
+            report("Slot " .. slot .. ": reveal accepted")
         end
     end
 
-    return "\067\111\109\112\108\101\116\101\100"
+    if not enabled or not alive or HubDestroyed then return "Paused" end
+    local claimWait = progress.claimAfter - os.clock()
+    if claimWait > 0 then task.wait(claimWait) end
+    if not enabled or not alive or HubDestroyed then return "Paused" end
+    if os.clock() - progress.claimLast < 1.5 then return "Claim retry" end
+
+    progress.claimLast = os.clock()
+    local ok, result = invoke("ClaimGradedItem", slot)
+    if gradingActionRejected(ok, result) then
+        progress.claimFailures += 1
+        local reason = gradingActionReason(result)
+        report("Slot " .. slot .. ": claim retry" .. (reason and (" - " .. tostring(reason)) or ""))
+
+        if progress.claimFailures >= 4 then
+            -- Re-sync only after multiple rejected claims, not on every pass.
+            progress.phase = "reveal"
+            progress.claimFailures = 0
+            progress.collectFailures = 0
+            report("Slot " .. slot .. ": rechecking reveal state")
+        end
+        return "Claim retry"
+    end
+
+    if waitForEmpty(slot) then
+        slotCollection[slot] = nil
+        report("Slot " .. slot .. ": cleared successfully")
+        return "Empty"
+    end
+
+    -- Slot-state replication can lag behind the accepted claim.
+    return "Awaiting slot clear"
 end
 
-                                    
 local function startItem(slot, used)
     local items = getItems()
     if #items == 0 then
@@ -11273,6 +11320,7 @@ local function process()
         local result
 
         if info == nil then
+            slotCollection[slot] = nil
             result = startItem(slot, used)
         else
             result = handleOccupied(slot, info)
