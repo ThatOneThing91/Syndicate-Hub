@@ -1757,106 +1757,180 @@ end
                   
                                                                 
 
+ThisHubInstance.StopBasketballWorkers = function()
+    local connection = ThisHubInstance.BasketballPositionConnection
+    ThisHubInstance.BasketballPositionConnection = nil
+    if connection then pcall(function() connection:Disconnect() end) end
+    local thread = ThisHubInstance.BasketballThread
+    ThisHubInstance.BasketballThread = nil
+    if thread and thread ~= coroutine.running() then pcall(task.cancel, thread) end
+    local ball = ThisHubInstance.BasketballTool
+    ThisHubInstance.BasketballTool = nil
+    if ball then pcall(function() ball:Deactivate() end) end
+end
+
 local function StartBasketball(runId)
-    task.spawn(function()
+    ThisHubInstance.StopBasketballWorkers()
+    ThisHubInstance.BasketballThread = task.defer(function()
         local shootingSpot = Vector3.new(-357.312317, 1722.8623, -599.074524)
         local positionConnection = nil
         local activeCharacter = nil
         local RunService = game:GetService("\082\117\110\083\101\114\118\105\099\101")
+        local lastEquip, warnedMissing, warnedRing = -math.huge, false, false
+        local definitions
+        local modules = ReplicatedStorage:FindFirstChild("\077\111\100\117\108\101\115")
+        local itemsModule = modules and modules:FindFirstChild("\073\116\101\109\115")
+        if itemsModule then pcall(function() definitions = require(itemsModule) end) end
 
         local function isActive()
             return not HubDestroyed and State.AutoBasketball and RunIds.Basketball == runId
         end
-
+        local function isBasketball(name)
+            return type(name) == "\115\116\114\105\110\103" and name:lower():gsub("\091\094\037\119\093", "") == "\098\097\115\107\101\116\098\097\108\108"
+        end
+        local function findBall(container)
+            if not container then return nil end
+            for _, tool in ipairs(container:GetChildren()) do
+                if tool:IsA("\084\111\111\108") and isBasketball(tool.Name) then return tool end
+            end
+        end
         local function GetBasketball()
             local character = GetCharacter()
-            if not character then return nil end
-
-            local ball = character:FindFirstChild("\066\097\115\107\101\116\098\097\108\108")
-            if ball and ball:IsA("\084\111\111\108") then return ball end
-
-            local backpack = LocalPlayer:FindFirstChildOfClass("\066\097\099\107\112\097\099\107")
-            local stored = backpack and backpack:FindFirstChild("\066\097\115\107\101\116\098\097\108\108")
-            if stored and stored:IsA("\084\111\111\108") then
-                local humanoid = character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
-                if humanoid then
-                    pcall(function() humanoid:EquipTool(stored) end)
-                    return character:FindFirstChild("\066\097\115\107\101\116\098\097\108\108")
+            if not character or not isActive() then return nil end
+            local ball = findBall(character)
+            if ball then warnedMissing = false; return ball end
+            local humanoid = character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
+            local stored = findBall(LocalPlayer:FindFirstChildOfClass("\066\097\099\107\112\097\099\107"))
+            if stored and humanoid then
+                pcall(function() humanoid:EquipTool(stored) end)
+                ball = findBall(character)
+                if ball then warnedMissing = false; return ball end
+            end
+            if os.clock() - lastEquip < 3 then return nil end
+            lastEquip = os.clock()
+            local events = ReplicatedStorage:FindFirstChild("\069\118\101\110\116\115")
+            local inventory = events and events:FindFirstChild("\073\110\118\101\110\116\111\114\121")
+            local getItems = inventory and inventory:FindFirstChild("\071\101\116\080\108\097\121\101\114\073\110\118\101\110\116\111\114\121")
+            local equip = inventory and inventory:FindFirstChild("\069\113\117\105\112\073\116\101\109")
+            if getItems and equip and getItems:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") and equip:IsA("\082\101\109\111\116\101\069\118\101\110\116") then
+                local ok, response = pcall(function() return getItems:InvokeServer() end)
+                if not isActive() then return nil end
+                local entries = ok and type(response) == "\116\097\098\108\101"
+                    and (response.Inventory or response.Items or response)
+                if type(entries) == "\116\097\098\108\101" then
+                    for key, entry in pairs(entries) do
+                        if type(entry) == "\116\097\098\108\101" then
+                            local id = entry.ItemId or entry.ItemID or entry.itemId
+                            local definition = type(definitions) == "\116\097\098\108\101"
+                                and (definitions[tostring(id)] or definitions[tonumber(id)])
+                            local matches = isBasketball(entry.Name) or isBasketball(entry.ItemName)
+                                or (type(definition) == "\116\097\098\108\101" and
+                                    (isBasketball(definition.Name) or isBasketball(definition.DisplayName)))
+                            local guid = entry.Guid or entry.GUID or entry.UUID or key
+                            if matches and type(guid) == "\115\116\114\105\110\103" and guid ~= "" then
+                                if not isActive() then return nil end
+                                local sent = pcall(function() equip:FireServer(guid) end)
+                                if sent then
+                                    local deadline = os.clock() + 2
+                                    repeat
+                                        if not isActive() then return nil end
+                                        ball = findBall(GetCharacter())
+                                        if ball then warnedMissing = false; return ball end
+                                        stored = findBall(LocalPlayer:FindFirstChildOfClass("\066\097\099\107\112\097\099\107"))
+                                        local currentCharacter = GetCharacter()
+                                        local currentHumanoid = currentCharacter
+                                            and currentCharacter:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
+                                        if stored and currentHumanoid then
+                                            pcall(function() currentHumanoid:EquipTool(stored) end)
+                                        end
+                                        task.wait(0.1)
+                                    until os.clock() >= deadline
+                                end
+                                break
+                            end
+                        end
+                    end
                 end
             end
-            return nil
+            if isActive() and not warnedMissing then
+                warnedMissing = true
+                Notify("\065\117\116\111\032\066\097\115\107\101\116\098\097\108\108", "\087\097\105\116\105\110\103\032\102\111\114\032\097\110\032\111\119\110\101\100\032\098\097\115\107\101\116\098\097\108\108\032\116\111\032\101\113\117\105\112\046\032\082\101\116\114\121\105\110\103\032\097\117\116\111\109\097\116\105\099\097\108\108\121\046", 4)
+            end
+            return findBall(GetCharacter())
         end
-
         local function GetBasketballRing()
             local assets = workspace:FindFirstChild("\066\066\079\087\032\066\117\105\108\100\101\114\032\065\115\115\101\116\115")
             local buildings = assets and assets:FindFirstChild("\079\116\104\101\114\032\066\117\105\108\100\105\110\103\115\032\097\110\100\032\032\068\101\099\111\114\097\116\105\111\110")
             local court = buildings and buildings:FindFirstChild("\066\097\115\107\101\116\032\066\097\108\108\032")
             local target = court and court:GetChildren()[4]
-            local ring = target and target:FindFirstChild("\082\105\110\103")
+            local ring = target and target:FindFirstChild("\082\105\110\103", true)
             if ring and ring:IsA("\066\097\115\101\080\097\114\116") then return ring end
-            return nil
+            ring = court and court:FindFirstChild("\082\105\110\103", true)
+            if ring and ring:IsA("\066\097\115\101\080\097\114\116") then return ring end
         end
 
-        while not HubDestroyed
-            and State.AutoBasketball
-            and RunIds.Basketball == runId do
-
-            local character = GetCharacter()
-            local root = GetRoot()
-            local ring = GetBasketballRing()
-            local ball = GetBasketball()
-
-            if character and root and ring and ball then
-                if activeCharacter ~= character then
-                    if positionConnection then
-                        positionConnection:Disconnect()
-                        positionConnection = nil
-                    end
-                    activeCharacter = character
-                    positionConnection = RunService.Heartbeat:Connect(function()
-                        if not isActive() then
-                            if positionConnection then
-                                positionConnection:Disconnect()
-                                positionConnection = nil
+        local ok, problem = pcall(function()
+            while isActive() do
+                local character = GetCharacter()
+                local root = GetRoot()
+                local ring = GetBasketballRing()
+                local ball = GetBasketball()
+                if character and root and ring and ball then
+                    warnedRing = false
+                    ThisHubInstance.BasketballTool = ball
+                    if activeCharacter ~= character then
+                        if positionConnection then positionConnection:Disconnect() end
+                        activeCharacter = character
+                        positionConnection = RunService.Heartbeat:Connect(function()
+                            if not isActive() then
+                                if positionConnection then positionConnection:Disconnect() end
+                                return
                             end
-                            return
-                        end
-                        local currentCharacter = GetCharacter()
-                        local currentRoot = GetRoot()
-                        local currentRing = GetBasketballRing()
-                        if currentCharacter ~= activeCharacter or not currentRoot or not currentRing then return end
-                        local aim = Vector3.new(currentRing.Position.X, shootingSpot.Y, currentRing.Position.Z)
-                        if (aim - shootingSpot).Magnitude > 0.01 then
-                            currentRoot.CFrame = CFrame.lookAt(shootingSpot, aim)
-                        else
-                            currentRoot.CFrame = CFrame.new(shootingSpot)
-                        end
-                        currentRoot.AssemblyLinearVelocity = Vector3.zero
-                        currentRoot.AssemblyAngularVelocity = Vector3.zero
-                    end)
+                            local currentCharacter = GetCharacter()
+                            local currentRoot = GetRoot()
+                            local currentRing = GetBasketballRing()
+                            if currentCharacter ~= activeCharacter or not currentRoot or not currentRing then return end
+                            local aim = Vector3.new(currentRing.Position.X, shootingSpot.Y, currentRing.Position.Z)
+                            if (aim - shootingSpot).Magnitude > 0.01 then
+                                currentRoot.CFrame = CFrame.lookAt(shootingSpot, aim)
+                            else
+                                currentRoot.CFrame = CFrame.new(shootingSpot)
+                            end
+                            currentRoot.AssemblyLinearVelocity = Vector3.zero
+                            currentRoot.AssemblyAngularVelocity = Vector3.zero
+                        end)
+                        ThisHubInstance.BasketballPositionConnection = positionConnection
+                        TrackConnection(positionConnection)
+                        task.wait(0.5)
+                    end
+                    task.wait(0.1)
+                    if not isActive() then break end
+                    pcall(function() ball:Activate() end)
+                    task.wait(1)
+                    pcall(function() ball:Deactivate() end)
+                    task.wait(0.5)
+                else
+                    if not ring and not warnedRing then
+                        warnedRing = true
+                        Notify("\065\117\116\111\032\066\097\115\107\101\116\098\097\108\108", "\087\097\105\116\105\110\103\032\102\111\114\032\116\104\101\032\098\097\115\107\101\116\098\097\108\108\032\104\111\111\112\032\116\111\032\108\111\097\100\046", 3)
+                    end
                     task.wait(0.5)
                 end
-
-                task.wait(0.1)
-                if HubDestroyed or not State.AutoBasketball
-                    or RunIds.Basketball ~= runId then break end
-
-                pcall(function() ball:Activate() end)
-                task.wait(1)
-                pcall(function() ball:Deactivate() end)
-                task.wait(0.5)
-            else
-                task.wait(0.5)
             end
-        end
-        if positionConnection then
+        end)
+        if RunIds.Basketball == runId then
+            ThisHubInstance.StopBasketballWorkers()
+            if not ok and not HubDestroyed then
+                State.AutoBasketball = false
+                if ToggleObjects.AutoBasketball then ToggleObjects.AutoBasketball(false) end
+                Notify("\065\117\116\111\032\066\097\115\107\101\116\098\097\108\108", "\083\116\111\112\112\101\100\058\032" .. tostring(problem), 5)
+            end
+        elseif positionConnection then
             positionConnection:Disconnect()
-            positionConnection = nil
         end
-        local ball = GetBasketball()
-        if ball then pcall(function() ball:Deactivate() end) end
     end)
 end
+
 
                                                                 
                                  
@@ -3384,7 +3458,9 @@ do
 end
 
 CreateToggle(MainPage, "\065\117\116\111\032\066\097\115\107\101\116\098\097\108\108", "\065\117\116\111\066\097\115\107\101\116\098\097\108\108", function(enabled)
+    if HubDestroyed or State.AutoBasketball ~= enabled then return end
     RunIds.Basketball += 1
+    ThisHubInstance.StopBasketballWorkers()
 
     if enabled then
         StartBasketball(RunIds.Basketball)
@@ -10885,6 +10961,7 @@ local function DestroyHub()
 
                                    
     RunIds.Basketball += 1
+    ThisHubInstance.StopBasketballWorkers()
     RunIds.Fishing += 1
     RunIds.Hay += 1
     RunIds.Trees += 1
@@ -12607,6 +12684,7 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
 
 
 
