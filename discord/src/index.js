@@ -453,10 +453,48 @@ function confirmOwnRevoke(){
  return new Response(JSON.stringify({type:4,data:{flags:64,content:"⚠️ **Revoke your Syndicate Hub key?** This will disable your current key and stop the hub at its next verification check. This only affects the key issued to your Discord account.",components:[{type:1,components:[{type:2,style:4,label:"Yes, Revoke My Key",custom_id:"syndicate_confirm_self_revoke"},{type:2,style:2,label:"Cancel",custom_id:"syndicate_cancel_self_revoke"}]}],allowed_mentions:{parse:[]}}}),{headers:{"content-type":"application/json"}});
 }
 function modal(i){if(!hasPremiumRole(i))return premiumRequired();return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_key_modal",title:"Generate Syndicate Hub Key",components:[{type:1,components:[{type:4,custom_id:"roblox_id",label:"Roblox Username or User ID",style:1,min_length:1,max_length:20,required:true,placeholder:"Username (not display name) or numeric ID"}]}]}}),{headers:{"content-type":"application/json"}})}
+function keyAccessPanelPayload(){
+ return {
+  embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",
+   description:"Choose your key type below.\n\n**24-Hour Key** — available to everyone. Expires after 24 hours.\n**Lifetime Key** — requires the **Premium** role. Valid until revoked.\n\nUse **View Key** to retrieve your active key privately. One active key per member and Roblox ID.",
+   color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],
+  components:[{type:1,components:[
+   {type:2,style:1,label:"24-Hour Key",custom_id:"syndicate_free_generate",emoji:{name:"⏱️"}},
+   {type:2,style:3,label:"Lifetime Key",custom_id:"syndicate_generate_key",emoji:{name:"💎"}},
+   {type:2,style:2,label:"View Key",custom_id:"syndicate_free_view",emoji:{name:"🔑"}},
+   {type:2,style:2,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}},
+   {type:2,style:4,label:"Revoke My Key",custom_id:"syndicate_revoke_own_key",emoji:{name:"🚫"}}
+  ]}],allowed_mentions:{parse:[]}
+ };
+}
+// Upgrade the existing bot-owned lifetime panel once, without posting duplicates.
+async function syncExistingKeyAccessPanel(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS key_access_panel_layout(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,channel_id TEXT,message_id TEXT,checked_at TEXT NOT NULL)").run();
+ const revision="dual-key-buttons-v1";
+ const current=await env.DB.prepare("SELECT revision,status FROM key_access_panel_layout WHERE id=1").first();
+ if(current?.revision===revision&&current.status==="updated")return;
+ const listed=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
+ if(listed.status!==200||!Array.isArray(listed.data))throw Error("Cannot find key panel channels: "+listed.status);
+ const channels=listed.data.filter(c=>[0,5].includes(c.type)&&c.id!==FREE_PANEL_CHANNEL);
+ channels.sort((a,b)=>Number(/premium|key|access/i.test(b.name||""))-Number(/premium|key|access/i.test(a.name||"")));
+ for(const channel of channels.slice(0,25)){
+  const response=await discordApi(env,"/channels/"+channel.id+"/messages?limit=100");
+  if(response.status===403||response.status===404)continue;
+  if(response.status!==200||!Array.isArray(response.data))throw Error("Cannot read key panels: "+response.status);
+  const panel=response.data.find(message=>message.author?.id===APPLICATION_ID
+   && message.components?.some(row=>row.components?.some(button=>button.custom_id==="syndicate_generate_key")));
+  if(!panel)continue;
+  const changed=await discordApi(env,"/channels/"+channel.id+"/messages/"+panel.id,"PATCH",keyAccessPanelPayload());
+  if(changed.status!==200)throw Error("Cannot update key panel: "+changed.status);
+  await env.DB.prepare("INSERT INTO key_access_panel_layout(id,revision,status,channel_id,message_id,checked_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,status=excluded.status,channel_id=excluded.channel_id,message_id=excluded.message_id,checked_at=excluded.checked_at").bind(revision,"updated",channel.id,panel.id,new Date().toISOString()).run();
+  return;
+ }
+ await env.DB.prepare("INSERT INTO key_access_panel_layout(id,revision,status,checked_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,status=excluded.status,checked_at=excluded.checked_at").bind(revision,"not_found",new Date().toISOString()).run();
+}
 async function postPanel(i,env){
  const channel=i.channel_id;
  if(!channel)return reply("No channel found.");
- const payload={embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",description:"**Unlock Your Lifetime Access**\n\nClick **View Key** to privately retrieve your active key. If you do not have one, enter your Roblox username or User ID to generate one.\n\n**One active key per member and Roblox ID.** Your key will only be shown to you.",color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],components:[{type:1,components:[{type:2,style:1,label:"View Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}},{type:2,style:2,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}},{type:2,style:4,label:"Revoke My Key",custom_id:"syndicate_revoke_own_key",emoji:{name:"🚫"}}]}]};
+ const payload=keyAccessPanelPayload();
  const r=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{method:"POST",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},body:JSON.stringify(payload)});
  if(!r.ok){console.error("panel",r.status,(await r.text()).slice(0,500));return reply("Could not post panel. Check bot permissions: View Channel, Send Messages, Embed Links.")}
  return reply("✅ Key-generation panel posted in this channel.");
@@ -691,6 +729,7 @@ async function postFreePanel(env){
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
+  ctx.waitUntil(syncExistingKeyAccessPanel(env).catch(e=>console.error("key panel layout sync",String(e))));
   ctx.waitUntil(refreshExecutorStatus(env).catch(async e=>{console.error("executor status refresh",String(e));await env.DB.prepare("UPDATE executor_feed_state SET last_error=?,next_run=? WHERE id=1").bind("Panel delivery: "+String(e).slice(0,1400),Date.now()+60000).run();}));
   try{await sendExecutionLogs(env)}catch(e){console.error("execution logging",e)}
   try{await managementPost(env)}catch(e){console.error("management panel",e)}
@@ -762,4 +801,5 @@ export default {
 };
 
 export class ExecutionNotifier extends WorkerEntrypoint { async flush(){ await sendExecutionLogs(this.env); return true; } }
+
 
