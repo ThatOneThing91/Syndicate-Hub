@@ -5309,6 +5309,73 @@ do
         end
         return hidden
     end
+    local function restoreView(trip)
+        if not trip then return end
+        pcall(function()
+            local character = LocalPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
+            local camera = workspace.CurrentCamera
+            if camera then
+                -- Use the current camera: the shop can replace the original one.
+                camera.CameraSubject = humanoid or trip.cameraSubject
+                camera.CameraType = trip.cameraType ~= Enum.CameraType.Scriptable
+                    and trip.cameraType or Enum.CameraType.Custom
+                camera.FieldOfView = trip.cameraType == Enum.CameraType.Scriptable and 70
+                    or trip.fieldOfView or 70
+            end
+            UserInputService.MouseBehavior = trip.cameraType == Enum.CameraType.Scriptable
+                and Enum.MouseBehavior.Default or trip.mouseBehavior
+            UserInputService.MouseIconEnabled = trip.cameraType == Enum.CameraType.Scriptable
+                or trip.mouseIcon ~= false
+        end)
+        if trip.controls and (trip.controlsWereEnabled ~= false
+            or trip.cameraType == Enum.CameraType.Scriptable) then
+            pcall(function() trip.controls:Enable() end)
+        end
+    end
+    local function respawnCustomizedVehicle(trip)
+        if HubDestroyed then return false, "\067\097\110\099\101\108\108\101\100" end
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
+        local root = character and character:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116")
+        if not humanoid or not root then return false, "\067\104\097\114\097\099\116\101\114\032\117\110\097\118\097\105\108\097\098\108\101\032\102\111\114\032\118\101\104\105\099\108\101\032\114\101\115\101\116\046" end
+        humanoid.Sit = false
+        pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        local exitUntil = os.clock() + 2
+        repeat
+            task.wait(0.05)
+            if HubDestroyed then return false, "\067\097\110\099\101\108\108\101\100" end
+        until humanoid.SeatPart == nil or os.clock() >= exitUntil
+        if humanoid.SeatPart then return false, "\067\111\117\108\100\032\110\111\116\032\101\120\105\116\032\116\104\101\032\115\101\097\116\059\032\118\101\104\105\099\108\101\032\119\097\115\032\110\111\116\032\114\101\115\112\097\119\110\101\100\046" end
+        local width = trip.vehicle.Parent and trip.vehicle:GetExtentsSize().X or 10
+        root.CFrame = trip.origin * CFrame.new(width / 2 + 5, 3, 0)
+        restoreView(trip)
+        local reply, message, connection
+        connection = trip.spawnResult.OnClientEvent:Connect(function(success, text)
+            if type(success) == "\098\111\111\108\101\097\110" then reply, message = success, tostring(text or "") end
+        end)
+        trip.spawnConnection = connection
+        TrackConnection(connection)
+        local ok, reason = pcall(function() trip.spawnRemote:FireServer(trip.vehicleGuid) end)
+        if not ok then
+            connection:Disconnect()
+            trip.spawnConnection = nil
+            return false, tostring(reason)
+        end
+        local spawnUntil = os.clock() + 8
+        repeat
+            task.wait(0.05)
+            if HubDestroyed then connection:Disconnect(); trip.spawnConnection = nil; return false, "\067\097\110\099\101\108\108\101\100" end
+        until reply ~= nil or os.clock() >= spawnUntil
+        connection:Disconnect()
+        trip.spawnConnection = nil
+        if reply == false then return false, message end
+        if reply == nil then return false, "\086\101\104\105\099\108\101\032\114\101\115\112\097\119\110\032\119\097\115\032\110\111\116\032\099\111\110\102\105\114\109\101\100\032\098\121\032\116\104\101\032\115\101\114\118\101\114\046" end
+        task.wait(0.5)
+        pcall(closeCustomizationMenu)
+        restoreView(trip)
+        return true
+    end
     local function returnVehicle()
         local trip = activeTrip
         activeTrip = nil
@@ -5323,14 +5390,7 @@ do
             end
         end)
         local menuOk, menuClosed = pcall(closeCustomizationMenu)
-        pcall(function()
-            local camera = workspace.CurrentCamera
-            if camera == trip.camera and camera.CameraType == Enum.CameraType.Scriptable
-                and trip.cameraType ~= Enum.CameraType.Scriptable then
-                camera.CameraType = trip.cameraType
-                if trip.cameraSubject and trip.cameraSubject.Parent then camera.CameraSubject = trip.cameraSubject end
-            end
-        end)
+        restoreView(trip)
         return ok, menuOk and menuClosed
     end
     ThisHubInstance.ReturnTrailerVehicle = returnVehicle
@@ -5338,6 +5398,7 @@ do
         if HubDestroyed or applying then return end
         applying = true
         local applied, confirmed, submitted = false, false, false
+        local operationTrip
         local ok, problem = pcall(function()
             local character = LocalPlayer.Character
             local humanoid = character and character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
@@ -5371,11 +5432,37 @@ do
             if touch and touch:IsA("\066\097\115\101\080\097\114\116") and (touch.Position - spot).Magnitude > 100 then
                 error("\084\104\101\032\115\104\111\112\032\104\097\115\032\109\111\118\101\100\032\097\119\097\121\032\102\114\111\109\032\116\104\101\032\115\097\118\101\100\032\099\111\111\114\100\105\110\097\116\101\115\046\032\084\114\097\105\108\101\114\032\116\114\105\112\032\099\097\110\099\101\108\108\101\100\046", 0)
             end
+            local events = ReplicatedStorage:FindFirstChild("\069\118\101\110\116\115")
+            local vehicles = events and events:FindFirstChild("\086\101\104\105\099\108\101\115")
+            local spawnRemote = vehicles and vehicles:FindFirstChild("\082\101\113\117\101\115\116\083\112\097\119\110")
+            local spawnResult = vehicles and vehicles:FindFirstChild("\083\112\097\119\110\082\101\115\117\108\116")
+            local vehicleGuid = LocalPlayer:GetAttribute("\069\113\117\105\112\112\101\100\086\101\104\105\099\108\101")
+            if type(vehicleGuid) ~= "\115\116\114\105\110\103" or vehicleGuid == "" then
+                vehicleGuid = vehicle:GetAttribute("\086\101\104\105\099\108\101\071\085\073\068") or vehicle:GetAttribute("\071\085\073\068")
+            end
+            if type(vehicleGuid) ~= "\115\116\114\105\110\103" or vehicleGuid == ""
+                or not spawnRemote or not spawnRemote:IsA("\082\101\109\111\116\101\069\118\101\110\116")
+                or not spawnResult or not spawnResult:IsA("\082\101\109\111\116\101\069\118\101\110\116") then
+                error("\067\111\117\108\100\032\110\111\116\032\112\114\101\112\097\114\101\032\097\032\114\101\115\112\097\119\110\032\102\111\114\032\116\104\101\032\115\101\108\101\099\116\101\100\032\118\101\104\105\099\108\101\046", 0)
+            end
             local camera = workspace.CurrentCamera
             local trip = {vehicle = vehicle, origin = vehicle:GetPivot(), moved = false,
                 opened = false, openSerial = 0, camera = camera,
                 cameraType = camera and camera.CameraType,
-                cameraSubject = camera and camera.CameraSubject}
+                cameraSubject = camera and camera.CameraSubject,
+                fieldOfView = camera and camera.FieldOfView,
+                mouseBehavior = UserInputService.MouseBehavior,
+                mouseIcon = UserInputService.MouseIconEnabled,
+                spawnRemote = spawnRemote, spawnResult = spawnResult, vehicleGuid = vehicleGuid}
+            operationTrip = trip
+            pcall(function()
+                local scripts = LocalPlayer:FindFirstChild("\080\108\097\121\101\114\083\099\114\105\112\116\115")
+                local module = scripts and scripts:FindFirstChild("\080\108\097\121\101\114\077\111\100\117\108\101")
+                if module then
+                    trip.controls = require(module):GetControls()
+                    trip.controlsWereEnabled = trip.controls.controlsEnabled
+                end
+            end)
             activeTrip = trip
             trip.connection = open.OnClientEvent:Connect(function(openVehicle, _, _, _, _, trailerGuid)
                 if activeTrip ~= trip or openVehicle ~= vehicle then return end
@@ -5480,6 +5567,16 @@ do
             task.wait(0.6)
             local closeOk, closed = pcall(closeCustomizationMenu)
             menuClosed = menuClosed or (closeOk and closed)
+            restoreView(operationTrip)
+        end
+        local resetOk, resetMessage = true, nil
+        if ok and confirmed and returned and operationTrip and not HubDestroyed then
+            local callOk, success, reason = pcall(respawnCustomizedVehicle, operationTrip)
+            resetOk = callOk and success
+            resetMessage = callOk and reason or tostring(success)
+            if operationTrip.spawnConnection then operationTrip.spawnConnection:Disconnect() end
+            pcall(closeCustomizationMenu)
+            restoreView(operationTrip)
         end
         applying = false
         if HubDestroyed then return end
@@ -5487,10 +5584,12 @@ do
             Notify("\084\114\097\105\108\101\114\115", "\067\111\117\108\100\032\110\111\116\032\114\101\115\116\111\114\101\032\116\104\101\032\118\101\104\105\099\108\101\039\115\032\112\111\115\105\116\105\111\110\059\032\105\116\032\109\097\121\032\104\097\118\101\032\100\101\115\112\097\119\110\101\100\046", 5)
         elseif not ok then
             Notify("\084\114\097\105\108\101\114\115", tostring(problem), 5)
+        elseif not resetOk then
+            Notify("\084\114\097\105\108\101\114\115", "\084\114\097\105\108\101\114\032\115\097\118\101\100\032\097\110\100\032\118\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\044\032\098\117\116\032\114\101\115\112\097\119\110\032\102\097\105\108\101\100\058\032" .. tostring(resetMessage), 5)
         elseif applied and submitted then
             local action = guid == "" and "\085\110\101\113\117\105\112" or ("\069\113\117\105\112\032" .. tostring(trailers[guid] or "\116\114\097\105\108\101\114"))
             Notify("\084\114\097\105\108\101\114\115", action .. (confirmed and "\032\099\111\110\102\105\114\109\101\100\046" or "\032\099\111\110\102\105\114\109\097\116\105\111\110\032\115\117\098\109\105\116\116\101\100\046")
-                .. (menuClosed and "\032\077\101\110\117\032\099\108\111\115\101\100\059\032\118\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046" or "\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046")
+                .. (menuClosed and "\032\077\101\110\117\032\099\108\111\115\101\100\059\032\118\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\032\097\110\100\032\114\101\115\112\097\119\110\101\100\046" or "\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046")
                 .. (menuClosed and "" or "\032\067\111\117\108\100\032\110\111\116\032\108\111\099\097\116\101\032\116\104\101\032\099\117\115\116\111\109\105\122\097\116\105\111\110\032\109\101\110\117\032\116\111\032\099\108\111\115\101\032\105\116\046"), 4)
         end
     end
@@ -12501,6 +12600,7 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
 
 
 
