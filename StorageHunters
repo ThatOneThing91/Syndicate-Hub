@@ -314,6 +314,7 @@ HubEnvironment[HubInstanceKey] = ThisHubInstance
 
 local State = {
     AutoDailyRewards = false,
+    AutoClaimTickets = false,
     AutoOpenSafes = false,
     AutoBasketball = false,
     AutoFishing = false,
@@ -350,6 +351,7 @@ local State = {
 }
 
 local RunIds = {
+    Tickets = 0,
     Basketball = 0,
     Fishing = 0,
     TrickOrTreat = 0,
@@ -5065,7 +5067,7 @@ CreateToggle(ShopPage, "\065\117\116\111\032\079\112\101\110\032\083\097\102\101
     end)
 end)
 
-CreateToggle(ShopPage, "\065\117\116\111\032\067\111\108\108\101\099\116\032\068\097\105\108\121\032\082\101\119\097\114\100\115", "\065\117\116\111\068\097\105\108\121\082\101\119\097\114\100\115", function(enabled)
+local DailyRewardsToggle = CreateToggle(MainPage, "\065\117\116\111\032\067\111\108\108\101\099\116\032\068\097\105\108\121\032\082\101\119\097\114\100\115", "\065\117\116\111\068\097\105\108\121\082\101\119\097\114\100\115", function(enabled)
     State.AutoDailyRewards = enabled
 
     if not enabled then
@@ -5087,6 +5089,155 @@ CreateToggle(ShopPage, "\065\117\116\111\032\067\111\108\108\101\099\116\032\068
         end
     end)
 end)
+
+-- Auto train tickets: use returned server cooldowns, never rapid-fire claims.
+DailyRewardsToggle.LayoutOrder = -90
+local TicketUserId = tostring(LocalPlayer.UserId)
+local TicketFile = "SyndicateHub_TrainTickets_" .. TicketUserId .. ".json"
+local TicketEnv = getgenv and getgenv() or _G
+local TicketHttp = game:GetService("HttpService")
+local TICKET_DAY = 86400
+local TICKET_FALLBACK = 7200
+local TICKET_ERROR_WAIT = 1800
+local TicketCacheKey = "__SyndicateHubTrainTicketNext"
+
+local function ticketCache()
+    if type(TicketEnv[TicketCacheKey]) ~= "table" then
+        TicketEnv[TicketCacheKey] = {}
+    end
+    return TicketEnv[TicketCacheKey]
+end
+
+local function loadTicketNext()
+    local record = ticketCache()[TicketUserId]
+    if type(record) ~= "table" and type(readfile) == "function" then
+        local ok, data = pcall(function()
+            return TicketHttp:JSONDecode(readfile(TicketFile))
+        end)
+        if ok and type(data) == "table" and tostring(data.userId) == TicketUserId then
+            record = data
+            ticketCache()[TicketUserId] = record
+        end
+    end
+    local untilTime = type(record) == "table" and tonumber(record.nextAttempt) or nil
+    local now = os.time()
+    if untilTime and untilTime > now and untilTime <= now + TICKET_DAY * 3 then
+        return untilTime
+    end
+    return 0
+end
+
+local function saveTicketNext(at, reason)
+    local record = {userId = TicketUserId, nextAttempt = at, reason = reason}
+    ticketCache()[TicketUserId] = record
+    if type(writefile) == "function" then
+        pcall(function()
+            writefile(TicketFile, TicketHttp:JSONEncode(record))
+        end)
+    end
+end
+
+local function ticketServerNext(value, now, depth)
+    if type(value) ~= "table" or depth > 2 then return nil end
+    for _, key in ipairs({
+        "remainingSeconds", "RemainingSeconds", "cooldownRemaining",
+        "CooldownRemaining", "cooldownSeconds", "CooldownSeconds",
+        "timeLeft", "TimeLeft", "remaining", "Remaining"
+    }) do
+        local seconds = tonumber(value[key])
+        if seconds and seconds >= 0 and seconds <= TICKET_DAY * 3 then
+            return now + math.max(15, math.ceil(seconds) + 10)
+        end
+    end
+    for _, key in ipairs({
+        "nextClaimTime", "NextClaimTime", "nextClaimAt", "NextClaimAt",
+        "nextAvailableAt", "NextAvailableAt"
+    }) do
+        local stamp = tonumber(value[key])
+        if stamp then
+            if stamp > 1000000000000 then stamp = stamp / 1000 end
+            if stamp >= now and stamp <= now + TICKET_DAY * 3 then
+                return math.ceil(stamp + 10)
+            end
+        end
+    end
+    local nested = value.data or value.Data
+    if type(nested) == "table" then
+        return ticketServerNext(nested, now, depth + 1)
+    end
+    return nil
+end
+
+local function ticketClaimConfirmed(value)
+    if value == true then return true end
+    if type(value) ~= "table" then return false end
+    return value.success == true or value.Success == true
+        or value.claimed == true or value.Claimed == true
+end
+
+local function ticketWorkerActive(runId)
+    return not HubDestroyed and State.AutoClaimTickets and RunIds.Tickets == runId
+end
+
+local function startAutoClaimTickets(runId)
+    task.spawn(function()
+        local nextAttempt = loadTicketNext()
+        while ticketWorkerActive(runId) do
+            local now = os.time()
+            if now < nextAttempt then
+                task.wait(math.min(30, math.max(1, nextAttempt - now)))
+            else
+                local events = ReplicatedStorage:FindFirstChild("Events")
+                local conductor = events and events:FindFirstChild("TrainConductor")
+                local remote = conductor and conductor:FindFirstChild("ClaimDaily")
+                if not remote then
+                    -- Wait for replication without making a server call.
+                    task.wait(15)
+                else
+                    local ok, result, extra = pcall(function()
+                        if remote:IsA("RemoteFunction") then
+                            return remote:InvokeServer()
+                        elseif remote:IsA("RemoteEvent") then
+                            remote:FireServer()
+                            return nil
+                        end
+                        error("Unsupported ClaimDaily remote type")
+                    end)
+                    if not ticketWorkerActive(runId) then return end
+                    now = os.time()
+                    if not ok then
+                        nextAttempt = now + TICKET_ERROR_WAIT
+                        saveTicketNext(nextAttempt, "error")
+                        warn("[Syndicate Hub] Auto Claim Tickets:", result)
+                    else
+                        local claimed = ticketClaimConfirmed(result) or ticketClaimConfirmed(extra)
+                        local available = ticketServerNext(result, now, 0)
+                            or ticketServerNext(extra, now, 0)
+                        if claimed then
+                            nextAttempt = available or (now + TICKET_DAY + 15)
+                            saveTicketNext(nextAttempt, "claimed")
+                            Notify("Train Tickets", "Daily tickets claimed; next check scheduled.", 4)
+                        elseif available then
+                            nextAttempt = available
+                            saveTicketNext(nextAttempt, "server cooldown")
+                        else
+                            -- The remote gave no usable confirmation; recheck at most every 2 hours.
+                            nextAttempt = now + TICKET_FALLBACK
+                            saveTicketNext(nextAttempt, "unconfirmed")
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local TicketsToggle = CreateToggle(MainPage, "Auto Claim Tickets", "AutoClaimTickets", function(enabled)
+    RunIds.Tickets += 1
+    if enabled then startAutoClaimTickets(RunIds.Tickets) end
+end)
+TicketsToggle.LayoutOrder = -89
+
 
 
                                                                 
@@ -10580,6 +10731,7 @@ local function DestroyHub()
     State.AutoWash = false
     State.AutoRepair = false
     State.AutoMuseumGift = false
+    State.AutoClaimTickets = false
 
     State.AutoBid = false
     State.InstantUnload = false
@@ -10597,6 +10749,7 @@ local function DestroyHub()
     RunIds.Wash += 1
     RunIds.Repair += 1
     RunIds.MuseumGift += 1
+    RunIds.Tickets += 1
     RunIds.Farming += 1
     RunIds.Unload += 1
     RunIds.LostFound += 1
