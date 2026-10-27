@@ -5382,31 +5382,60 @@ do
                 trip.opened = true
                 trip.openSerial = trip.openSerial + 1
                 -- Preserve nil as unknown; only an explicit empty string confirms no trailer.
-                trip.reportedGuid = type(trailerGuid) == "\115\116\114\105\110\103" and trailerGuid or nil
+                -- The optional trailer field is absent when no trailer is equipped.
+                trip.reportedGuid = trailerGuid == nil and "" or trailerGuid
                 -- OpenCustomization describes the preview; the confirmation remote commits it.
             end)
             TrackConnection(trip.connection)
             local shopPivot = CFrame.new(spot - seat.Position) * trip.origin
-            local alreadyHere = (seat.Position - spot).Magnitude <= 12
-            if not alreadyHere then
+            if not touch or not touch:IsA("\066\097\115\101\080\097\114\116") then
+                error("\084\104\101\032\115\104\111\112\032\116\111\117\099\104\032\112\097\114\116\032\105\115\032\117\110\097\118\097\105\108\097\098\108\101\046\032\078\111\032\099\117\115\116\111\109\105\122\097\116\105\111\110\032\119\097\115\032\115\117\098\109\105\116\116\101\100\046", 0)
+            end
+            local function waitAtShop(seconds)
+                local untilAt = os.clock() + seconds
+                repeat
+                    task.wait(0.05)
+                    if HubDestroyed or activeTrip ~= trip then error("\084\114\097\105\108\101\114\032\111\112\101\114\097\116\105\111\110\032\099\097\110\099\101\108\108\101\100\046", 0) end
+                    if not vehicle.Parent or humanoid.SeatPart ~= seat then
+                        error("\086\101\104\105\099\108\101\032\111\114\032\115\101\097\116\032\099\104\097\110\103\101\100\032\100\117\114\105\110\103\032\099\117\115\116\111\109\105\122\097\116\105\111\110\046", 0)
+                    end
+                until os.clock() >= untilAt
+            end
+            local function enterFreshSession()
+                -- Leaving fully clears the shop's touch/debounce state, including on repeat use.
+                local clearance = touch.Size.Magnitude + vehicle:GetExtentsSize().Magnitude + 12
                 trip.moved = true
+                vehicle:PivotTo(CFrame.new(touch.CFrame.RightVector * clearance) * shopPivot)
+                stopMotion(vehicle)
+                waitAtShop(0.85)
+                local serial = trip.openSerial
+                trip.reportedGuid = nil
                 vehicle:PivotTo(shopPivot)
                 stopMotion(vehicle)
-            end
-            local deadline = os.clock() + (alreadyHere and 0.5 or 4)
-            repeat
-                task.wait(0.05)
-                if HubDestroyed or activeTrip ~= trip then return end
-                if not vehicle.Parent or humanoid.SeatPart ~= seat then
-                    error("\086\101\104\105\099\108\101\032\111\114\032\115\101\097\116\032\099\104\097\110\103\101\100\032\098\101\102\111\114\101\032\099\117\115\116\111\109\105\122\097\116\105\111\110\032\111\112\101\110\101\100\046", 0)
+                local deadline = os.clock() + 5
+                repeat
+                    waitAtShop(0.05)
+                until trip.openSerial > serial or os.clock() >= deadline
+                if trip.openSerial <= serial then
+                    error("\084\104\101\032\115\104\111\112\032\100\105\100\032\110\111\116\032\111\112\101\110\032\097\032\102\114\101\115\104\032\115\101\115\115\105\111\110\046\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046", 0)
                 end
-            until trip.opened or os.clock() >= deadline
-            if not trip.opened and not alreadyHere then
-                error("\084\104\101\032\115\104\111\112\032\100\105\100\032\110\111\116\032\111\112\101\110\032\099\117\115\116\111\109\105\122\097\116\105\111\110\046\032\082\101\116\117\114\110\101\100\032\119\105\116\104\111\117\116\032\097\112\112\108\121\105\110\103\032\097\032\116\114\097\105\108\101\114\046", 0)
+                waitAtShop(0.65)
             end
-            if HubDestroyed or activeTrip ~= trip then return end
+            -- Re-enable customization roots hidden by an earlier operation. The game
+            -- still controls which menu panels it opens for the new session.
+            local playerGui = LocalPlayer:FindFirstChildOfClass("\080\108\097\121\101\114\071\117\105")
+            if playerGui then
+                for _, ui in ipairs(playerGui:GetDescendants()) do
+                    local name = ui.Name:lower()
+                    if ui:IsA("\083\099\114\101\101\110\071\117\105") and (name:find("\099\117\115\116\111\109\105\122\097\116\105\111\110", 1, true)
+                        or name:find("\099\117\115\116\111\109\105\115\097\116\105\111\110", 1, true)) then ui.Enabled = true end
+                end
+            end
+            enterFreshSession()
             applied = true
             apply:FireServer(guid)
+            -- Allow the server to rebuild/remove the preview before Confirm reads it.
+            waitAtShop(1)
             -- ApplyTrailer selects the preview. This is the game's Confirm action.
             -- Submit once; retrying a timed-out purchase could charge twice.
             local completed, invokeOk, result = false, false, nil
@@ -5432,15 +5461,26 @@ do
                 error(tostring(message or "\084\104\101\032\115\104\111\112\032\114\101\106\101\099\116\101\100\032\116\104\101\032\099\117\115\116\111\109\105\122\097\116\105\111\110\046"), 0)
             end
             submitted = true
-            confirmed = result == true or (type(result) == "\116\097\098\108\101"
-                and (result.success == true or result.Success == true))
-            -- Do not re-enter the shop after confirming: that opens its menu again.
-            local settleUntil = os.clock() + 0.35
-            repeat
-                task.wait(0.05)
-            until HubDestroyed or activeTrip ~= trip or os.clock() >= settleUntil
+            waitAtShop(1)
+            -- Verify persisted state by reading a NEW shop session, rather than
+            -- treating a preview or a successful InvokeServer call as persistence.
+            enterFreshSession()
+            confirmed = trip.reportedGuid == guid
+            if not confirmed then
+                local current = trip.reportedGuid
+                local actual = current == "" and "\110\111\032\116\114\097\105\108\101\114" or (trailers[current] or tostring(current))
+                local requested = guid == "" and "\110\111\032\116\114\097\105\108\101\114" or (trailers[guid] or guid)
+                error("\084\114\097\105\108\101\114\032\119\097\115\032\110\111\116\032\115\097\118\101\100\058\032\114\101\113\117\101\115\116\101\100\032" .. requested .. "\059\032\115\104\111\112\032\114\101\112\111\114\116\115\032" .. actual .. "\046", 0)
+            end
         end)
         local returned, menuClosed = returnVehicle()
+        -- The return can itself trigger a late menu event when the saved position
+        -- is near the shop. Close once more after that event has had time to arrive.
+        if not HubDestroyed then
+            task.wait(0.6)
+            local closeOk, closed = pcall(closeCustomizationMenu)
+            menuClosed = menuClosed or (closeOk and closed)
+        end
         applying = false
         if HubDestroyed then return end
         if not returned then
@@ -5450,7 +5490,7 @@ do
         elseif applied and submitted then
             local action = guid == "" and "\085\110\101\113\117\105\112" or ("\069\113\117\105\112\032" .. tostring(trailers[guid] or "\116\114\097\105\108\101\114"))
             Notify("\084\114\097\105\108\101\114\115", action .. (confirmed and "\032\099\111\110\102\105\114\109\101\100\046" or "\032\099\111\110\102\105\114\109\097\116\105\111\110\032\115\117\098\109\105\116\116\101\100\046")
-                .. "\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046"
+                .. (menuClosed and "\032\077\101\110\117\032\099\108\111\115\101\100\059\032\118\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046" or "\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046")
                 .. (menuClosed and "" or "\032\067\111\117\108\100\032\110\111\116\032\108\111\099\097\116\101\032\116\104\101\032\099\117\115\116\111\109\105\122\097\116\105\111\110\032\109\101\110\117\032\116\111\032\099\108\111\115\101\032\105\116\046"), 4)
         end
     end
@@ -12461,6 +12501,7 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
 
 
 
