@@ -1764,6 +1764,11 @@ ThisHubInstance.StopBasketballWorkers = function()
     local thread = ThisHubInstance.BasketballThread
     ThisHubInstance.BasketballThread = nil
     if thread and thread ~= coroutine.running() then pcall(task.cancel, thread) end
+    local humanoid = ThisHubInstance.BasketballHumanoid
+    local autoRotate = ThisHubInstance.BasketballAutoRotate
+    ThisHubInstance.BasketballHumanoid = nil
+    ThisHubInstance.BasketballAutoRotate = nil
+    if humanoid and autoRotate ~= nil then pcall(function() humanoid.AutoRotate = autoRotate end) end
     local ball = ThisHubInstance.BasketballTool
     ThisHubInstance.BasketballTool = nil
     if ball then pcall(function() ball:Deactivate() end) end
@@ -1775,8 +1780,10 @@ local function StartBasketball(runId)
         local shootingSpot = Vector3.new(-357.312317, 1722.8623, -599.074524)
         local positionConnection = nil
         local activeCharacter = nil
+        local lastBall = nil
         local RunService = game:GetService("\082\117\110\083\101\114\118\105\099\101")
         local lastEquip, warnedMissing, warnedRing = -math.huge, false, false
+        local equippedAt = -math.huge
         local definitions
         local modules = ReplicatedStorage:FindFirstChild("\077\111\100\117\108\101\115")
         local itemsModule = modules and modules:FindFirstChild("\073\116\101\109\115")
@@ -1803,6 +1810,7 @@ local function StartBasketball(runId)
             local stored = findBall(LocalPlayer:FindFirstChildOfClass("\066\097\099\107\112\097\099\107"))
             if stored and humanoid then
                 pcall(function() humanoid:EquipTool(stored) end)
+                equippedAt = os.clock()
                 ball = findBall(character)
                 if ball then warnedMissing = false; return ball end
             end
@@ -1830,6 +1838,7 @@ local function StartBasketball(runId)
                             if matches and type(guid) == "\115\116\114\105\110\103" and guid ~= "" then
                                 if not isActive() then return nil end
                                 local sent = pcall(function() equip:FireServer(guid) end)
+                                equippedAt = os.clock()
                                 if sent then
                                     local deadline = os.clock() + 2
                                     repeat
@@ -1842,6 +1851,7 @@ local function StartBasketball(runId)
                                             and currentCharacter:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
                                         if stored and currentHumanoid then
                                             pcall(function() currentHumanoid:EquipTool(stored) end)
+                                            equippedAt = os.clock()
                                         end
                                         task.wait(0.1)
                                     until os.clock() >= deadline
@@ -1862,13 +1872,30 @@ local function StartBasketball(runId)
             local assets = workspace:FindFirstChild("\066\066\079\087\032\066\117\105\108\100\101\114\032\065\115\115\101\116\115")
             local buildings = assets and assets:FindFirstChild("\079\116\104\101\114\032\066\117\105\108\100\105\110\103\115\032\097\110\100\032\032\068\101\099\111\114\097\116\105\111\110")
             local court = buildings and buildings:FindFirstChild("\066\097\115\107\101\116\032\066\097\108\108\032")
-            local target = court and court:GetChildren()[4]
-            local ring = target and target:FindFirstChild("\082\105\110\103", true)
-            if ring and ring:IsA("\066\097\115\101\080\097\114\116") then return ring end
-            ring = court and court:FindFirstChild("\082\105\110\103", true)
+            local target = court and court:GetChildren()[2]
+            local ring = target and target:FindFirstChild("\082\105\110\103")
+            if not ring then
+                local hoop = target and target:FindFirstChild("\072\111\111\112")
+                ring = hoop and hoop:FindFirstChild("\082\105\110\103")
+            end
             if ring and ring:IsA("\066\097\115\101\080\097\114\116") then return ring end
         end
 
+        local function lockPosition()
+            local character = GetCharacter()
+            local root = GetRoot()
+            local ring = GetBasketballRing()
+            if character ~= activeCharacter or not root or not ring then return false end
+            local aim = Vector3.new(ring.Position.X, shootingSpot.Y, ring.Position.Z)
+            if (aim - shootingSpot).Magnitude > 0.01 then
+                root.CFrame = CFrame.lookAt(shootingSpot, aim)
+            else
+                root.CFrame = CFrame.new(shootingSpot)
+            end
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            return true
+        end
         local ok, problem = pcall(function()
             while isActive() do
                 local character = GetCharacter()
@@ -1880,35 +1907,46 @@ local function StartBasketball(runId)
                     ThisHubInstance.BasketballTool = ball
                     if activeCharacter ~= character then
                         if positionConnection then positionConnection:Disconnect() end
+                        local oldHumanoid = ThisHubInstance.BasketballHumanoid
+                        if oldHumanoid and ThisHubInstance.BasketballAutoRotate ~= nil then
+                            pcall(function() oldHumanoid.AutoRotate = ThisHubInstance.BasketballAutoRotate end)
+                        end
                         activeCharacter = character
+                        local humanoid = character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
+                        if humanoid then
+                            ThisHubInstance.BasketballHumanoid = humanoid
+                            ThisHubInstance.BasketballAutoRotate = humanoid.AutoRotate
+                            humanoid.AutoRotate = false
+                        end
                         positionConnection = RunService.Heartbeat:Connect(function()
                             if not isActive() then
                                 if positionConnection then positionConnection:Disconnect() end
                                 return
                             end
-                            local currentCharacter = GetCharacter()
-                            local currentRoot = GetRoot()
-                            local currentRing = GetBasketballRing()
-                            if currentCharacter ~= activeCharacter or not currentRoot or not currentRing then return end
-                            local aim = Vector3.new(currentRing.Position.X, shootingSpot.Y, currentRing.Position.Z)
-                            if (aim - shootingSpot).Magnitude > 0.01 then
-                                currentRoot.CFrame = CFrame.lookAt(shootingSpot, aim)
-                            else
-                                currentRoot.CFrame = CFrame.new(shootingSpot)
-                            end
-                            currentRoot.AssemblyLinearVelocity = Vector3.zero
-                            currentRoot.AssemblyAngularVelocity = Vector3.zero
+                            lockPosition()
                         end)
                         ThisHubInstance.BasketballPositionConnection = positionConnection
                         TrackConnection(positionConnection)
                         task.wait(0.5)
                     end
+                    if lastBall ~= ball then
+                        lastBall = ball
+                        lockPosition()
+                        -- Let a newly equipped tool and the position replicate before charging.
+                        task.wait(0.4)
+                    end
+                    local settleFor = 0.4 - (os.clock() - equippedAt)
+                    if settleFor > 0 then task.wait(settleFor) end
                     task.wait(0.1)
                     if not isActive() then break end
-                    pcall(function() ball:Activate() end)
-                    task.wait(1)
-                    pcall(function() ball:Deactivate() end)
-                    task.wait(0.5)
+                    local ready = ball.Parent == GetCharacter() and ball.Enabled ~= false
+                    if ready and lockPosition() then
+                        pcall(function() ball:Activate() end)
+                        task.wait(1)
+                        if isActive() and ball.Parent == GetCharacter() then lockPosition() end
+                        pcall(function() ball:Deactivate() end)
+                        task.wait(0.5)
+                    end
                 else
                     if not ring and not warnedRing then
                         warnedRing = true
@@ -12456,6 +12494,7 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
 
 
 
