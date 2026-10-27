@@ -5205,6 +5205,100 @@ CreateActionButton(MainPage, "\070\097\118\111\114\105\116\101\032\084\111\103\1
     RunAutoUnfavoriteOnce()
 end)
 
+-- Trailer controls: owned GUIDs come from this player's server response.
+do
+    local trailers, selectedGuid = {}, nil
+    local refreshing, applying = false, false
+    local dropdown
+    local function customization()
+        local events = ReplicatedStorage:FindFirstChild("\069\118\101\110\116\115")
+        return events and events:FindFirstChild("\086\101\104\105\099\108\101\067\117\115\116\111\109\105\122\097\116\105\111\110")
+    end
+    local function refreshTrailers()
+        if HubDestroyed or refreshing then return false end
+        refreshing = true
+        local folder = customization()
+        local remote = folder and folder:FindFirstChild("\071\101\116\079\119\110\101\100\084\114\097\105\108\101\114\115")
+        local ok, result = pcall(function()
+            if not remote or not remote:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") then
+                error("\084\114\097\105\108\101\114\032\108\105\115\116\032\117\110\097\118\097\105\108\097\098\108\101")
+            end
+            return remote:InvokeServer()
+        end)
+        refreshing = false
+        if HubDestroyed then return false end
+        if not ok or type(result) ~= "\116\097\098\108\101" then
+            Notify("\084\114\097\105\108\101\114\115", "\067\111\117\108\100\032\110\111\116\032\108\111\097\100\032\111\119\110\101\100\032\116\114\097\105\108\101\114\115\046\032\080\114\101\115\115\032\082\101\102\114\101\115\104\032\084\114\097\105\108\101\114\115\032\116\111\032\114\101\116\114\121\046", 4)
+            return false
+        end
+        local owned, options = {}, {}
+        for guid, record in pairs(result) do
+            if type(guid) == "\115\116\114\105\110\103" and guid ~= "" and type(record) == "\116\097\098\108\101"
+                and type(record.TrailerId) == "\115\116\114\105\110\103" then
+                owned[guid] = record.TrailerId
+                table.insert(options, guid)
+            end
+        end
+        table.sort(options, function(a, b)
+            if owned[a] == owned[b] then return a < b end
+            return owned[a] < owned[b]
+        end)
+        trailers = owned
+        if not selectedGuid or not trailers[selectedGuid] then selectedGuid = options[1] end
+        if #options == 0 then options = {"\078\111\032\116\114\097\105\108\101\114\115\032\111\119\110\101\100"} end
+        dropdown:SetOptions(options, selectedGuid or "\078\111\032\116\114\097\105\108\101\114\115\032\111\119\110\101\100")
+        return true
+    end
+    dropdown = CreateDropdown(MainPage, "\086\069\072\073\067\076\069\032\084\082\065\073\076\069\082", "\076\111\097\100\105\110\103\032\116\114\097\105\108\101\114\115\046\046\046",
+        {"\076\111\097\100\105\110\103\032\116\114\097\105\108\101\114\115\046\046\046"}, function(value)
+            selectedGuid = trailers[value] and value or nil
+        end)
+    dropdown:SetLabelFormatter(function(value) return trailers[value] or value end)
+    CreateActionButton(MainPage, "\069\113\117\105\112\032\083\101\108\101\099\116\101\100\032\084\114\097\105\108\101\114", function()
+        if HubDestroyed or applying then return end
+        if refreshing then
+            Notify("\084\114\097\105\108\101\114\115", "\084\104\101\032\116\114\097\105\108\101\114\032\108\105\115\116\032\105\115\032\108\111\097\100\105\110\103\046\032\084\114\121\032\097\103\097\105\110\032\105\110\032\097\032\109\111\109\101\110\116\046", 3)
+            return
+        end
+        applying = true
+        local requestedGuid = selectedGuid
+        local loaded = refreshTrailers()
+        if HubDestroyed then applying = false; return end
+        if not loaded or not requestedGuid or not trailers[requestedGuid] then
+            applying = false
+            if loaded then Notify("\084\114\097\105\108\101\114\115", "\083\101\108\101\099\116\032\097\110\032\111\119\110\101\100\032\116\114\097\105\108\101\114\044\032\116\104\101\110\032\112\114\101\115\115\032\069\113\117\105\112\046", 3) end
+            return
+        end
+        local folder = customization()
+        local remote = folder and folder:FindFirstChild("\065\112\112\108\121\084\114\097\105\108\101\114")
+        local ok = pcall(function()
+            if not remote or not remote:IsA("\082\101\109\111\116\101\069\118\101\110\116") then error("\084\114\097\105\108\101\114\032\099\111\110\116\114\111\108\115\032\117\110\097\118\097\105\108\097\098\108\101") end
+            remote:FireServer(requestedGuid)
+        end)
+        applying = false
+        if not HubDestroyed then
+            Notify("\084\114\097\105\108\101\114\115", ok and ("\069\113\117\105\112\032\114\101\113\117\101\115\116\032\115\101\110\116\058\032" .. trailers[requestedGuid])
+                or "\067\111\117\108\100\032\110\111\116\032\115\101\110\100\032\116\104\101\032\101\113\117\105\112\032\114\101\113\117\101\115\116\046\032\084\114\121\032\097\103\097\105\110\046", 3)
+        end
+    end)
+    CreateActionButton(MainPage, "\085\110\101\113\117\105\112\032\084\114\097\105\108\101\114", function()
+        if HubDestroyed or applying then return end
+        local folder = customization()
+        local remote = folder and folder:FindFirstChild("\065\112\112\108\121\084\114\097\105\108\101\114")
+        local ok = pcall(function()
+            if not remote or not remote:IsA("\082\101\109\111\116\101\069\118\101\110\116") then error("\084\114\097\105\108\101\114\032\099\111\110\116\114\111\108\115\032\117\110\097\118\097\105\108\097\098\108\101") end
+            remote:FireServer("")
+        end)
+        if not HubDestroyed then
+            Notify("\084\114\097\105\108\101\114\115", ok and "\085\110\101\113\117\105\112\032\114\101\113\117\101\115\116\032\115\101\110\116\046"
+                or "\067\111\117\108\100\032\110\111\116\032\115\101\110\100\032\116\104\101\032\117\110\101\113\117\105\112\032\114\101\113\117\101\115\116\046\032\084\114\121\032\097\103\097\105\110\046", 3)
+        end
+    end)
+    CreateActionButton(MainPage, "\082\101\102\114\101\115\104\032\084\114\097\105\108\101\114\115", refreshTrailers)
+    task.spawn(refreshTrailers)
+end
+
+
                                                                 
                                         
                                                                 
@@ -12193,5 +12287,6 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
 
 
