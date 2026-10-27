@@ -5264,18 +5264,73 @@ do
             end
         end
     end
+    local function closeCustomizationMenu()
+        local playerGui = LocalPlayer:FindFirstChildOfClass("\080\108\097\121\101\114\071\117\105")
+        if not playerGui then return false end
+        local menus = {}
+        for _, object in ipairs(playerGui:GetDescendants()) do
+            local name = object.Name:lower():gsub("\091\094\037\097\093", "")
+            if (object:IsA("\083\099\114\101\101\110\071\117\105") or object:IsA("\070\114\097\109\101") or object:IsA("\067\097\110\118\097\115\071\114\111\117\112"))
+                and (name:find("\099\117\115\116\111\109\105\122\097\116\105\111\110", 1, true) or name:find("\099\117\115\116\111\109\105\115\097\116\105\111\110", 1, true)) then
+                menus[#menus + 1] = object
+            end
+        end
+        for _, menu in ipairs(menus) do
+            -- Let the game's close handler release its camera/control state first.
+            for _, button in ipairs(menu:GetDescendants()) do
+                if button:IsA("\071\117\105\066\117\116\116\111\110") then
+                    local name = button.Name:lower():gsub("\091\094\037\097\093", "")
+                    local text = button:IsA("\084\101\120\116\066\117\116\116\111\110") and button.Text:lower():gsub("\037\115", "") or ""
+                    if name == "\099\108\111\115\101" or name == "\099\108\111\115\101\098\117\116\116\111\110" or name == "\101\120\105\116\098\117\116\116\111\110"
+                        or text == "\099\108\111\115\101" or text == "\101\120\105\116" or text == "\120" then
+                        if type(firesignal) == "\102\117\110\099\116\105\111\110" then
+                            local signal = button.MouseButton1Click
+                            if type(getconnections) == "\102\117\110\099\116\105\111\110" then
+                                local ok, listeners = pcall(getconnections, button.Activated)
+                                if ok and #listeners > 0 then signal = button.Activated end
+                            end
+                            pcall(function() firesignal(signal) end)
+                        end
+                        break
+                    end
+                end
+            end
+            pcall(function()
+                if menu:IsA("\083\099\114\101\101\110\071\117\105") then menu.Enabled = false else menu.Visible = false end
+            end)
+        end
+        local hidden = #menus > 0
+        for _, menu in ipairs(menus) do
+            local ok, visible = pcall(function()
+                if menu:IsA("\083\099\114\101\101\110\071\117\105") then return menu.Enabled end
+                return menu.Visible
+            end)
+            if not ok or visible then hidden = false end
+        end
+        return hidden
+    end
     local function returnVehicle()
         local trip = activeTrip
         activeTrip = nil
         if not trip then return true end
         if trip.connection then trip.connection:Disconnect() end
-        if not trip.moved then return true end
         local ok = pcall(function()
             if not trip.vehicle.Parent then error("\086\101\104\105\099\108\101\032\110\111\032\108\111\110\103\101\114\032\101\120\105\115\116\115") end
-            trip.vehicle:PivotTo(trip.origin)
-            stopMotion(trip.vehicle)
+            if trip.moved then
+                trip.vehicle:PivotTo(trip.origin)
+                stopMotion(trip.vehicle)
+            end
         end)
-        return ok
+        local menuOk, menuClosed = pcall(closeCustomizationMenu)
+        pcall(function()
+            local camera = workspace.CurrentCamera
+            if camera == trip.camera and camera.CameraType == Enum.CameraType.Scriptable
+                and trip.cameraType ~= Enum.CameraType.Scriptable then
+                camera.CameraType = trip.cameraType
+                if trip.cameraSubject and trip.cameraSubject.Parent then camera.CameraSubject = trip.cameraSubject end
+            end
+        end)
+        return ok, menuOk and menuClosed
     end
     ThisHubInstance.ReturnTrailerVehicle = returnVehicle
     local function applyAtShop(guid)
@@ -5313,18 +5368,26 @@ do
             if touch and touch:IsA("\066\097\115\101\080\097\114\116") and (touch.Position - spot).Magnitude > 100 then
                 error("\084\104\101\032\115\104\111\112\032\104\097\115\032\109\111\118\101\100\032\097\119\097\121\032\102\114\111\109\032\116\104\101\032\115\097\118\101\100\032\099\111\111\114\100\105\110\097\116\101\115\046\032\084\114\097\105\108\101\114\032\116\114\105\112\032\099\097\110\099\101\108\108\101\100\046", 0)
             end
-            local trip = {vehicle = vehicle, origin = vehicle:GetPivot(), moved = false, opened = false}
+            local camera = workspace.CurrentCamera
+            local trip = {vehicle = vehicle, origin = vehicle:GetPivot(), moved = false,
+                opened = false, openSerial = 0, camera = camera,
+                cameraType = camera and camera.CameraType,
+                cameraSubject = camera and camera.CameraSubject}
             activeTrip = trip
             trip.connection = open.OnClientEvent:Connect(function(openVehicle, _, _, _, _, trailerGuid)
                 if activeTrip ~= trip or openVehicle ~= vehicle then return end
                 trip.opened = true
-                if applied and tostring(trailerGuid or "") == guid then confirmed = true end
+                trip.openSerial = trip.openSerial + 1
+                -- Preserve nil as unknown; only an explicit empty string confirms no trailer.
+                trip.reportedGuid = type(trailerGuid) == "\115\116\114\105\110\103" and trailerGuid or nil
+                if applied and trip.reportedGuid == guid then confirmed = true end
             end)
             TrackConnection(trip.connection)
+            local shopPivot = CFrame.new(spot - seat.Position) * trip.origin
             local alreadyHere = (seat.Position - spot).Magnitude <= 12
             if not alreadyHere then
                 trip.moved = true
-                vehicle:PivotTo(CFrame.new(spot - seat.Position) * trip.origin)
+                vehicle:PivotTo(shopPivot)
                 stopMotion(vehicle)
             end
             local deadline = os.clock() + (alreadyHere and 0.5 or 4)
@@ -5339,24 +5402,70 @@ do
                 error("\084\104\101\032\115\104\111\112\032\100\105\100\032\110\111\116\032\111\112\101\110\032\099\117\115\116\111\109\105\122\097\116\105\111\110\046\032\082\101\116\117\114\110\101\100\032\119\105\116\104\111\117\116\032\097\112\112\108\121\105\110\103\032\097\032\116\114\097\105\108\101\114\046", 0)
             end
             if HubDestroyed or activeTrip ~= trip then return end
-            apply:FireServer(guid)
+            if trip.opened and trip.reportedGuid == guid then
+                confirmed = true
+                applied = true
+                return
+            end
             applied = true
-            local settleUntil = os.clock() + 1.25
+            apply:FireServer(guid)
+            -- A successful FireServer only means sent. Read the equipped GUID back
+            -- from a fresh server OpenCustomization response before reporting success.
+            local settleUntil = os.clock() + 0.6
             repeat
                 task.wait(0.05)
-            until confirmed or HubDestroyed or activeTrip ~= trip or os.clock() >= settleUntil
+                if HubDestroyed or activeTrip ~= trip then return end
+            until confirmed or os.clock() >= settleUntil
+            for attempt = 1, 2 do
+                if confirmed then break end
+                if not touch or not touch:IsA("\066\097\115\101\080\097\114\116") then
+                    error("\067\104\097\110\103\101\032\115\101\110\116\044\032\098\117\116\032\116\104\101\032\115\104\111\112\032\116\111\117\099\104\032\112\097\114\116\032\105\115\032\109\105\115\115\105\110\103\059\032\099\111\110\102\105\114\109\097\116\105\111\110\032\117\110\097\118\097\105\108\097\098\108\101\046", 0)
+                end
+                if not vehicle.Parent or humanoid.SeatPart ~= seat then
+                    error("\086\101\104\105\099\108\101\032\111\114\032\115\101\097\116\032\099\104\097\110\103\101\100\032\098\101\102\111\114\101\032\116\104\101\032\116\114\097\105\108\101\114\032\099\111\117\108\100\032\098\101\032\099\111\110\102\105\114\109\101\100\046", 0)
+                end
+                local serial = trip.openSerial
+                local clearance = touch.Size.Magnitude + vehicle:GetExtentsSize().Magnitude + 12
+                trip.moved = true
+                vehicle:PivotTo(CFrame.new(touch.CFrame.RightVector * clearance) * shopPivot)
+                stopMotion(vehicle)
+                local leaveUntil = os.clock() + 0.5
+                repeat
+                    task.wait(0.05)
+                    if HubDestroyed or activeTrip ~= trip then return end
+                until os.clock() >= leaveUntil
+                vehicle:PivotTo(shopPivot)
+                stopMotion(vehicle)
+                local confirmUntil = os.clock() + 3
+                repeat
+                    task.wait(0.05)
+                    if HubDestroyed or activeTrip ~= trip then return end
+                until confirmed or trip.openSerial > serial or os.clock() >= confirmUntil
+                if not confirmed and attempt == 1 and trip.openSerial > serial then
+                    -- One retry only when the server explicitly reports a different trailer.
+                    apply:FireServer(guid)
+                    local retryUntil = os.clock() + 0.6
+                    repeat
+                        task.wait(0.05)
+                        if HubDestroyed or activeTrip ~= trip then return end
+                    until confirmed or os.clock() >= retryUntil
+                end
+            end
+            if not confirmed then
+                error("\084\114\097\105\108\101\114\032\099\104\097\110\103\101\032\119\097\115\032\110\111\116\032\099\111\110\102\105\114\109\101\100\032\098\121\032\116\104\101\032\115\101\114\118\101\114\046\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\059\032\116\114\121\032\097\103\097\105\110\046", 0)
+            end
         end)
-        local returned = returnVehicle()
+        local returned, menuClosed = returnVehicle()
         applying = false
         if HubDestroyed then return end
         if not returned then
             Notify("\084\114\097\105\108\101\114\115", "\067\111\117\108\100\032\110\111\116\032\114\101\115\116\111\114\101\032\116\104\101\032\118\101\104\105\099\108\101\039\115\032\112\111\115\105\116\105\111\110\059\032\105\116\032\109\097\121\032\104\097\118\101\032\100\101\115\112\097\119\110\101\100\046", 5)
         elseif not ok then
             Notify("\084\114\097\105\108\101\114\115", tostring(problem), 5)
-        elseif applied then
+        elseif applied and confirmed then
             local action = guid == "" and "\085\110\101\113\117\105\112" or ("\069\113\117\105\112\032" .. tostring(trailers[guid] or "\116\114\097\105\108\101\114"))
-            Notify("\084\114\097\105\108\101\114\115", action .. (confirmed and "\032\099\111\110\102\105\114\109\101\100\046" or "\032\114\101\113\117\101\115\116\032\115\101\110\116\032\097\116\032\116\104\101\032\115\104\111\112\046")
-                .. "\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046", 4)
+            Notify("\084\114\097\105\108\101\114\115", action .. "\032\099\111\110\102\105\114\109\101\100\046\032\086\101\104\105\099\108\101\032\114\101\116\117\114\110\101\100\046"
+                .. (menuClosed and "" or "\032\067\111\117\108\100\032\110\111\116\032\108\111\099\097\116\101\032\116\104\101\032\099\117\115\116\111\109\105\122\097\116\105\111\110\032\109\101\110\117\032\116\111\032\099\108\111\115\101\032\105\116\046"), 4)
         end
     end
 
@@ -12366,6 +12475,7 @@ task.spawn(function()
         ping("heartbeat")
     end
 end)
+
 
 
 
