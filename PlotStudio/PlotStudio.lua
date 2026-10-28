@@ -2895,338 +2895,216 @@ local function addVerifiedRoofs()
     end)
 end
 
-local function startBuild()
-    if build.busy then notify("A build is already running");return end
-    local units,plot,origin,stats=buildPlan()
-    if not units or not plot then notify("No owned plot detected; build stopped");return end
-    -- Roofs require their OWN server-confirmed test and are never sent
-    -- automatically during a masonry build.
-    local masonry={}
-    for _,u in ipairs(units) do
-        if u.kind~="Roof" then masonry[#masonry+1]=u end
+-- The plot is the source of truth. A new script revision must never
+-- assume that an old castle vanished or fill newly designed walls over it.
+local function newShellCanAttach(u,physical)
+    local existingWalls=0
+    for _,v in ipairs(physical) do
+        if v.kind=="Wall" then existingWalls=existingWalls+1 end
     end
-    units=masonry
-    if not build.passed or build.signature~=buildSignature(plot,origin) then
-        -- On an existing real masonry castle, accept the already built
-        -- opaque walls as evidence that a solid wall ID is valid. Do not
-        -- require a new single-wall test on every script restart.
-        local knownOpaque=false
-        local folder=plot:FindFirstChild("Structures")
-        if folder then
-            for _,m in ipairs(folder:GetChildren()) do
-                if m:IsA("Model") and
-                    typeof(m:GetAttribute("WallCFrame"))=="CFrame" and
-                    not isGlassModel(m) then
-                    knownOpaque=true
-                    break
+    if existingWalls<4 then return true end
+    if u.kind=="Floor" then
+        -- Do not populate an unrelated, new building footprint. A new floor
+        -- must have nearby existing masonry on this storey or the one below.
+        for _,v in ipairs(physical) do
+            if v.kind=="Wall" and (v.lv==u.lv or v.lv==u.lv-1) then
+                local mid=(v.a+v.b)*.5
+                local c=u.cf.Position
+                if Vector2.new(mid.X-c.X,mid.Z-c.Z).Magnitude<
+                    math.max(u.sx,u.sz)*.68+5 then
+                    return true
                 end
             end
         end
-        if not knownOpaque then
-            build.passed=false
-            notify("TEST ONE WALL first on an empty plot; already built opaque walls were not detected.")
-            return
+        return false
+    elseif u.kind=="Wall" then
+        for _,v in ipairs(physical) do
+            if v.kind=="Wall" and v.lv==u.lv then
+                local function close(p,q)
+                    return Vector2.new(p.X-q.X,p.Z-q.Z).Magnitude<3.2
+                end
+                -- Only extend an existing wall at its end or fill its
+                -- matching segment. A moved blueprint cannot redraw wings.
+                if close(u.a,v.a) or close(u.a,v.b) or
+                    close(u.b,v.a) or close(u.b,v.b) then return true end
+            end
+        end
+        return false
+    end
+    return false
+end
+local function shellConfirmed(u,physical)
+    if u.kind=="Wall" then
+        local remaining=openWallSegments(u,physical)
+        if #remaining==0 then return true end
+        local requested=(u.b-u.a).Magnitude
+        local still=0
+        for _,part in ipairs(remaining) do
+            still=still+(part.b-part.a).Magnitude
+        end
+        return requested>0 and still/requested<.12
+    end
+    if u.kind=="Floor" then
+        for _,v in ipairs(physical) do
+            if surfaceOverlaps(u,v) then return true end
+        end
+    end
+    return false
+end
+local function startBuild()
+    if build.busy then notify("A build is already running");return end
+    if not ensureCatalog() or not stairCatalog.wall then
+        notify("Could not identify a solid wall style from the catalog.")
+        return
+    end
+    -- Rebuild the same authored geometry, then intersect it with the actual
+    -- physical plot. Never destroy user-created parts or existing wings.
+    beginPreview()
+    local units,plot,origin,stats=buildPlan()
+    if not units or not plot or not origin then
+        notify("Your owned plot isn't available.")
+        return
+    end
+    local baseline=occupiedFromPlot(plot,origin)
+    local wallsPresent,floorsPresent=0,0
+    local chosenWallId=nil
+    local structures=plot:FindFirstChild("Structures")
+    if structures then
+        for _,model in ipairs(structures:GetChildren()) do
+            if model:IsA("Model") and
+                typeof(model:GetAttribute("WallCFrame"))=="CFrame" and
+                not isGlassModel(model) then
+                chosenWallId=chosenWallId or model:GetAttribute("ItemId")
+            end
+        end
+    end
+    for _,u in ipairs(baseline) do
+        if u.kind=="Wall" then wallsPresent=wallsPresent+1
+        elseif u.kind=="Floor" then floorsPresent=floorsPresent+1 end
+    end
+    if wallsPresent>=4 then
+        -- Reuse the actual wall style of the existing castle when it is a
+        -- catalogued structural wall. Different style IDs can collide.
+        local row=chosenWallId and
+            buildCatalog.byId["Walls|"..tostring(chosenWallId)]
+        if row and scoreWall(row.name)>=0 then
+            stairCatalog.wall={id=row.id,name=row.name,category="Walls"}
         end
         build.passed=true
         build.signature=buildSignature(plot,origin)
-        build.testUnit=nil
-        notify("Existing solid masonry detected; reusing wall verification.")
-    end
-    if not stairCatalog.scanned or not stairCatalog.wall then
-        notify("Solid wall style unavailable; stopping to prevent all-glass build")
+    elseif not build.passed or build.signature~=buildSignature(plot,origin) then
+        notify("Empty plot: TEST ONE WALL under Advanced Tools first.")
         return
     end
-    -- Critical: structural shell construction DOES NOT need a stair
-    -- Shape test. A failed/mismatched Shape test must never lock walls,
-    -- floors, roof repair, doors, or wings.
-    -- Stair gaps are handled in an independent optional repair operation.
-    notify("STRUCTURAL PASS: walls + floors only. No stair verification required.")
-
-    if #units>400 then
-        -- Long layouts are built in small, independently audited batches.
-        -- Re-run BUILD / REPAIR SHELL to continue after actual models appear.
-        local batch={}
-        for i=1,400 do batch[#batch+1]=units[i] end
-        notify("Large blueprint: doing the first 400 structural pieces. Re-run to continue after auditing.")
-        units=batch
-    end
-    notify("Occupancy scan: "..(stats and stats.skipped or 0)..
-        " occupied skipped; "..(stats and stats.trimmed or 0).." walls trimmed.")
-    if #units==0 then notify("All planned positions occupied; no work needed");return end
-    for _,kind in ipairs({"Wall","Floor"}) do
-        if not eventFor(kind) then notify("Place"..kind.." remote missing");return end
-    end
-     local pace=BUILD_SPEEDS[state.buildSpeed] or BUILD_SPEEDS.Fast
-    local selectedSpeed=state.buildSpeed
-    build.busy=true;build.cancel=false
-    build.total=#units
-    build.sent=0
-    build.status="Building ("..selectedSpeed..") 0 / "..build.total
-    refreshBuildStatus()
-    notify("Build started / "..selectedSpeed.." mode / "..build.total.." requests")
-    task.spawn(function()
-        local sent,failures,extraSkips=0,0,0
-        build.lastAudit="Build in progress; final audit pending"
-        local submitted={}
-        local fresh=occupiedFromPlot(plot,origin)
-        for i,u in ipairs(units) do
-            if not alive or build.cancel then break end
-            if i%pace.burst==1 then fresh=occupiedFromPlot(plot,origin) end
-            local blocked=false
-            if u.kind=="StairShape" or u.kind=="DetailShape" then
-                blocked=stairsAlreadyPresent(plot,u)
-            elseif u.kind=="Wall" then
-                blocked=#openWallSegments(u,fresh)==0
-            else
-                for _,other in ipairs(fresh) do
-                    if surfaceOverlaps(u,other) then blocked=true;break end
-                end
-            end
-            if blocked then
-                extraSkips=extraSkips+1
-            else
-                local ok,err=pcall(function() fireUnit(u) end)
-                if not ok then failures=failures+1;notify(tostring(err):sub(1,100));break end
-                if u.kind~="StairShape" and u.kind~="DetailShape" then
-                    fresh[#fresh+1]=u
-                end
-                sent=sent+1
-                submitted[#submitted+1]=u
-                build.sent=sent
-                if i%12==0 or i==#units then
-                    build.status="Building ("..selectedSpeed..") "..i.." / "..build.total..
-                        " / already occupied "..extraSkips
-                    refreshBuildStatus()
-                end
-                local rest=(sent%pace.burst==0) and pace.cooldown or 0
-                task.wait(pace.interval+rest)
-            end
-        end
-        -- The original Turbo loop only counted requests SENT. It could not
-        -- distinguish accepted pieces from throttled/rejected pieces.
-        -- Do a bounded single reconciliation against actual replicated models.
-        local repairSent,stillMissing=0,0
-        local serverConflicts=0
-        if alive and not build.cancel and failures==0 and #submitted>0 then
-            build.status="Checking server-placed pieces..."
-            refreshBuildStatus()
-            task.wait(1.4)
-            local snapshot=occupiedFromPlot(plot,origin)
-            local function present(u)
-                if u.kind=="StairShape" or u.kind=="DetailShape" then
-                    return stairsAlreadyPresent(plot,u)
-                elseif u.kind=="Wall" then
-                    return #openWallSegments(u,snapshot)==0
-                else
-                    for _,placed in ipairs(snapshot) do
-                        if surfaceOverlaps(u,placed) then return true end
-                    end
-                end
-                return false
-            end
-            local missing={}
-            for i,u in ipairs(submitted) do
-                if not present(u) then missing[#missing+1]=u end
-                if i%125==0 then task.wait() end
-            end
-            -- A wall with an adjacent corner or a short occupied overlap is
-            -- not necessarily missing. Never blindly retry wall requests:
-            -- the server can correctly reject them as already occupied.
-            local retryable={}
-            for _,u in ipairs(missing) do
-                if u.kind=="Wall" then
-                    serverConflicts=serverConflicts+1
-                elseif u.kind=="Floor" or u.kind=="Roof" then
-                    retryable[#retryable+1]=u
-                else
-                    -- Shapes may not be reflected in occupancy immediately;
-                    -- don't place duplicates on a speculative retry.
-                    serverConflicts=serverConflicts+1
-                end
-            end
-            local maximumRetry=math.min(#retryable,8)
-            if maximumRetry>0 then
-                notify("Construction audit: "..#missing..
-                    " pieces not confirmed / rechecking up to "..maximumRetry)
-            end
-            for i=1,maximumRetry do
-                if build.cancel or not alive then break end
-                local u=retryable[i]
-                if i%10==1 then snapshot=occupiedFromPlot(plot,origin) end
-                if not present(u) then
-                    local ok,err=pcall(function() fireUnit(u) end)
-                    if not ok then
-                        failures=failures+1
-                        notify("Repair stopped: "..tostring(err):sub(1,85))
-                        break
-                    end
-                    repairSent=repairSent+1
-                    build.status="Repairing missed requests "..repairSent..
-                        " / "..maximumRetry
-                    refreshBuildStatus()
-                    task.wait(.21)
-                end
-            end
-            if not build.cancel then
-                task.wait(.9)
-                snapshot=occupiedFromPlot(plot,origin)
-                local byKind={}
-                local samples={}
-                for _,u in ipairs(submitted) do
-                    if not present(u) then
-                        stillMissing=stillMissing+1
-                        byKind[u.kind]=(byKind[u.kind] or 0)+1
-                        if #samples<12 then
-                            local p=u.cf and u.cf.Position or
-                                (u.a and u.b and (u.a+u.b)*.5) or
-                                (u.x and Vector3.new(u.x,0,u.z)) or Vector3.zero
-                            samples[#samples+1]=u.kind..
-                                "  floor "..tostring((u.lv or 0)+1)..
-                                "  at ("..math.floor(p.X+.5)..", "..
-                                math.floor(p.Y+.5)..", "..
-                                math.floor(p.Z+.5)..")"
-                        end
-                    end
-                end
-                local report={
-                    "UNCONFIRMED CONSTRUCTION AUDIT",
-                    "Sent: "..sent.." / repair requests: "..repairSent,
-                    "Occupied before send: "..extraSkips,
-                    "Still unconfirmed: "..stillMissing,
-                    "Wall/Shape conflicts NOT retried: "..serverConflicts,
-                    "These are local replication checks, not server rejection reasons.",
-                    ""
-                }
-                for _,kind in ipairs({"Wall","Floor","Roof","StairShape","DetailShape"}) do
-                    if byKind[kind] then
-                        report[#report+1]=kind..": "..byKind[kind]
-                    end
-                end
-                if #samples>0 then
-                    report[#report+1]=""
-                    report[#report+1]="EXAMPLE UNCONFIRMED LOCATIONS"
-                    for _,line in ipairs(samples) do report[#report+1]=line end
-                end
-                build.lastAudit=table.concat(report,"\n")
-            end
-        end
-        build.busy=false
-        build.passed=false
-        build.testUnit=nil
-        if build.cancel then
-            build.status="Stopped after "..sent.." requests"
-        elseif failures>0 then
-            build.status="Stopped due to local placement error"
-        else
-            build.status="Submitted "..sent.." + "..repairSent..
-                " safe repair requests; "..stillMissing.." unconfirmed / "..
-                serverConflicts.." conflicts not retried"
-        end
-        refreshBuildStatus()
-        notify(build.status..". No repeated repair loops. Game server acceptance is not guaranteed.")
-        if alive and state.page=="Builder" then switchPage("Builder") end
-    end)
-end
-
-
--- Add low side wings to an EXISTING castle. This uses the exact same
--- occupancy-filtered masonry plan and does not remove any old buildings.
-local function extendSideWings()
-    if build.busy then notify("A build is already running");return end
-    if state.design~=1 and state.design~=2 then
-        notify("Side wings are currently available for the two castle designs.")
-        return
-    end
-    if not ensureCatalog() or not stairCatalog.wall then
-        notify("No solid-wall catalog item available");return
-    end
-    beginPreview()
-    local units,plot,origin=buildPlan()
-    if not units or not plot then notify("Owned plot required");return end
-    local wingUnits={}
+    local requests,protected,already= {},0,0
     for _,u in ipairs(units) do
-        if u.zone=="Wing" and (u.kind=="Wall" or u.kind=="Floor") then
-            wingUnits[#wingUnits+1]=u
+        if u.kind=="Wall" or u.kind=="Floor" then
+            if shellConfirmed(u,baseline) then
+                already=already+1
+            elseif newShellCanAttach(u,baseline) then
+                requests[#requests+1]=u
+            else
+                protected=protected+1
+            end
         end
     end
-    if #wingUnits==0 then
-        notify("No missing side-wing walls or floors in the current plan.")
+    if #requests==0 then
+        build.lastAudit="CURRENT PLOT SNAPSHOT\nExisting walls: "..wallsPresent..
+            "\nExisting floors: "..floorsPresent..
+            "\nMatching blueprint pieces: "..already..
+            "\nExcluded to protect older layout: "..protected..
+            "\nNo missing structural pieces match the current repair plan."..
+            "\nThis check does not cover roofs, doors, stairs or Shape details."
+        build.status="Current shell checked; no safe missing pieces identified."
+        refreshBuildStatus()
+        notify(build.status)
         return
     end
     if not eventFor("Wall") or not eventFor("Floor") then
-        notify("PlaceWall/PlaceFloor events missing");return
-    end
-    local existingSolid=false
-    local structures=plot:FindFirstChild("Structures")
-    if structures then
-        for _,m in ipairs(structures:GetChildren()) do
-            if m:IsA("Model") and
-                tostring(m:GetAttribute("ItemId") or "")==
-                    tostring(stairCatalog.wall.id) and
-                not isGlassModel(m) then
-                existingSolid=true;break
-            end
-        end
-    end
-    if not existingSolid and (not build.passed or
-        build.signature~=buildSignature(plot,origin)) then
-        notify("TEST ONE WALL before adding the new wings.")
+        notify("Structural PlaceWall or PlaceFloor event unavailable")
         return
     end
-    build.busy=true;build.cancel=false
-    build.total=#wingUnits;build.sent=0
-    build.status="Expanding low side wings..."
+    -- Small confirmed batches: a server rejection is not an occupied wall.
+    -- Re-run this action to continue once the accepted pieces replicate.
+    local maxAttempt=math.min(#requests,65)
+    build.busy=true
+    build.cancel=false
+    build.total=maxAttempt
+    build.sent=0
+    build.status="Repairing current plot: 0 / "..maxAttempt
     refreshBuildStatus()
     task.spawn(function()
-        local confirmed,missing,skipped,consecutive=0,0,0,0
-        for i,u in ipairs(wingUnits) do
+        local accepted,unconfirmed,skipped,attempted=0,0,0,0
+        local consecutive=0
+        local samples={}
+        for i=1,maxAttempt do
             if not alive or build.cancel or consecutive>=3 then break end
-            local function present()
-                local fresh=occupiedFromPlot(plot,origin)
-                if u.kind=="Wall" then
-                    return #openWallSegments(u,fresh)==0
-                end
-                for _,other in ipairs(fresh) do
-                    if surfaceOverlaps(u,other) then return true end
-                end
-                return false
-            end
-            if present() then
+            local u=requests[i]
+            local physical=occupiedFromPlot(plot,origin)
+            if shellConfirmed(u,physical) then
+                skipped=skipped+1
+            elseif not newShellCanAttach(u,baseline) then
                 skipped=skipped+1
             else
                 local ok,err=pcall(function() fireUnit(u) end)
-                if not ok then
-                    build.status="Wing request error: "..tostring(err):sub(1,75)
-                    missing=missing+1
-                    break
+                attempted=attempted+1
+                build.sent=attempted
+                local confirmed=false
+                if ok then
+                    for k=1,12 do
+                        if not alive or build.cancel then break end
+                        task.wait(.20)
+                        if shellConfirmed(u,occupiedFromPlot(plot,origin)) then
+                            confirmed=true;break
+                        end
+                    end
                 end
-                build.sent=build.sent+1
-                local placed=false
-                for attempt=1,10 do
-                    if not alive or build.cancel then break end
-                    task.wait(.2)
-                    if present() then placed=true;break end
-                end
-                if placed then
-                    confirmed=confirmed+1
+                if confirmed then
+                    accepted=accepted+1
                     consecutive=0
                 else
-                    missing=missing+1
+                    unconfirmed=unconfirmed+1
                     consecutive=consecutive+1
+                    local center=u.kind=="Wall" and (u.a+u.b)*.5
+                        or u.cf.Position
+                    if #samples<12 then
+                        samples[#samples+1]=u.kind.." floor "..(u.lv+1)..
+                            " ("..math.floor(center.X+.5)..","..
+                            math.floor(center.Y+.5)..","..
+                            math.floor(center.Z+.5)..")"..
+                            (not ok and (" / "..tostring(err):sub(1,60)) or
+                            " / no server-confirmed piece")
+                    end
                 end
-                build.status="Wings: "..confirmed.." confirmed / "..
-                    missing.." unconfirmed / "..skipped.." already placed"
-                refreshBuildStatus()
             end
+            build.status="Current plot: "..accepted.." confirmed / "..
+                unconfirmed.." unconfirmed / "..skipped.." already placed"
+            refreshBuildStatus()
+            task.wait(.12)
         end
         build.busy=false
-        build.lastAudit="SIDE WING AUDIT\nConfirmed: "..confirmed..
-            "\nUnconfirmed: "..missing.."\nAlready present: "..skipped..
-            "\nEligible before start: "..#wingUnits..
-            "\nStopped after three consecutive unconfirmed placements."
-        build.status=build.cancel and "Wing extension stopped" or
-            ("Wing extension: "..confirmed.." confirmed / "..missing..
-            " unconfirmed / "..skipped.." already present")
+        build.lastAudit="CURRENT PLOT REPAIR AUDIT\n"..
+            "Pre-existing walls: "..wallsPresent..
+            "\nPre-existing floors: "..floorsPresent..
+            "\nMissing candidates: "..#requests..
+            "\nProtected because layout differs: "..protected..
+            "\nAlready matched: "..already..
+            "\nNewly confirmed: "..accepted..
+            "\nSent but unconfirmed: "..unconfirmed..
+            "\nSkipped after live recheck: "..skipped..
+            "\nNot attempted: "..math.max(0,#requests-attempted-skipped)..
+            "\n\nUnconfirmed is NOT proof of a server error. "..
+            "Further requests stop after 3 consecutive unconfirmed placements."..
+            (#samples>0 and ("\n\nSAMPLE MISSING LOCATIONS\n"..
+                table.concat(samples,"\n")) or "")
+        if consecutive>=3 then
+            build.status="Stopped after 3 unconfirmed structures; inspect audit."
+        elseif build.cancel then
+            build.status="Structure repair stopped."
+        else
+            build.status="Structure repair: "..accepted.." confirmed / "..
+                unconfirmed.." unconfirmed. Continue later if pieces remain."
+        end
         refreshBuildStatus()
         notify(build.status)
         if alive and state.page=="Builder" then switchPage("Builder") end
