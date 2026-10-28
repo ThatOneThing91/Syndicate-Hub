@@ -373,8 +373,10 @@ local function getFootprint(plot)
         depth=depth or floorPart.Size.Z
         if not reason then reason="Base.Floor" end
     end
-    width=math.clamp((width or 180)*.93,64,171)
-    depth=math.clamp((depth or 180)*.93,64,171)
+    -- Do not cap a fully upgraded plot at 171 studs. Retain a small
+    -- margin so real server placements remain inside the owned base.
+    width=math.clamp((width or 180)*.91,64,270)
+    depth=math.clamp((depth or 180)*.91,64,270)
     lastFootprint=string.format("%d x %d studs / %s",math.floor(width+.5),math.floor(depth+.5),reason or "180-stud estimate")
     return width,depth
 end
@@ -434,9 +436,10 @@ local function beginPreview()
     previewFolder.Name=PREVIEW_NAME
     previewFolder.Parent=workspace
     local count=0
+    local currentZone=nil
     -- Explicit kind is vital: decorations must never be interpreted as wall requests.
     local function part(name,kind,x,y,z,sx,sy,sz,rot,color)
-        if count>=1080 then return end
+        if count>=1550 then return end
         if math.min(sx,sy,sz)<.1 then return end
         local p=Instance.new("Part")
         p.Name=name;p.Anchored=true;p.CanCollide=false;p.CanQuery=false
@@ -490,6 +493,7 @@ local function beginPreview()
         p.Size=Vector3.new(sx,sy,sz)
         p.CFrame=origin*CFrame.new(x,y,z)*CFrame.Angles(0,rot or 0,0)
         p:SetAttribute("PlotStudioKind",kind)
+        if currentZone then p:SetAttribute("PlotStudioZone",currentZone) end
         p.Parent=previewFolder
         local e=Instance.new("SelectionBox")
         e.Adornee=p;e.Color3=kind=="Glass" and glass or (kind=="Decor" and light or C.purple)
@@ -506,6 +510,16 @@ local function beginPreview()
     end
     local function deck(name,x,y,z,sx,sz,col)
         return part(name,"Floor",x,y,z,sx,.55,sz,nil,col)
+    end
+    local function nativeRoof(name,x,z,sx,sz,top,style)
+        -- Preview-only marker for ONE actual PlaceRoof request, not a
+        -- decorative Shape pretending to be a real roof.
+        local p=part(name,"Roof",x,top+.25,z,sx,.5,sz,nil,roof)
+        if p then
+            p:SetAttribute("PlotStudioRoofStyle",style or "Hip")
+            p.Transparency=.23
+        end
+        return p
     end
     -- Native window models belong to the game's Windows category and must
     -- snap to a *server-created* wall GUID. A fake glass preview would be
@@ -549,14 +563,24 @@ local function beginPreview()
             for _,sign in ipairs({-1,1}) do
                 wall("Entrance masonry",cx+sign*(open+chunk)/2,cy,cz-dz/2,chunk,h,0,col)
             end
-            wall("Doorway lintel",cx,lv*h+h*.89,cz-dz/2,open,h*.22,0,light)
+            -- The old lintel used PlaceWall despite its short height;
+            -- PlaceWall created a full-height obstruction across the door.
+            -- Only a verified Shape lintel may be added after the door.
+            deco("Doorway lintel trim",cx,lv*h+h*.9,cz-dz/2,
+                open,h*.18,1.0,light)
             if lv>0 then
                 deco("Upper landing balcony",cx,lv*h-.1,cz-dz/2-3,open+3,.4,5,light)
                 for _,sign in ipairs({-1,1}) do
                     deco("Balustrade pillar",cx+sign*(open/2+1),lv*h+1.7,cz-dz/2-5,.55,3.4,.55,light)
                 end
             else
-                deco("Gothic door surround",cx,lv*h+h*.83,cz-dz/2-.75,open+2,.8,1.6,light)
+                local marker=part("Main door position","Entrance",cx,
+                    h*.46,cz-dz/2-.4,open*.86,h*.86,.45,0,light)
+                if marker then
+                    marker:SetAttribute("PlotStudioEntranceWidth",open)
+                end
+                deco("Gothic door surround",cx,lv*h+h*.83,
+                    cz-dz/2-.75,open+2,.8,1.6,light)
             end
         else
             wall("South wall",cx,cy,cz-dz/2,wx,h,0,col)
@@ -729,15 +753,21 @@ local function beginPreview()
                         top2+1.15,z2,.42,2.3,.42,light)
                 end
             end
+            -- A separate floor-level START landing is essential. Without it,
+            -- the next storey's first flight begins across an empty cutout.
+            local start=deco("Stair landing",leftLane,
+                bottom-stairThickness*.5,south-1.15,
+                laneW+1.65,stairThickness,6.2,stone)
+            if start then start:SetAttribute("PlotStudioStorey",lv) end
             -- Midway U-turn. It connects both parallel flights without
             -- overlapping either flight at a different elevation.
             local middle=deco("Stair landing",cx+wellX,bottom+h*.5-stairThickness*.5,
-                north+.65,wellW-.7,stairThickness,3.8,light)
+                north+.4,wellW-.7,stairThickness,5.2,light)
             if middle then middle:SetAttribute("PlotStudioStorey",lv) end
             -- Exit bridge reaches the SOUTH gallery at the next storey,
             -- with enough width to turn off the staircase into the room.
             local exit=deco("Stair landing",rightLane,bottom+h-stairThickness*.5,
-                south-1.7,laneW+1.8,stairThickness,5.1,light)
+                south-1.25,laneW+2.4,stairThickness,6.8,light)
             if exit then exit:SetAttribute("PlotStudioStorey",lv+1) end
             -- Architectural support under the halfway turn.
             deco("Stair landing support",cx+wellX,bottom+h*.23,
@@ -785,8 +815,27 @@ local function beginPreview()
         -- The side wings are faceted curves, not a surrounding rectangular fort.
         curve(0,courtyardZ,rx,rz,-.93,.60,0,dark,"East crescent")
         curve(0,courtyardZ,rx,rz,math.pi-.60,math.pi+.93,0,dark,"West crescent")
+        -- Keep the tall rear hall, but give the unlocked plot two real
+        -- two-storey side wings instead of spending the budget on a pillar.
         local kw,kd=w*.59,d*.40
         local kz=d*.245
+        local wingW,wingD=w*.205,d*.35
+        local wingZ=-d*.115
+        for _,sign in ipairs({-1,1}) do
+            currentZone="Wing"
+            local wingX=sign*w*.375
+            for lv=0,math.min(floors,2)-1 do
+                walls(wingX,wingZ,wingW,wingD,lv,
+                    royal and stone or dark,lv==0)
+                if lv==1 then
+                    deck("Wing upper floor",wingX,lv*h-.28,
+                        wingZ,wingW-1.2,wingD-1.2,stone)
+                end
+            end
+            nativeRoof("Side wing pitched roof",wingX,wingZ,
+                wingW+1,wingD+1,math.min(floors,2)*h,"Gable")
+            currentZone=nil
+        end
         for lv=0,floors-1 do
             walls(0,kz,kw,kd,lv,royal and stone or dark,true)
             galleryWithWell(0,kz,kw-2,kd-2,lv)
@@ -800,6 +849,8 @@ local function beginPreview()
             end
         end
         grandStaircase(0,kz,kw-2,kd-2,floors)
+        nativeRoof("Great hall hip roof",0,kz,
+            kw+1,kd+1,floors*h,"Hip")
         -- Thin upper connections, leaving the entire central court open below.
         for lv=1,floors-1 do
             local y=lv*h-.27
@@ -871,7 +922,7 @@ local function beginPreview()
                 walls(x,d*.06,wingW,wingD,lv,light,lv==0)
                 galleryWithWell(x,d*.06,wingW,wingD,lv)
             end
-            deco("Palace roof terrace",x,floors*h-.3,d*.06,wingW+2,.8,wingD+2,roof)
+            nativeRoof("Palace wing roof",x,d*.06,wingW+1,wingD+1,floors*h,"Hip")
             grandStaircase(x,d*.06,wingW,wingD,floors)
             columns(x,-d*.31,wingW,"X")
             for _,z in ipairs({-d*.21,d*.27}) do tower(x,z,math.min(wingW*.23,10),floors+1,true) end
@@ -880,6 +931,8 @@ local function beginPreview()
             walls(0,d*.3,w*.43,d*.22,lv,stone,lv==0)
             if lv>0 then deck("Gallery floor",0,lv*h-.3,d*.3,w*.43,d*.22,light) end
         end
+        nativeRoof("Palace central roof",0,d*.3,w*.43+1,d*.22+1,
+            floors*h,"Gable")
         tower(0,d*.3,math.min(w*.085,12),floors+2,true)
         columns(0,-d*.43,w*.49,"X")
         deco("Formal central garden",0,.08,-d*.18,w*.25,.18,d*.3,Color3.fromRGB(75,128,89))
@@ -898,7 +951,7 @@ local function beginPreview()
             deco("Facade mullion",x,floors*h/2,-dz/2-1,1,floors*h,1,light)
             glaze(x,floors*h/2,-dz/2-1,wx/15,floors*h,0)
         end
-        deck("Roof terrace",0,floors*h+.3,0,wx+3,dz+3,light)
+        nativeRoof("Showroom roof",0,0,wx+2,dz+2,floors*h,"Hip")
         for _,z in ipairs({-dz*.32,-dz*.11,dz*.11,dz*.32}) do
             deco("Atrium gilded roof rib",0,floors*h+1.1,z,wx+4,2,1.3,gold)
         end
@@ -911,7 +964,7 @@ local function beginPreview()
             galleryWithWell(0,0,size,size,lv)
         end
         grandStaircase(0,0,size,size,floors)
-        deco("Watchtower crest roof",0,floors*h-.3,0,size+3,.8,size+3,roof)
+        nativeRoof("Watchtower roof",0,0,size+2,size+2,floors*h,"Pyramid")
         tower(0,0,math.min(size*.24,13),floors+4,true)
         for _,x in ipairs({-w*.36,w*.36}) do
             tower(x,d*.27,math.min(w*.073,9),floors+1,false)
@@ -1433,18 +1486,19 @@ local function buildPlan()
                     local sx,sz=p.Size.X/nx,p.Size.Z/nz
                     local cf=p.CFrame*CFrame.new((ix-.5)*sx-p.Size.X/2,0,(iz-.5)*sz-p.Size.Z/2)
                     units[#units+1]={kind="Floor",cf=cf,sx=sx,sz=sz,lv=lv,
+                        zone=p:GetAttribute("PlotStudioZone"),
                         color=p:GetAttribute("PlotStudioColor"),
                         material=p:GetAttribute("PlotStudioMaterial")}
                 end end
             elseif kind=="Roof" then
                 local lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y+.4)/h+.1)-1,0,4)
                 local cf=origin:ToObjectSpace(p.CFrame)
-                local nx,nz=math.ceil(p.Size.X/40),math.ceil(p.Size.Z/40)
-                for ix=1,nx do for iz=1,nz do
-                    local sx,sz=p.Size.X/nx,p.Size.Z/nz
-                    local c=cf*CFrame.new((ix-.5)*sx-p.Size.X/2,0,(iz-.5)*sz-p.Size.Z/2)
-                    units[#units+1]={kind="Roof",x=c.Position.X,z=c.Position.Z,sx=sx,sz=sz,lv=lv}
-                end end
+                units[#units+1]={kind="Roof",x=cf.Position.X,z=cf.Position.Z,
+                    sx=p.Size.X,sz=p.Size.Z,lv=lv,
+                    style=p:GetAttribute("PlotStudioRoofStyle") or "Hip",
+                    zone=p:GetAttribute("PlotStudioZone"),
+                    color=p:GetAttribute("PlotStudioColor"),
+                    material=p:GetAttribute("PlotStudioMaterial")}
             elseif kind=="Wall" then
                 local lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y)/h),0,4)
                 local count=math.ceil(p.Size.X/15)
@@ -1454,6 +1508,7 @@ local function buildPlan()
                     local a=p.CFrame:PointToWorldSpace(Vector3.new(x1,-p.Size.Y/2,0))
                     local b=p.CFrame:PointToWorldSpace(Vector3.new(x2,-p.Size.Y/2,0))
                     units[#units+1]={kind="Wall",a=a,b=b,lv=lv,
+                        zone=p:GetAttribute("PlotStudioZone"),
                         material=p:GetAttribute("PlotStudioMaterial"),
                         color=p:GetAttribute("PlotStudioColor")}
                 end
