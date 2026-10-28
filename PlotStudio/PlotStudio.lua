@@ -3362,30 +3362,151 @@ local function shellConfirmed(u,physical)
     end
     return false
 end
+-- Automated, bounded, live-confirmed shell repair. The same button can
+-- complete several passes without requiring a click for every few pieces.
+-- Server FireServer does NOT return a placement reason; diagnostic guesses
+-- must never be presented as actual server rejection codes.
+local function shellCoverage(u,physical)
+    if u.kind=="Floor" then
+        return floorCoverage(u,physical)
+    elseif u.kind=="Wall" then
+        local remaining=openWallSegments(u,physical)
+        local requested=(u.b-u.a).Magnitude
+        if requested<.01 then return 1 end
+        local missing=0
+        for _,piece in ipairs(remaining) do
+            missing=missing+(piece.b-piece.a).Magnitude
+        end
+        return math.clamp(1-missing/requested,0,1)
+    end
+    return 0
+end
+local function shellPosition(u)
+    return u.kind=="Wall" and (u.a+u.b)*.5 or u.cf.Position
+end
+local function shellKey(u)
+    local p=shellPosition(u)
+    local function snap(n) return math.floor(n*2+.5)/2 end
+    return u.kind.."|"..u.lv.."|"..
+        snap(p.X).."|"..snap(p.Y).."|"..snap(p.Z).."|"..
+        math.floor((u.kind=="Wall" and (u.b-u.a).Magnitude or u.sx)*2+.5)
+end
+local function shellLabel(u)
+    local p=shellPosition(u)
+    local size=u.kind=="Wall" and (u.b-u.a).Magnitude or u.sx
+    local depth=u.kind=="Floor" and u.sz or 0
+    return string.format("%s L%d (%.1f, %.1f, %.1f) %.1fx%.1f",
+        u.kind,u.lv+1,p.X,p.Y,p.Z,size,depth)
+end
+local function shellSuspectedCause(u,physical,before,after,pcallError)
+    if pcallError then
+        return "CLIENT ERROR: "..tostring(pcallError):sub(1,140)..
+            " | Check event, arguments and executor output."
+    end
+    if after>before+.10 then
+        return "PARTIAL PROGRESS: new geometry overlaps the target, "..
+            "but coverage is incomplete. Re-scan remaining opening."
+    end
+    if u.kind=="Floor" then
+        if before>.08 then
+            return "POSSIBLE FLOOR COLLISION: target partly overlaps "..
+                "an existing slab; a smaller floor tile may be required."
+        end
+        return "NO FLOOR REPLICATION: possible collision, unsupported "..
+            "floor size/storey, server validation or delayed streaming."
+    end
+    local close=0
+    for _,v in ipairs(physical) do
+        if v.kind=="Wall" and v.lv==u.lv then
+            local p=shellPosition(u)
+            local mid=(v.a+v.b)*.5
+            if Vector2.new(p.X-mid.X,p.Z-mid.Z).Magnitude<8 then
+                close=close+1
+            end
+        end
+    end
+    if close>1 then
+        return "POSSIBLE WALL COLLISION: multiple existing segments "..
+            "near this location; check endpoints, alignment and openings."
+    end
+    return "NO WALL REPLICATION: possible overlap, invalid wall "..
+        "length/height, plot bounds, throttling or server validation."
+end
+local function shellRepairCandidates(plot,origin,physical)
+    local planned=buildPlan()
+    local requests,protected,already={},0,0
+    if planned then
+        for _,u in ipairs(planned) do
+            if u.kind=="Wall" then
+                if shellConfirmed(u,physical) then
+                    already=already+1
+                elseif newShellCanAttach(u,physical) then
+                    requests[#requests+1]=u
+                else
+                    protected=protected+1
+                end
+            end
+        end
+    end
+    local floorGaps,samples,missingCells,overflow=
+        missingFloorGapUnits(plot,origin,physical,220)
+    local floorCandidates=0
+    for _,u in ipairs(floorGaps) do
+        if shellConfirmed(u,physical) then
+            already=already+1
+        elseif newShellCanAttach(u,physical) then
+            requests[#requests+1]=u
+            floorCandidates=floorCandidates+1
+        else
+            protected=protected+1
+        end
+    end
+    table.sort(requests,function(a,b)
+        if a.kind~=b.kind then return a.kind=="Floor" end
+        if a.lv~=b.lv then
+            -- Floors above ground first: these are fall-through hazards.
+            if a.kind=="Floor" then
+                if a.lv==0 then return false end
+                if b.lv==0 then return true end
+            end
+            return a.lv<b.lv
+        end
+        local pa,pb=shellPosition(a),shellPosition(b)
+        if pa.X~=pb.X then return pa.X<pb.X end
+        return pa.Z<pb.Z
+    end)
+    return requests,{
+        protected=protected,already=already,
+        floorCandidates=floorCandidates,missingCells=missingCells,
+        sampledCells=samples,overflow=overflow
+    }
+end
 local function startBuild()
     if build.busy then notify("A build is already running");return end
     if not ensureCatalog() or not stairCatalog.wall then
         notify("Could not identify a solid wall style from the catalog.")
         return
     end
-    -- Rebuild the same authored geometry, then intersect it with the actual
-    -- physical plot. Never destroy user-created parts or existing wings.
     beginPreview()
-    local units,plot,origin,stats=buildPlan()
-    if not units or not plot or not origin then
+    local _,plot,origin=buildPlan()
+    if not plot or not origin then
         notify("Your owned plot isn't available.")
+        return
+    end
+    if not eventFor("Wall") or not eventFor("Floor") then
+        notify("PlaceWall or PlaceFloor remote unavailable")
         return
     end
     local baseline=occupiedFromPlot(plot,origin)
     local wallsPresent,floorsPresent=0,0
-    local chosenWallId=nil
+    local chosenWallId
     local structures=plot:FindFirstChild("Structures")
     if structures then
-        for _,model in ipairs(structures:GetChildren()) do
-            if model:IsA("Model") and
-                typeof(model:GetAttribute("WallCFrame"))=="CFrame" and
-                not isGlassModel(model) then
-                chosenWallId=chosenWallId or model:GetAttribute("ItemId")
+        for _,m in ipairs(structures:GetChildren()) do
+            if m:IsA("Model") and
+                typeof(m:GetAttribute("WallCFrame"))=="CFrame" and
+                not isGlassModel(m) then
+                chosenWallId=chosenWallId or m:GetAttribute("ItemId")
             end
         end
     end
@@ -3394,8 +3515,6 @@ local function startBuild()
         elseif u.kind=="Floor" then floorsPresent=floorsPresent+1 end
     end
     if wallsPresent>=4 then
-        -- Reuse the actual wall style of the existing castle when it is a
-        -- catalogued structural wall. Different style IDs can collide.
         local row=chosenWallId and
             buildCatalog.byId["Walls|"..tostring(chosenWallId)]
         if row and scoreWall(row.name)>=0 then
@@ -3407,115 +3526,220 @@ local function startBuild()
         notify("Empty plot: TEST ONE WALL under Advanced Tools first.")
         return
     end
-    local requests,protected,already= {},0,0
-    for _,u in ipairs(units) do
-        if u.kind=="Wall" or u.kind=="Floor" then
-            if shellConfirmed(u,baseline) then
-                already=already+1
-            elseif newShellCanAttach(u,baseline) then
-                requests[#requests+1]=u
-            else
-                protected=protected+1
-            end
-        end
-    end
-    if #requests==0 then
-        build.lastAudit="CURRENT PLOT SNAPSHOT\nExisting walls: "..wallsPresent..
-            "\nExisting floors: "..floorsPresent..
-            "\nMatching blueprint pieces: "..already..
-            "\nExcluded to protect older layout: "..protected..
-            "\nNo missing structural pieces match the current repair plan."..
-            "\nThis check does not cover roofs, doors, stairs or Shape details."
-        build.status="Current shell checked; no safe missing pieces identified."
+    local initial,initialStats=shellRepairCandidates(plot,origin,baseline)
+    if #initial==0 then
+        build.lastAudit="AUTO SHELL REPAIR • NO SAFE CANDIDATES\n"..
+            "Existing walls: "..wallsPresent.."\nExisting floors: "..floorsPresent..
+            "\nFloor sample cells: "..initialStats.sampledCells..
+            "\nMissing floor sample cells: "..initialStats.missingCells..
+            "\nProtected by attachment checks: "..initialStats.protected..
+            "\nNo eligible missing sections found. A visual gap may lie "..
+            "outside the current blueprint or below the 4-stud scan resolution."
+        build.status="Plot scanned: no safe shell repair candidates."
         refreshBuildStatus()
         notify(build.status)
         return
     end
-    if not eventFor("Wall") or not eventFor("Floor") then
-        notify("Structural PlaceWall or PlaceFloor event unavailable")
-        return
-    end
-    -- Small confirmed batches: a server rejection is not an occupied wall.
-    -- Re-run this action to continue once the accepted pieces replicate.
-    local maxAttempt=math.min(#requests,65)
-    build.busy=true
-    build.cancel=false
-    build.total=maxAttempt
-    build.sent=0
-    build.status="Repairing current plot: 0 / "..maxAttempt
+    local maxRounds=4
+    local maxRequests=120
+    local maxPerTarget=3
+    local maxNoProgress=15
+    build.busy=true;build.cancel=false
+    build.sent=0;build.total=maxRequests
+    build.status="Auto-repair: "..#initial.." candidates / checking..."
     refreshBuildStatus()
     task.spawn(function()
-        local accepted,unconfirmed,skipped,attempted=0,0,0,0
-        local consecutive=0
-        local samples={}
-        for i=1,maxAttempt do
-            if not alive or build.cancel or consecutive>=3 then break end
-            local u=requests[i]
+        local totalSent,confirmed,partial,failed,already,protected=0,0,0,0,0,0
+        local retried,passes,withoutProgress=0,0,0
+        local targetAttempts={}
+        local entries={}
+        local samples,initialMissing=initialStats.missingCells,#initial
+        local lastStats=initialStats
+        local stoppedReason=""
+        local function record(u,tries,result,reason,before,after)
+            entries[#entries+1]=shellLabel(u)..
+                " | tries="..tries.." | "..result..
+                " | coverage "..math.floor(before*100+.5).."->"..
+                math.floor(after*100+.5).."% | "..reason
+        end
+        for pass=1,maxRounds do
+            if build.cancel or not alive or totalSent>=maxRequests or
+                withoutProgress>=maxNoProgress then break end
+            passes=pass
             local physical=occupiedFromPlot(plot,origin)
-            if shellConfirmed(u,physical) then
-                skipped=skipped+1
-            elseif not newShellCanAttach(u,baseline) then
-                skipped=skipped+1
-            else
-                local ok,err=pcall(function() fireUnit(u) end)
-                attempted=attempted+1
-                build.sent=attempted
-                local confirmed=false
-                if ok then
-                    for k=1,12 do
-                        if not alive or build.cancel then break end
-                        task.wait(.20)
-                        if shellConfirmed(u,occupiedFromPlot(plot,origin)) then
-                            confirmed=true;break
+            local queue,stats=shellRepairCandidates(plot,origin,physical)
+            lastStats=stats
+            if #queue==0 then
+                stoppedReason="No eligible missing sections remain."
+                break
+            end
+            local passProgress=0
+            for _,u in ipairs(queue) do
+                if not alive or build.cancel or totalSent>=maxRequests or
+                    withoutProgress>=maxNoProgress then break end
+                local key=shellKey(u)
+                if (targetAttempts[key] or 0)>=maxPerTarget then
+                    protected=protected+1
+                else
+                    local live=occupiedFromPlot(plot,origin)
+                    if shellConfirmed(u,live) then
+                        already=already+1
+                    elseif not newShellCanAttach(u,live) then
+                        protected=protected+1
+                    else
+                        local before=shellCoverage(u,live)
+                        local localTries=0
+                        local finalCoverage=before
+                        local result="UNCONFIRMED"
+                        local reason=""
+                        while (targetAttempts[key] or 0)<maxPerTarget and
+                            totalSent<maxRequests and not build.cancel and alive do
+                            live=occupiedFromPlot(plot,origin)
+                            if shellConfirmed(u,live) then
+                                result="CONFIRMED (late replication)"
+                                finalCoverage=1
+                                break
+                            end
+                            if not newShellCanAttach(u,live) then
+                                result="SKIPPED (attachment changed)"
+                                break
+                            end
+                            targetAttempts[key]=(targetAttempts[key] or 0)+1
+                            localTries=localTries+1
+                            if localTries>1 then retried=retried+1 end
+                            totalSent=totalSent+1
+                            build.sent=totalSent
+                            local ok,err=pcall(function() fireUnit(u) end)
+                            local seen=false
+                            local waitTicks=10+4*(localTries-1)
+                            if ok then
+                                for tick=1,waitTicks do
+                                    if not alive or build.cancel then break end
+                                    task.wait(.22)
+                                    local latest=occupiedFromPlot(plot,origin)
+                                    if shellConfirmed(u,latest) then
+                                        seen=true
+                                        finalCoverage=1
+                                        break
+                                    end
+                                end
+                            end
+                            local updated=occupiedFromPlot(plot,origin)
+                            finalCoverage=shellCoverage(u,updated)
+                            if seen or shellConfirmed(u,updated) then
+                                result="CONFIRMED"
+                                reason="Matching real server-replicated structure found."
+                                break
+                            end
+                            reason=shellSuspectedCause(u,updated,before,
+                                finalCoverage,not ok and err or nil)
+                            if not ok then
+                                result="CLIENT ERROR"
+                                break
+                            end
+                            if finalCoverage>before+.10 then
+                                result="PARTIAL (rescan required)"
+                                break
+                            end
+                            if (targetAttempts[key] or 0)<maxPerTarget then
+                                build.status="Retrying "..shellLabel(u)..
+                                    " / attempt "..(targetAttempts[key]+1)..
+                                    " of "..maxPerTarget
+                                refreshBuildStatus()
+                                task.wait(.45*localTries)
+                            end
+                        end
+                        if localTries>0 then
+                            if result=="CONFIRMED" or
+                                result=="CONFIRMED (late replication)" then
+                                confirmed=confirmed+1
+                                passProgress=passProgress+1
+                                withoutProgress=0
+                            elseif result=="PARTIAL (rescan required)" then
+                                partial=partial+1
+                                passProgress=passProgress+1
+                                withoutProgress=0
+                            else
+                                failed=failed+1
+                                withoutProgress=withoutProgress+1
+                            end
+                            record(u,localTries,result,reason,
+                                before,finalCoverage)
+                            build.status="AUTO SHELL: "..confirmed..
+                                " confirmed / "..partial.." partial / "..
+                                failed.." unresolved / "..totalSent..
+                                " requests (pass "..pass.."/"..maxRounds..")"
+                            refreshBuildStatus()
+                            task.wait(.22)
                         end
                     end
                 end
-                if confirmed then
-                    accepted=accepted+1
-                    consecutive=0
-                else
-                    unconfirmed=unconfirmed+1
-                    consecutive=consecutive+1
-                    local center=u.kind=="Wall" and (u.a+u.b)*.5
-                        or u.cf.Position
-                    if #samples<12 then
-                        samples[#samples+1]=u.kind.." floor "..(u.lv+1)..
-                            " ("..math.floor(center.X+.5)..","..
-                            math.floor(center.Y+.5)..","..
-                            math.floor(center.Z+.5)..")"..
-                            (not ok and (" / "..tostring(err):sub(1,60)) or
-                            " / no server-confirmed piece")
-                    end
-                end
             end
-            build.status="Current plot: "..accepted.." confirmed / "..
-                unconfirmed.." unconfirmed / "..skipped.." already placed"
-            refreshBuildStatus()
-            task.wait(.12)
+            if passProgress==0 then
+                stoppedReason="No new confirmed/partial progress this pass."
+                break
+            end
+            -- Let server replication settle before scanning the next pass.
+            task.wait(1.2)
         end
+        if build.cancel then stoppedReason="Stopped by user."
+        elseif withoutProgress>=maxNoProgress then
+            stoppedReason="Safety pause: "..maxNoProgress..
+                " unresolved targets without progress; no blind spam."
+        elseif totalSent>=maxRequests then
+            stoppedReason="Safety request budget reached ("..maxRequests..")."
+        elseif stoppedReason=="" then
+            stoppedReason="Reached "..maxRounds.." automatic scan passes."
+        end
+        local ending=occupiedFromPlot(plot,origin)
+        local remaining,endingStats=shellRepairCandidates(plot,origin,ending)
+        local afterWalls,afterFloors=0,0
+        for _,v in ipairs(ending) do
+            if v.kind=="Wall" then afterWalls=afterWalls+1
+            elseif v.kind=="Floor" then afterFloors=afterFloors+1 end
+        end
+        local header="PLOT STUDIO • AUTO SHELL REPAIR DIAGNOSTIC\n"..
+            "Plot: "..plot.Name..
+            "\nDesign: "..tostring(state.design)..
+            " | Storeys: "..tostring(state.floors)..
+            " | Wall ID: "..tostring(stairCatalog.wall and stairCatalog.wall.id)..
+            "\nPre-existing walls/floors: "..wallsPresent.."/"..floorsPresent..
+            "\nFinal observed walls/floors: "..afterWalls.."/"..afterFloors..
+            "\nInitial candidates: "..initialMissing..
+            "\nInitial missing floor cells (4-stud samples): "..samples..
+            "\nFinal missing floor cells: "..endingStats.missingCells..
+            "\nRemaining eligible candidates: "..#remaining..
+            "\nProtected/skipped by layout checks: "..protected..
+            "\nConfirmed target placements: "..confirmed..
+            "\nPartial coverage progress: "..partial..
+            "\nUnconfirmed targets: "..failed..
+            "\nAlready present on live recheck: "..already..
+            "\nRemote requests sent: "..totalSent..
+            "\nRetry requests: "..retried..
+            "\nAutomatic scan passes: "..passes..
+            "\nStop reason: "..stoppedReason..
+            "\n\nINTERPRETATION\n"..
+            "CONFIRMED means the requested wall/floor coverage appeared in "..
+            "replicated plot geometry. PARTIAL means only some of the area "..
+            "appeared; it is re-scanned, not blindly duplicated. "..
+            "UNCONFIRMED means no matching geometry was observed after "..
+            "the waits. FireServer does not provide a server rejection reason."..
+            "\nSuspected causes are diagnostic hints, NOT actual error codes."..
+            "\n\nPRACTICAL FIXES\n"..
+            "1. If floor coverage stays partial, inspect the coordinates "..
+            "for an old slab edge, stairwell, or incompatible floor size."..
+            "\n2. If walls stay unconfirmed, compare their endpoints to "..
+            "existing wall models and try one ordinary in-game wall."..
+            "\n3. If everything is unconfirmed, check plot ownership, "..
+            "build permissions, remote arguments and executor errors."..
+            "\n4. Copy this FULL LOG and share it; don't clear the plot."..
+            "\n\nPLACEMENT RESULTS ("..#entries..")\n"
+        build.lastAudit=header..table.concat(entries,"\n")
+        print("[Plot Studio Full Repair Diagnostic]\n"..build.lastAudit)
         build.busy=false
-        build.lastAudit="CURRENT PLOT REPAIR AUDIT\n"..
-            "Pre-existing walls: "..wallsPresent..
-            "\nPre-existing floors: "..floorsPresent..
-            "\nMissing candidates: "..#requests..
-            "\nProtected because layout differs: "..protected..
-            "\nAlready matched: "..already..
-            "\nNewly confirmed: "..accepted..
-            "\nSent but unconfirmed: "..unconfirmed..
-            "\nSkipped after live recheck: "..skipped..
-            "\nNot attempted: "..math.max(0,#requests-attempted-skipped)..
-            "\n\nUnconfirmed is NOT proof of a server error. "..
-            "Further requests stop after 3 consecutive unconfirmed placements."..
-            (#samples>0 and ("\n\nSAMPLE MISSING LOCATIONS\n"..
-                table.concat(samples,"\n")) or "")
-        if consecutive>=3 then
-            build.status="Stopped after 3 unconfirmed structures; inspect audit."
-        elseif build.cancel then
-            build.status="Structure repair stopped."
-        else
-            build.status="Structure repair: "..accepted.." confirmed / "..
-                unconfirmed.." unconfirmed. Continue later if pieces remain."
-        end
+        build.status="AUTO REPAIR: "..confirmed.." confirmed / "..
+            partial.." partial / "..failed.." unconfirmed; "..
+            #remaining.." candidates remain. COPY LOG."
         refreshBuildStatus()
         notify(build.status)
         if alive and state.page=="Builder" then switchPage("Builder") end
