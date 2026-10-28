@@ -1124,8 +1124,18 @@ local function verifyPlacedStair(plot,request,before)
     for _,model in ipairs(furniture:GetChildren()) do
         if model:IsA("Model") and not before[model] and
             tostring(model:GetAttribute("ItemId") or "")==tostring(request.id) then
-            if (model:GetPivot().Position-request.cf.Position).Magnitude<8 then
-                return true
+            if (model:GetPivot().Position-request.cf.Position).Magnitude<4 then
+                local ok,box,actual=pcall(function() return model:GetBoundingBox() end)
+                if ok and typeof(actual)=="Vector3" then
+                    local intended=request.size
+                    -- Refuse to extrapolate a whole staircase from a block
+                    -- that ignored its requested size.
+                    if math.abs(actual.X-intended.X)<math.max(2,intended.X*.4)
+                        and math.abs(actual.Y-intended.Y)<math.max(1,intended.Y*.75)
+                        and math.abs(actual.Z-intended.Z)<math.max(2,intended.Z*.4) then
+                        return true
+                    end
+                end
             end
         end
     end
@@ -1310,6 +1320,153 @@ local function testStairShape()
     end)
 end
 
+
+-- Convert carefully selected preview ornaments into a real editable Shapes plan.
+-- Large strips are partitioned into smaller pieces; no untested shape IDs.
+local function ornateDetailUnits(plot,origin,maxUnits)
+    local result={}
+    if not previewFolder then beginPreview() end
+    if not previewFolder or not stairCatalog.shape then return result end
+    local h=15
+    pcall(function()
+        local cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig)
+        if type(cfg.StoreyHeight)=="number" then h=cfg.StoreyHeight end
+    end)
+    h=math.clamp(h,6,30)
+    local prioritized={}
+    local function rank(name)
+        local low=name:lower()
+        if low:find("spire",1,true) or low:find("finial",1,true) then return 100 end
+        if low:find("battlement",1,true) or low:find("merlon",1,true) then return 95 end
+        if low:find("column",1,true) or low:find("capital",1,true) then return 85 end
+        if low:find("cornice",1,true) or low:find("keystone",1,true) then return 80 end
+        if low:find("gate",1,true) or low:find("portcullis",1,true) then return 78 end
+        if low:find("lantern",1,true) or low:find("banner",1,true) then return 75 end
+        if low:find("balustrade",1,true) or low:find("railing",1,true) then return 70 end
+        if low:find("lintel",1,true) or low:find("sill",1,true) then return 67 end
+        return 25
+    end
+    for _,p in ipairs(previewFolder:GetChildren()) do
+        if p:IsA("BasePart") and p:GetAttribute("PlotStudioKind")=="Decor" and
+            not p.Name:lower():find("stair",1,true) and
+            not p.Name:lower():find("landing",1,true) then
+            prioritized[#prioritized+1]={part=p,priority=rank(p.Name)}
+        end
+    end
+    table.sort(prioritized,function(a,b)
+        if a.priority~=b.priority then return a.priority>b.priority end
+        return a.part.Name<b.part.Name
+    end)
+    local cap=maxUnits or 220
+    local layerMax=math.min(state.floors,(designs[state.design] or designs[1]).floors)
+    for _,entry in ipairs(prioritized) do
+        if #result>=cap then break end
+        local p=entry.part
+        local height=p.Position.Y-origin.Position.Y
+        -- Skip extreme finials above the build envelope, rather than aborting
+        -- the remaining ornamentation with an out-of-height request.
+        if height>=0 and height<layerMax*h+7 then
+            local countX=math.ceil(p.Size.X/12)
+            local countY=math.ceil(p.Size.Y/12)
+            local countZ=math.ceil(p.Size.Z/12)
+            if countX*countY*countZ<=20 then
+                local sx,sy,sz=p.Size.X/countX,p.Size.Y/countY,p.Size.Z/countZ
+                for ix=1,countX do
+                    for iy=1,countY do
+                        for iz=1,countZ do
+                            if #result>=cap then break end
+                            local cf=p.CFrame*CFrame.new(
+                                (ix-(countX+1)/2)*sx,
+                                (iy-(countY+1)/2)*sy,
+                                (iz-(countZ+1)/2)*sz
+                            )
+                            result[#result+1]={
+                                kind="DetailShape",id=stairCatalog.shape.id,cf=cf,
+                                size=Vector3.new(sx,sy,sz),
+                                color=p:GetAttribute("PlotStudioColor"),
+                                material=p:GetAttribute("PlotStudioMaterial"),
+                                lv=math.clamp(math.floor((cf.Position.Y-origin.Position.Y)/h),0,4)
+                            }
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return result
+end
+local function staircaseAndDetails(plot,origin)
+    local result,skipped={},0
+    if not stairTest.passed or stairTest.signature~=buildSignature(plot,origin)
+        or stairTest.itemId~=(stairCatalog.shape and stairCatalog.shape.id) then
+        return nil,"Test one real Shape tread first"
+    end
+    local stairs=rawStairUnits(plot,origin)
+    local details=ornateDetailUnits(plot,origin,260)
+    for _,u in ipairs(stairs) do
+        if not sameStairUnit(u,stairTest.first)
+            and not stairsAlreadyPresent(plot,u) then
+            result[#result+1]=u
+        else skipped=skipped+1 end
+    end
+    for _,u in ipairs(details) do
+        if not stairsAlreadyPresent(plot,u) then
+            result[#result+1]=u
+        else skipped=skipped+1 end
+    end
+    return result,nil,#stairs,#details,skipped
+end
+local function finishCastle()
+    if build.busy then notify("Construction already running");return end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin then notify("Owned plot not detected");return end
+    if not ensureCatalog() or not stairCatalog.shape then
+        notify("No Shapes block detected; finish mode unavailable")
+        return
+    end
+    local units,err,stairs,details,skipped=staircaseAndDetails(plot,origin)
+    if not units then notify(err);return end
+    if #units==0 then notify("All matching staircase/detail positions are already filled");return end
+    if not eventFor("Item") then notify("PlaceItem event missing");return end
+    local pace=BUILD_SPEEDS[state.buildSpeed] or BUILD_SPEEDS.Fast
+    build.busy=true;build.cancel=false
+    build.total=#units;build.sent=0
+    build.status="Finishing: 0 / "..#units.." Shapes"
+    refreshBuildStatus()
+    notify("Finishing "..stairs.." stair treads and up to "..details.." detail shapes")
+    task.spawn(function()
+        local sent,skip=0,skipped
+        for i,u in ipairs(units) do
+            if not alive or build.cancel then break end
+            if stairsAlreadyPresent(plot,u) then
+                skip=skip+1
+            else
+                local ok,errText=pcall(function() fireUnit(u) end)
+                if not ok then
+                    build.status="Finish stopped: "..tostring(errText):sub(1,70)
+                    break
+                end
+                sent=sent+1
+                build.sent=sent
+                if i%10==0 or i==#units then
+                    build.status="Finishing: "..i.." / "..#units.." / skipped "..skip
+                    refreshBuildStatus()
+                end
+                task.wait(pace.interval+(sent%pace.burst==0 and pace.cooldown or 0))
+            end
+        end
+        build.busy=false
+        if build.cancel then build.status="Finishing stopped at "..sent
+        elseif build.status:find("Finish stopped",1,true) then
+            -- Preserve error.
+        else build.status="Finished sending "..sent.." Shape requests; inspect the plot" end
+        refreshBuildStatus()
+        notify(build.status..". Server acceptance is not guaranteed.")
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+
 local function startBuild()
     if build.busy then notify("A build is already running");return end
     local units,plot,origin,stats=buildPlan()
@@ -1326,20 +1483,14 @@ local function startBuild()
     -- Multi-storey shells are allowed. An accepted real Shapes tread unlocks
     -- the preview-derived staircase. Prefabricated stair sets are only catalogued
     -- until their actual dimensions and placement can be checked in-game.
-    if state.floors>1 and stairTest.passed and
-        stairTest.signature==buildSignature(plot,origin) and stairTest.itemId==
-            (stairCatalog.shape and stairCatalog.shape.id) then
-        local stairUnits=rawStairUnits(plot,origin)
-        local added=0
-        for _,u in ipairs(stairUnits) do
-            if not sameStairUnit(u,stairTest.first) and not stairsAlreadyPresent(plot,u) then
-                units[#units+1]=u
-                added=added+1
-            end
+    if stairTest.passed and stairTest.signature==buildSignature(plot,origin) then
+        local finishing=staircaseAndDetails(plot,origin)
+        if finishing then
+            for _,u in ipairs(finishing) do units[#units+1]=u end
+            notify("Including "..#finishing.." verified-ID stair/detail Shapes")
         end
-        notify("Stair builder: "..added.." custom stair treads queued")
     elseif state.floors>1 then
-        notify("Stair shapes not verified; continuing shell without real stairs")
+        notify("Shape test not passed: only core shell will be submitted")
     end
     if #units>900 then notify("Blueprint exceeds 900-piece limit");return end
     notify("Occupancy scan: "..(stats and stats.skipped or 0)..
@@ -1367,7 +1518,7 @@ local function startBuild()
             if not alive or build.cancel then break end
             if i%pace.burst==1 then fresh=occupiedFromPlot(plot,origin) end
             local blocked=false
-            if u.kind=="StairShape" then
+            if u.kind=="StairShape" or u.kind=="DetailShape" then
                 blocked=stairsAlreadyPresent(plot,u)
             elseif u.kind=="Wall" then
                 blocked=#openWallSegments(u,fresh)==0
@@ -1381,7 +1532,9 @@ local function startBuild()
             else
                 local ok,err=pcall(function() fireUnit(u) end)
                 if not ok then failures=failures+1;notify(tostring(err):sub(1,100));break end
-                if u.kind~="StairShape" then fresh[#fresh+1]=u end
+                if u.kind~="StairShape" and u.kind~="DetailShape" then
+                    fresh[#fresh+1]=u
+                end
                 sent=sent+1
                 build.sent=sent
                 if i%12==0 or i==#units then
@@ -1522,6 +1675,12 @@ end
 
 switchPage = function(page)
     state.page = page
+    if page=="Builder" and not stairCatalog.scanned and not stairCatalog.scanning then
+        task.spawn(function()
+            scanStairs()
+            if alive and state.page=="Builder" then switchPage("Builder") end
+        end)
+    end
     for name, entry in pairs(navButtons) do
         local selected = page == name
         entry.button.BackgroundColor3 = selected and C.purpleDark or C.panel
