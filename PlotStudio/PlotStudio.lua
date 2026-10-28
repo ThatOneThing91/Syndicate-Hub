@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.1: non-destructive roof/door/stair repairs and full-plot side wings
+    Standalone Plot Studio v2.2: structural-first repairs, compact controls, and real shell previews
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -135,7 +135,7 @@ local state = {
     page = "Overview", filter = "ALL", design = 1,
     material = "Cobblestone", color = swatches[1][1], colorName = "Amethyst",
     floors = 5, grid = true, confirm = true, notifications = true, compact = false,
-    buildSpeed = "Fast", autoStyle = true,
+    buildSpeed = "Fast", autoStyle = true, advancedBuilder = false,
 }
 
 local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
@@ -165,7 +165,7 @@ local emblem = corner(ui("Frame", {
     BackgroundColor3 = C.purple, BorderSizePixel = 0,
 }, header), 10)
 text(emblem, "P", 0, 0, 38, 38, 22, C.bg, true, {TextXAlignment = Enum.TextXAlignment.Center})
-text(header, "PLOT STUDIO", 65, 12, 245, 25, 19, C.white, true)
+text(header, "PLOT STUDIO  V2.2", 65, 12, 285, 25, 19, C.white, true)
 text(header, "STORAGE HUNTERS  /  BLUEPRINT LAB", 65, 36, 280, 17, 10, C.dim, false)
 local headerStatus = corner(ui("Frame", {
     AnchorPoint = Vector2.new(1, 0.5),
@@ -173,7 +173,7 @@ local headerStatus = corner(ui("Frame", {
     Size = UDim2.fromOffset(102, 25),
     BackgroundColor3 = C.purpleDark, BorderSizePixel = 0,
 }, header), 12)
-text(headerStatus, "●  BUILD BETA", 8, 0, 92, 25, 10, C.white, true)
+text(headerStatus, "●  V2.2 BETA", 8, 0, 92, 25, 10, C.white, true)
 
 local minus = button(header, "—", 0, 0, 32, 30, false, nil)
 minus.AnchorPoint = Vector2.new(1, 0.5)
@@ -3662,8 +3662,18 @@ renderPage = function(page)
             switchPage("Builder")
         end)
         plusF.TextSize=19
-        text(opts,"MAX 5  •  TEST STAIRS BEFORE BUILD",16,132,285,18,10,C.muted,true)
+        text(opts,"MAX 5  •  STAIRS DO NOT BLOCK MASONRY",16,132,350,18,10,C.muted,true)
 
+        local advancedControl=block(scroll,65,C.raised)
+        text(advancedControl,"ESSENTIAL WORKFLOW",16,8,284,21,13,C.white,true)
+        text(advancedControl,"Structure, repairs and a verified preview first.",16,31,300,20,10,C.dim,false)
+        button(advancedControl,state.advancedBuilder and "HIDE ADVANCED" or "ADVANCED TOOLS",
+            0,17,142,31,state.advancedBuilder,function()
+                state.advancedBuilder=not state.advancedBuilder
+                switchPage("Builder")
+            end).Position=UDim2.new(1,-155,0,17)
+
+        if state.advancedBuilder then
         local speedBox=block(scroll,120)
         text(speedBox,"CONSTRUCTION SPEED",16,10,400,25,15,C.white,true)
         local speedModes={"Steady","Fast","Turbo"}
@@ -3699,24 +3709,24 @@ renderPage = function(page)
         text(choice,"The studio chooses materials by architectural role, not one material for the whole castle.",
             16,116,442,18,10,C.dim,false,{Size=UDim2.new(1,-32,0,18)})
 
-        local action=block(scroll,207,C.raised)
-        text(action,"CONCEPT vs. ACTUAL BUILD",16,10,410,24,15,C.mint,true)
-        text(action,"Design Concept shows the artistic goal. Actual Build View shows only placement requests the current engine intends to send.",16,38,430,36,12,C.dim,false,{
+        end -- advanced construction speed + palette
+        local action=block(scroll,177,C.raised)
+        text(action,"DESIGN IDEA vs. REAL SHELL REQUESTS",16,10,410,24,15,C.mint,true)
+        text(action,"Concept is an artistic mockup. Real Shell View shows ONLY missing walls/floors after occupancy checks. It does not promise doors, roof, windows or ornaments.",16,38,430,43,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,36),TextWrapped=true
         })
-        button(action,"DESIGN CONCEPT",16,88,145,32,false,beginPreview)
-        button(action,"ACTUAL BUILD VIEW",170,88,166,32,true,showBuildablePreview)
-        button(action,"HIGHLIGHT ACCESS",16,125,157,26,false,highlightStairRoute)
-        button(action,"CHECK DESIGN",180,125,141,26,false,previewAccessAudit)
-        button(action,"CLEAR PREVIEW",16,159,141,26,false,function() clearPreview(false) end)
-        text(action,"SIZE: "..lastFootprint,168,160,270,25,10,C.mint,false,{
-            Size=UDim2.new(1,-178,0,25),TextWrapped=true
+        button(action,"CONCEPT ONLY",16,86,145,32,false,beginPreview)
+        button(action,"REAL SHELL VIEW",170,86,166,32,true,showBuildablePreview)
+        button(action,"ACCESS ROUTE",16,122,145,26,false,highlightStairRoute)
+        button(action,"CLEAR PREVIEW",170,122,145,26,false,function() clearPreview(false) end)
+        text(action,"SIZE: "..lastFootprint,16,151,400,19,10,C.mint,false,{
+            Size=UDim2.new(1,-32,0,19),TextWrapped=true
         })
 
-
+        if state.advancedBuilder then
         local stairsBox=block(scroll,191,C.raised)
         text(stairsBox,"BUILD CATALOG + STAIRS",16,11,420,24,15,C.white,true)
-        text(stairsBox,"The live catalog now scans automatically. Confirm ONE tread before building custom stairs and ornate details.",16,37,420,48,11,C.dim,false,{
+        text(stairsBox,"Optional Shape test ONLY for new staircase pieces. Failed stair tests cannot block structural walls, floors, roofs, doors or wings.",16,37,420,48,11,C.dim,false,{
             Size=UDim2.new(1,-32,0,45),TextWrapped=true
         })
         local status=stairTest.passed and ("VERIFIED / "..tostring(stairCatalog.shape and stairCatalog.shape.name or "Shape")) or stairStatus
@@ -3731,7 +3741,7 @@ renderPage = function(page)
         end)
         button(stairsBox,"TEST STAIR TREAD",161,118,182,32,stairTest.passed,function()
             modal("Test one actual staircase tread?",
-                "This uses the game's Shapes placement to put ONE real, custom-sized tread inside the planned stairwell. It may cost game currency and might be rejected. Only a confirmed tread will unlock the remaining stairs in the full build.",
+                "Optional diagnostic: tests ONE custom-sized Shape tread and checks server replication. This is NOT required to continue the structural build or other repairs.",
                 "PLACE 1 TREAD",testStairShape)
         end)
         local stairList={}
@@ -3780,7 +3790,8 @@ renderPage = function(page)
                 Size=UDim2.new(1,-32,0,16)
             })
 
-        local completion=block(scroll,275,C.raised)
+        end -- advanced Shape diagnostics and Windows setup
+        local completion=block(scroll,318,C.raised)
         text(completion,"ENTRANCE • ROOF • COURTYARD",16,10,440,25,15,C.white,true)
         text(completion,"Non-destructive repairs for the castle already on your plot. Each new placement type starts with a one-piece test.",
             16,37,435,38,11,C.dim,false,{
@@ -3829,11 +3840,21 @@ renderPage = function(page)
                 "For the two castle designs, add real two-storey side-wing walls and floors around the existing tall hall. Uses the unlocked plot size, skips occupied pieces, confirms each request and stops after repeated failures. No bulldozing.",
                 "BUILD WINGS",extendSideWings)
         end)
-        text(completion,"Suggested order: open entrance → repair stairs → add wings → test roof → add ornaments.",
-            16,243,430,25,10,C.dim,false,{
-                Size=UDim2.new(1,-32,0,25),TextWrapped=true
+        button(completion,"FINISH DECORATIONS",16,241,190,31,false,function()
+            modal("Finish missing ornaments on this plot?",
+                "Adds a bounded set of missing Shape-based details. Each is checked in the real plot and stops after three consecutive unconfirmed requests. Existing walls are untouched. Stair tests are not required for ornament attempts.",
+                "ADD ORNAMENTS",finishCastle)
+        end)
+        button(completion,"WINDOW OPTIONS",214,241,165,31,false,function()
+            state.advancedBuilder=true
+            switchPage("Builder")
+        end)
+        text(completion,"Safe sequence: structure → door → stair gaps → low wings → real roofs → ornaments.",
+            16,284,430,22,10,C.dim,false,{
+                Size=UDim2.new(1,-32,0,22),TextWrapped=true
             })
 
+        if state.advancedBuilder then
         local finishPanel=block(scroll,164,C.raised)
         text(finishPanel,"FINISH OR REPAIR EXISTING CASTLE",16,11,440,26,15,C.white,true)
         text(finishPanel,"Use verified stairs and ornament Shapes AFTER masonry and real windows. Glass-wall repair is unrelated to missing details.",16,39,430,43,11,C.dim,false,{
@@ -3858,30 +3879,32 @@ renderPage = function(page)
             Size=UDim2.new(1,-215,0,27),TextTruncate=Enum.TextTruncate.AtEnd
         })
 
+        end -- advanced glass-wall and Shape tools
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
         text(builderPanel,"BUILD STRUCTURE places only missing walls and floors. Stair tests cannot block it. Roofs, doors, windows and Shapes use separate checks; the concept preview is not a placement guarantee.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
-        button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
+        if state.advancedBuilder then
+        button(builderPanel,"TEST ONE WALL",16,115,154,34,false,function()
             modal("Verify one solid wall?",
                 "Please do NOT bulldoze the plot for another prototype test. This places only ONE wall in a free spot and verifies that it is not transparent. The full castle will not run if the wall material is still glass. This may spend in-game currency.",
                 "TEST SOLID WALL",testWall)
         end)
-        button(builderPanel,"2. START BUILD",176,115,160,34,build.passed,function()
-            if not build.passed then modal("Test required","Press TEST ONE WALL and wait for a successful confirmation before starting the shell build.");return end
+        end
+        button(builderPanel,"BUILD / REPAIR SHELL",16,115,229,34,false,function()
             modal("Build the missing structural shell?",
                 "ACTUAL BUILD VIEW displays the remaining wall and floor placement requests after the current plot is checked. Stair confirmation is NOT required. This action does not build roof, windows, doors, or decorative Shapes. Your existing plot will NOT be erased. Some requests may still fail collision or server checks.",
                 "BUILD STRUCTURE",startBuild)
         end)
-        button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
-        button(builderPanel,"VIEW BUILD AUDIT",153,156,182,26,false,function()
+        button(builderPanel,"STOP",252,115,84,34,false,stopBuild)
+        button(builderPanel,"VIEW BUILD AUDIT",16,156,190,26,false,function()
             modal("Last construction audit",build.lastAudit)
         end)
         local note=block(scroll,80)
-        sectionNote(note,"NO MORE PLOT RESETS FOR TESTING",
-            "Inspect the U-shaped stair route first, test one solid wall and one walkable Shape. Finish the existing castle instead of rebuilding its shell.",7)
+        sectionNote(note,"KEEP YOUR EXISTING PLOT",
+            "Build/repair missing walls and floors without stair confirmation. Use the independent door, roof and wing operations for missing features.",7)
     elseif page=="Catalog" then
         pageHead(scroll,"Build Catalog","Live building items discovered in Storage Hunters.")
         local summary=block(scroll,132,C.raised)
@@ -4204,7 +4227,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 2.1",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 2.2",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -4302,4 +4325,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v2.1 roof and entrance tests, stair gap repair, low wings, and confirmed decoration audits; main hub untouched.")
+print("[Plot Studio] v2.2 structural shell independent of stair tests, compact controls, safer curved facade plan.")
