@@ -799,7 +799,10 @@ local function beginPreview()
         -- the rear hall holds all of the actual upper floors and staircase.
         local royal=state.design==1
         local courtyardZ=-d*.16
-        local rx,rz=w*.405,d*.31
+        -- Keep the curved front FACADES inside the space between the hall
+        -- and detached low wings. The prior 0.405w radius ran directly
+        -- through side-wing masonry and lamp-side pavilion supports.
+        local rx,rz=w*.25,d*.275
         local function curve(cx,cz,rx0,rz0,first,last,lev,col,name)
             local pieces=math.max(3,math.ceil((last-first)*math.max(rx0,rz0)/10))
             for i=1,pieces do
@@ -895,16 +898,12 @@ local function beginPreview()
             deco("Open court paving",x,.18,z,math.max(4,w*.061),.36,6.5,
                 i%2==0 and stone or light,angle-math.pi*.5)
         end
-        -- Just two low pavilions (no tower ring, no blocked center).
+        -- No freestanding pavilion / 'stand' beside lanterns:
+        -- those Shapes intruded into the curved front wall footprint.
+        -- Keep small lanterns toward the front corners, independently
+        -- of the low crescent masonry and the side-wing walls.
         for _,sign in ipairs({-1,1}) do
-            local x,z=sign*w*.33,-d*.355
-            deco("Arcade pavilion plinth",x,.5,z,12,1,12,dark)
-            for _,side in ipairs({-1,1}) do
-                deco("Arcade pavilion column",x+side*4,h*.30,z,
-                    1.2,h*.59,1.2,light)
-            end
-            deco("Low pavilion canopy",x,h*.63,z,14,1,13,roof)
-            lantern(x,z-7.5)
+            lantern(sign*w*.34,-d*.385)
         end
         deco("Sweeping palace pediment",0,floors*h+.85,kz,
             kw*.46,2.2,kd*.22,roof)
