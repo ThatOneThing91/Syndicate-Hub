@@ -4285,11 +4285,11 @@ local function startBuild()
                 "Requests: "..build.sent.."\n"..
                 "Notes: "..(issues=="" and "No reported validation stops." or issues)..
                 "\nWindows are intentionally separate."
-            build.status="START BUILD: "..counts.Wall.." walls, "..
+            build.status="BUILD PASS: "..counts.Wall.." walls, "..
                 counts.Floor.." floors, "..counts.StairShape..
                 " stairs, "..counts.Door.." door, "..counts.Roof..
                 " roofs, "..counts.DetailShape.." details confirmed."..
-                (#errors>0 and " Check status/audit." or "")
+                (#errors>0 and " Some locations skipped; use REPAIR MISSING." or "")
             notify(build.status)
         end
         refreshBuildStatus()
