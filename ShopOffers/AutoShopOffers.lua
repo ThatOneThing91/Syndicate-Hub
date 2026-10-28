@@ -209,22 +209,16 @@ return function(cfg)
         lastEventName=tostring(sourceName)
         local args={...}
         local possibleId=nil
-        local numeric={}
         for _,arg in ipairs(args) do
             if uuid(arg) then possibleId=arg end
-            if type(arg)=="number" then numeric[#numeric+1]=arg end
         end
         if possibleId and not decided[possibleId] then pendingIds[possibleId]=os.clock() end
         local seen={}
         for _,arg in ipairs(args) do
             if type(arg)=="table" then inspect(arg,possibleId,0,seen) end
         end
-        -- Positional (UUID, offer price, fair item value) is valid only with
-        -- exactly two distinct positive numeric fields; no blind single value.
-        if possibleId and #numeric==2 and numeric[1]>=0 and numeric[2]>0 then
-            local delta=(numeric[1]/numeric[2]-1)*100
-            handleOffer(possibleId,delta)
-        end
+        -- Do not guess whether positional numbers are prices, values,
+        -- multipliers or customer statistics. Wait for named fields or GUI.
     end
     -- Other NPCShopper scripts sometimes show the offer only through
     -- the customer's GUI, not an NPCShopper OnClientEvent. Observe visible
@@ -258,7 +252,7 @@ return function(cfg)
         return raw and tonumber(raw:gsub("%s+","")) or nil
     end
     local function readGuiOffer(container)
-        local labels,acceptButton,declineButton,guiId={},{},nil,nil
+        local labels,acceptButton,declineButton,guiId={},nil,nil,nil
         for _,node in ipairs(container:GetDescendants()) do
             if node:IsA("GuiObject") and visible(node) then
                 if node:IsA("TextLabel") or node:IsA("TextButton") or
@@ -299,16 +293,19 @@ return function(cfg)
         end
         local pct,offered,worth=nil,nil,nil
         for _,str in ipairs(labels) do
-            pct=pct or signedPercent(str)
+            local sign=signedPercent(str)
+            if sign~=nil and pct==nil then pct=sign end
             local lower=str:lower()
-            if (lower:find("offer",1,true) or
-                lower:find("bid",1,true)) then
-                offered=offered or parseMoney(str)
-            end
-            if (lower:find("worth",1,true) or
+            local offerPos=lower:find("offer",1,true) or
+                lower:find("bid",1,true)
+            local worthPos=lower:find("worth",1,true) or
                 lower:find("value",1,true) or
-                lower:find("estimated",1,true)) then
-                worth=worth or parseMoney(str)
+                lower:find("estimated",1,true)
+            if offerPos then
+                offered=offered or parseMoney(str:sub(offerPos))
+            end
+            if worthPos then
+                worth=worth or parseMoney(str:sub(worthPos))
             end
         end
         if pct==nil and offered and worth and worth>0 then
@@ -414,7 +411,7 @@ return function(cfg)
         local ok,how=clickNative(target)
         if ok then
             guiHandled[key]=os.clock()
-            statusText.Text=(choice and "GUI ACCEPT " or "GUI DECLINE ")..
+            statusText.Text=(choice and "Sent GUI accept " or "Sent GUI decline ")..
                 tostring(math.floor(d.pct+.5)).."% ("..how..")"
         else
             statusText.Text="Offer visible; "..how
