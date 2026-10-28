@@ -12746,6 +12746,12 @@ return function(cfg)
         if idCount~=1 then possibleId=nil end
         if offerSignal and possibleId and not decided[possibleId] then
             pendingIds[possibleId]=os.clock()
+            -- -100% means accept every valid offer regardless of price;
+            -- this decision requires only the current live offer GUID.
+            if percent<=-100 then
+                handleOffer(possibleId,-100)
+                return
+            end
         end
         local seen={}
         if offerSignal then
@@ -12861,7 +12867,6 @@ return function(cfg)
                 end
             end
         end
-        if not (acceptButton and declineButton) then return nil end
         for key,val in pairs(container:GetAttributes()) do
             if uuid(val) and (key:lower():find("offer",1,true) or
                 key:lower():find("shopper",1,true)) then
@@ -12889,6 +12894,7 @@ return function(cfg)
             pct=(offered/worth-1)*100
         end
         local count=#labels
+        if not pct and not (acceptButton and declineButton) then return nil end
         return {container=container,accept=acceptButton,
             decline=declineButton,id=guiId,pct=pct,labels=labels,
             count=count,offered=offered,worth=worth}
@@ -12909,7 +12915,7 @@ return function(cfg)
                     if not p or p==pg then break end
                     if p:IsA("GuiObject") and not seen[p] then
                         local data=readGuiOffer(p)
-                        if data then
+                        if data and data.accept and data.decline then
                             output[#output+1]=data
                             seen[p]=true
                             break
@@ -12930,6 +12936,43 @@ return function(cfg)
             end
         end
         return result
+    end
+    -- An active NPC offer may be shown in a separate popup with no clickable
+    -- Yes/No controls (e.g., staff offer notifications). Read the comparison
+    -- automatically when ShowOffer/OfferPresented arrives and correlate only
+    -- with a single recent offer UUID.
+    local function offerPanelPercent()
+        local pg=player and player:FindFirstChild("PlayerGui")
+        if not pg then return nil end
+        local found={}
+        for _,node in ipairs(pg:GetDescendants()) do
+            if node:IsA("GuiObject") and visible(node) then
+                local name=node.Name:lower()
+                if name:find("offer",1,true) or
+                    name:find("shopper",1,true) or
+                    name:find("customer",1,true) then
+                    local d=readGuiOffer(node)
+                    if d and d.pct~=nil and d.pct>=-100 and d.pct<=1000 then
+                        found[#found+1]=d
+                    end
+                end
+            end
+        end
+        if #found==0 then return nil end
+        -- Nested frames can represent the SAME offer. Prefer the smallest
+        -- frame containing a valid percentage, but reject differing values.
+        local value=found[1].pct
+        for i=2,#found do
+            if math.abs(found[i].pct-value)>.02 then return nil end
+        end
+        local guid=nil
+        for _,d in ipairs(found) do
+            if d.id then
+                if guid and guid~=d.id then return nil end
+                guid=d.id
+            end
+        end
+        return value,guid
     end
     local function pendingSingleId()
         local id,count=nil,0
@@ -12971,6 +13014,16 @@ return function(cfg)
         local dialogs=guiOffers()
         lastGui=dialogs
         if #dialogs==0 then guiHandled={} end
+        if os.clock()-lastIncomingOfferAt<=12 then
+            local pct,guiGuid=offerPanelPercent()
+            if pct~=nil then
+                local guid=guiGuid or pendingSingleId()
+                if guid then
+                    handleOffer(guid,pct)
+                    return
+                end
+            end
+        end
         if #dialogs~=1 then return end
         local d=dialogs[1]
         if not d.pct then
