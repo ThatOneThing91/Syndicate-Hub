@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.6: multi-pass auto shell repair, measured floor-gap scanning and copyable per-placement diagnostics
+    Standalone Plot Studio v2.6: built-in blueprints, adaptive placement, one-click construction, and optional repairs
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -4717,7 +4717,7 @@ local function showcaseCard(scroll, d, index)
     local preview=button(p,"DETAILS",133,105,95,20,false,function()
         modal(d.name,
             d.subtitle.."\n\n"..tostring(d.floors).." storeys  •  "..d.category..
-            "\n\nConcept blueprint only. 3D model placement, import/export and build automation are planned for a later version.")
+            "\n\nBuilt-in castle design. Use LOAD BLUEPRINT and START BUILD on your own plot. External blueprint file import is not yet supported.")
     end)
     preview.TextSize=10
     return p
@@ -4727,7 +4727,7 @@ renderPage = function(page)
     if not alive then return end
     local scroll=pageView()
     if page=="Overview" then
-        pageHead(scroll,"Your building workspace","Plan incredible builds. Deploy later.")
+        pageHead(scroll,"Your building workspace","Choose a blueprint and build it on your plot.")
         local hero=block(scroll,173,C.raised)
         ui("UIGradient",{
             Color=ColorSequence.new(C.raised,Color3.fromRGB(57,39,89)),
