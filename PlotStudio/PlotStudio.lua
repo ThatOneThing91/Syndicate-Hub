@@ -2872,36 +2872,41 @@ local function startBuild()
     end
     units=masonry
     if not build.passed or build.signature~=buildSignature(plot,origin) then
-        build.passed=false
-        notify("TEST ONE WALL first for this design and storey count")
-        return
+        -- On an existing real masonry castle, accept the already built
+        -- opaque walls as evidence that a solid wall ID is valid. Do not
+        -- require a new single-wall test on every script restart.
+        local knownOpaque=false
+        local folder=plot:FindFirstChild("Structures")
+        if folder then
+            for _,m in ipairs(folder:GetChildren()) do
+                if m:IsA("Model") and
+                    typeof(m:GetAttribute("WallCFrame"))=="CFrame" and
+                    not isGlassModel(m) then
+                    knownOpaque=true
+                    break
+                end
+            end
+        end
+        if not knownOpaque then
+            build.passed=false
+            notify("TEST ONE WALL first on an empty plot; already built opaque walls were not detected.")
+            return
+        end
+        build.passed=true
+        build.signature=buildSignature(plot,origin)
+        build.testUnit=nil
+        notify("Existing solid masonry detected; reusing wall verification.")
     end
     if not stairCatalog.scanned or not stairCatalog.wall then
         notify("Solid wall style unavailable; stopping to prevent all-glass build")
         return
     end
-    -- Reuse real Shapes from previous executions instead of demanding
-    -- another stair test. This check only applies to a NEW full castle
-    -- build, not to roof, door, or wing completion actions.
-    local hasExistingStairs=adoptExistingStairs(plot,origin)
-    if state.floors>1 and not hasExistingStairs then
-        notify("New multi-storey build requires one verified Shape tread, or matching existing walkable stairs. Existing castle repairs remain available.")
-        return
-    end
-    if hasExistingStairs then
-        local finishing=staircaseAndDetails(plot,origin)
-        local stairCount=0
-        if finishing then
-            for _,u in ipairs(finishing) do
-                if u.kind=="StairShape" then
-                    units[#units+1]=u
-                    stairCount=stairCount+1
-                end
-            end
-        end
-        notify("Existing walkable Shape stairs recognized; "..
-            stairCount.." missing staircase units included.")
-    end
+    -- Critical: structural shell construction DOES NOT need a stair
+    -- Shape test. A failed/mismatched Shape test must never lock walls,
+    -- floors, roof repair, doors, or wings.
+    -- Stair gaps are handled in an independent optional repair operation.
+    notify("STRUCTURAL PASS: walls + floors only. No stair verification required.")
+
     if #units>900 then notify("Blueprint exceeds 900-piece limit");return end
     notify("Occupancy scan: "..(stats and stats.skipped or 0)..
         " occupied skipped; "..(stats and stats.trimmed or 0).." walls trimmed.")
@@ -2909,11 +2914,7 @@ local function startBuild()
     for _,kind in ipairs({"Wall","Floor"}) do
         if not eventFor(kind) then notify("Place"..kind.." remote missing");return end
     end
-    if stairTest.passed and not eventFor("Item") then
-        notify("PlaceItem unavailable. Staircase shapes cannot be built.")
-        return
-    end
-    local pace=BUILD_SPEEDS[state.buildSpeed] or BUILD_SPEEDS.Fast
+     local pace=BUILD_SPEEDS[state.buildSpeed] or BUILD_SPEEDS.Fast
     local selectedSpeed=state.buildSpeed
     build.busy=true;build.cancel=false
     build.total=#units
@@ -3202,22 +3203,18 @@ local function showBuildablePreview()
         notify("Owned plot required to preview the actual build plan")
         return
     end
-    -- Unverified roofs are shown only in the DESIGN CONCEPT. Actual Build
-    -- View reflects the masonry pass, not a roof remote we have not tested.
+    -- This is the actual masonry request plan, not the decorative concept.
+    -- Stair and roof repairs are separate verified actions, so don't
+    -- imply this view is a preview of those independent operations.
     local noRoof={}
     for _,u in ipairs(units) do
         if u.kind~="Roof" then noRoof[#noRoof+1]=u end
     end
     units=noRoof
     local previewShapes=false
-    if stairTest.passed and stairTest.signature==buildSignature(plot,origin)
-        and stairCatalog.shape and stairTest.itemId==stairCatalog.shape.id then
-        local finish=staircaseAndDetails(plot,origin)
-        if finish then
-            for _,unit in ipairs(finish) do units[#units+1]=unit end
-            previewShapes=true
-        end
-    end
+    -- A visual Shape in the concept is not necessarily an accepted
+    -- server placement. Do not show optimistic stairs/decor in an
+    -- "actual build" overlay unless that separate feature is requested.
     -- Replace an older request preview without erasing the source layout.
     local existing=previewFolder:FindFirstChild("ActualPlacementPlan")
     if existing then existing:Destroy() end
@@ -3288,7 +3285,7 @@ local function showBuildablePreview()
     notify("PLACEABLE VIEW: "..plannedCount.Wall.." walls / "..
         plannedCount.Floor.." floor units / "..plannedCount.StairShape..
         " stair Shapes / "..plannedCount.DetailShape.." details"..
-        (previewShapes and " (Shape test passed)" or " (UNTESTED decorations hidden)")..
+        " / roofs, windows, doors and Shapes are separate confirmed stages"..
         (hidden>0 and (" / "..hidden.." units beyond preview cap") or "")..
         ". These are requests, not confirmed game placements.")
 end
@@ -3865,7 +3862,7 @@ renderPage = function(page)
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"Build floors, walls, roofs and VERIFIED stairs first. Install real Windows next; add decorative Shapes last. Inspect ACTUAL BUILD VIEW.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"BUILD STRUCTURE places only missing walls and floors. Stair tests cannot block it. Roofs, doors, windows and Shapes use separate checks; the concept preview is not a placement guarantee.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
@@ -3875,8 +3872,8 @@ renderPage = function(page)
         end)
         button(builderPanel,"2. START BUILD",176,115,160,34,build.passed,function()
             if not build.passed then modal("Test required","Press TEST ONE WALL and wait for a successful confirmation before starting the shell build.");return end
-            modal("Build only after inspecting the route",
-                "Review ACTUAL BUILD VIEW, HIGHLIGHT ACCESS and CHECK DESIGN first. The builder attempts floors, walls, roofs and verified stairs. Next use native Windows, then ADD STAIRS + DECOR for final ornament. Some pieces may still be rejected by the game.\n\nDo NOT bulldoze to retest. You can add verified windows and finishing details to existing masonry. Permanent changes may cost currency.",
+            modal("Build the missing structural shell?",
+                "ACTUAL BUILD VIEW displays the remaining wall and floor placement requests after the current plot is checked. Stair confirmation is NOT required. This action does not build roof, windows, doors, or decorative Shapes. Your existing plot will NOT be erased. Some requests may still fail collision or server checks.",
                 "BUILD STRUCTURE",startBuild)
         end)
         button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
