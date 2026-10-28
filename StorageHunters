@@ -12530,7 +12530,7 @@ return function(cfg)
     local listeners={}
     local active=false
     local closed=false
-    local percent=0
+    local percent=25
     local decided={}
     local pendingIds={}
     local offerTickets={}
@@ -12587,7 +12587,7 @@ return function(cfg)
     local adjust=frame(69)
     local info=create("TextLabel",{
         Position=UDim2.fromOffset(12,3),Size=UDim2.new(1,-24,0,18),
-        BackgroundTransparency=1,Text="Accept at or above selected % above/below item value",
+        BackgroundTransparency=1,Text="Accept at/above minimum; decline below",
         TextColor3=muted,TextSize=10,Font=Enum.Font.Gotham,
         TextXAlignment=Enum.TextXAlignment.Left
     },adjust)
@@ -12605,7 +12605,7 @@ return function(cfg)
     corner(plus,6)
     local edit=create("TextBox",{
         Position=UDim2.new(.5,-45,0,26),Size=UDim2.fromOffset(90,32),
-        BackgroundColor3=dark,TextColor3=white,Text="0%",
+        BackgroundColor3=dark,TextColor3=white,Text="+25%",
         TextSize=13,Font=Enum.Font.GothamBold,BorderSizePixel=0,
         ClearTextOnFocus=false,TextXAlignment=Enum.TextXAlignment.Center
     },adjust)
@@ -12626,7 +12626,7 @@ return function(cfg)
     corner(diagnose,5)
     local hint=create("TextLabel",{
         Position=UDim2.fromOffset(12,25),Size=UDim2.new(1,-140,0,22),
-        BackgroundTransparency=1,Text="0% = item value; +10% = 10% above value",
+        BackgroundTransparency=1,Text="Minimum +25% · Lower offers declined",
         TextColor3=muted,TextSize=10,Font=Enum.Font.Gotham,
         TextXAlignment=Enum.TextXAlignment.Left,
         TextTruncate=Enum.TextTruncate.AtEnd
@@ -12636,8 +12636,9 @@ return function(cfg)
         if not value or value~=value then value=percent end
         percent=math.clamp(math.floor(value+.5),-100,100)
         edit.Text=(percent>0 and "+" or "")..tostring(percent).."%"
+        hint.Text="Minimum "..edit.Text.." · Lower offers declined"
     end
-    setPercent(0)
+    setPercent(25)
     watch(connections,minus.Activated,function()
         if not closed then setPercent(percent-5) end
     end)
@@ -12713,7 +12714,7 @@ return function(cfg)
         -- The earlier Cobalt GUIDs are never used as constants.
         decided[id]=true
         pendingIds[id]=nil
-        local accept=pct>=percent-1e-7
+        local accept=pct>=percent
         local ok,err=pcall(function() remote:FireServer(id,accept) end)
         if ok then
             statusText.Text=(accept and "Sent ACCEPT · " or "Sent DECLINE · ")..
