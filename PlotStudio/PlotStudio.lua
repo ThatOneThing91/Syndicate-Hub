@@ -2755,7 +2755,8 @@ local function roofSupported(plot,origin,u)
                 local p=origin:PointToObjectSpace(cf.Position)
                 local lv=m:GetAttribute("Storey")
                 if type(lv)~="number" then lv=math.floor(p.Y/h) end
-                if math.floor(lv)==u.lv and
+                if (math.floor(lv)==u.lv or
+                    math.abs(p.Y-(u.lv+.5)*h)<h*.65) and
                     math.abs(p.X-u.x)<u.sx*.62 and
                     math.abs(p.Z-u.z)<u.sz*.62 then
                     count=count+1
@@ -2796,6 +2797,120 @@ local function newRoofConfirmed(plot,origin,u,before)
     end
     return false
 end
+-- A flat structural cap is a fallback when the game's pitched-roof
+-- event is not accepted. It uses PlaceFloor, the same event already used
+-- for working upper-floor decks, and never pretends to be a sloped roof.
+local function roofCapUnits(plot,origin)
+    local result={}
+    local h=15
+    pcall(function()
+        local cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig)
+        if type(cfg.StoreyHeight)=="number" then h=cfg.StoreyHeight end
+    end)
+    h=math.clamp(h,6,30)
+    for _,roof in ipairs(plannedRoofs(plot,origin)) do
+        if roofSupported(plot,origin,roof) and
+            not roofAt(plot,origin,roof) then
+            local nx,nz=math.ceil(roof.sx/28),math.ceil(roof.sz/28)
+            for ix=1,nx do
+                for iz=1,nz do
+                    local sx,sz=roof.sx/nx,roof.sz/nz
+                    local x=roof.x+(ix-(nx+1)/2)*sx
+                    local z=roof.z+(iz-(nz+1)/2)*sz
+                    local cf=origin*CFrame.new(x,(roof.lv+1)*h-.25,z)
+                    result[#result+1]={
+                        kind="Floor",cf=cf,sx=sx,sz=sz,
+                        lv=roof.lv,color=roof.color,
+                        material=roof.material,roofCap=true
+                    }
+                end
+            end
+        end
+    end
+    return result
+end
+local function addFlatRoofCap()
+    if build.busy then notify("Construction already running");return end
+    if not eventFor("Floor") then
+        notify("PlaceFloor missing; no fallback available")
+        return
+    end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin then notify("Owned plot unavailable");return end
+    beginPreview()
+    local caps=roofCapUnits(plot,origin)
+    if #caps==0 then
+        notify("No supported unroofed wall enclosure found for a flat cap.")
+        return
+    end
+    build.busy=true
+    build.cancel=false
+    build.status="Testing a structural roof-cap slab..."
+    refreshBuildStatus()
+    task.spawn(function()
+        local accepted,unconfirmed,skipped,consecutive=0,0,0,0
+        local maxAttempts=math.min(#caps,24)
+        -- The first slab must be server-confirmed; otherwise no bulk cap.
+        for i=1,maxAttempts do
+            if not alive or build.cancel or consecutive>=2 then break end
+            local u=caps[i]
+            local existing=occupiedFromPlot(plot,origin)
+            do
+                local present=false
+                for _,v in ipairs(existing) do
+                    if surfaceOverlaps(u,v) then present=true;break end
+                end
+                if present then
+                    skipped=skipped+1
+                else
+                    local ok,err=pcall(function() fireUnit(u) end)
+                    local confirmed=false
+                    if ok then
+                        for retry=1,16 do
+                            if not alive or build.cancel then break end
+                            task.wait(.18)
+                            for _,v in ipairs(occupiedFromPlot(plot,origin)) do
+                                if surfaceOverlaps(u,v) then
+                                    confirmed=true;break
+                                end
+                            end
+                            if confirmed then break end
+                        end
+                    end
+                    if confirmed then
+                        accepted=accepted+1
+                        consecutive=0
+                    else
+                        unconfirmed=unconfirmed+1
+                        consecutive=consecutive+1
+                        if not ok then
+                            notify("Roof cap error: "..tostring(err):sub(1,75))
+                        end
+                    end
+                end
+            end
+            build.status="Roof cap: "..accepted.." confirmed / "..
+                unconfirmed.." unconfirmed / "..skipped.." already filled"
+            refreshBuildStatus()
+            task.wait(.25)
+        end
+        build.busy=false
+        build.lastAudit="FLAT ROOF-CAP AUDIT\n"..
+            "Confirmed floor slabs: "..accepted..
+            "\nUnconfirmed: "..unconfirmed..
+            "\nExisting coverage: "..skipped..
+            "\nPlanned slabs: "..#caps..
+            "\nThis is a FLAT FLOOR CAP, not a native pitched roof."..
+            "\nDo not add it if you want the roof area left open."
+        build.status="Roof-cap test: "..accepted.." confirmed / "..
+            unconfirmed.." unconfirmed; "..skipped.." already filled"
+        refreshBuildStatus()
+        notify(build.status)
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+
 local function testNativeRoof()
     if build.busy then notify("A build is already running");return end
     if not eventFor("Roof") then notify("PlaceRoof remote is missing");return end
