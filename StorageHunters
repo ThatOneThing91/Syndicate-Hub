@@ -12808,15 +12808,10 @@ return function(cfg)
                 if closed or not active or decided[guid] then return end
                 local pct,source=bubblePercent()
                 if pct==nil then
-                    local offer=tonumber(offerPrice)
-                    local value=tonumber(itemValue)
-                    if offer and value and value>0 and offer>=0 then
-                        pct=(offer/value-1)*100
-                        source="ShowOffer prices"
-                    end
-                end
-                if pct==nil then
-                    statusText.Text="Offer received; percent unavailable"
+                    -- Do not guess/calibrate prices. The world-sign polling
+                    -- path reads the percentage printed above each shopper,
+                    -- and acts on the actual Accept/Decline controls.
+                    statusText.Text="ShowOffer received · watching shopper sign"
                     return
                 end
                 statusText.Text="Offer "..tostring(math.floor(pct*10+.5)/10)..
@@ -13261,6 +13256,10 @@ return function(cfg)
                 (tostring(recentOutgoing.id).." / "..tostring(recentOutgoing.value)..
                 " / "..tostring(recentOutgoing.shopper)) or "none"),
             "Visible offer dialogs: "..tostring(#dialogs),
+            "Indexed world GUI roots: "..tostring((function()
+                local n=0 for gui in pairs(worldGuiRoots) do
+                    if gui.Parent then n=n+1 end
+                end return n end)()),
             "Pending remote IDs: "..tostring((function()
                 local n=0 for _ in pairs(pendingIds) do n=n+1 end return n end)())
         }
@@ -13278,6 +13277,7 @@ return function(cfg)
             end
         else
             lines[#lines+1]="No ShowOffer / OfferPresented events captured while ON."
+            lines[#lines+1]="GUI scan operates independently of remote events."
         end
         -- If the game's controls have different names, collect a small
         -- sample of visible offer/customer UI elements for the next fix.
