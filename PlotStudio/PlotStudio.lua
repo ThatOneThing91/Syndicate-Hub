@@ -2074,6 +2074,7 @@ local function repairStairGaps()
     local plot=ownedPlot()
     local origin=plot and plotFrame(plot)
     if not origin then notify("Owned plot required");return end
+    beginPreview()
     local all,err=staircaseAndDetails(plot,origin)
     if not all then notify(err);return end
     local missing={}
@@ -2531,6 +2532,7 @@ local function testNativeDoor()
     local plot=ownedPlot()
     local origin=plot and plotFrame(plot)
     if not origin then notify("Owned plot not detected");return end
+    beginPreview()
     local cf=entrancePosition(plot,origin)
     if not cf then notify("No first-floor entrance marked in this design");return end
     -- A previous version could place a full-height PlaceWall lintel
@@ -2706,6 +2708,7 @@ local function testNativeRoof()
     local plot=ownedPlot()
     local origin=plot and plotFrame(plot)
     if not origin then notify("Owned plot required for roof test");return end
+    beginPreview()
     local chosen
     for _,u in ipairs(plannedRoofs(plot,origin)) do
         if roofSupported(plot,origin,u) and not roofAt(plot,origin,u) then
@@ -3043,6 +3046,7 @@ local function extendSideWings()
     if not ensureCatalog() or not stairCatalog.wall then
         notify("No solid-wall catalog item available");return
     end
+    beginPreview()
     local units,plot,origin=buildPlan()
     if not units or not plot then notify("Owned plot required");return end
     local wingUnits={}
@@ -3785,7 +3789,7 @@ renderPage = function(page)
 
         local finishPanel=block(scroll,164,C.raised)
         text(finishPanel,"FINISH OR REPAIR EXISTING CASTLE",16,11,440,26,15,C.white,true)
-        text(finishPanel,"Finish the real masonry FIRST, then add verified stairs and ornament Shapes. Window installation is separate and uses native Windows.",16,39,430,43,11,C.dim,false,{
+        text(finishPanel,"Use verified stairs and ornament Shapes AFTER masonry and real windows. Glass-wall repair is unrelated to missing details.",16,39,430,43,11,C.dim,false,{
             Size=UDim2.new(1,-32,0,43),TextWrapped=true
         })
         button(finishPanel,"ADD STAIRS + DECOR",16,90,178,31,stairTest.passed,function()
@@ -3793,9 +3797,9 @@ renderPage = function(page)
                 "Requires existing structural walls and one verified Shape tread. Adds custom stair treads and up to 260 decorative Shapes, without rebuilding the walls. These may cost game currency. The server can reject placements.",
                 "ADD FINISHES",finishCastle)
         end)
-        button(finishPanel,"TEST GLASS FIX",201,90,155,31,false,function()
+        button(finishPanel,"GLASS WALLS ONLY",201,90,155,31,false,function()
             modal("Test repairing one glass wall?",
-                "Uses MaterialItem to try changing ONE transparent wall into the blueprint's stone material. If the wall visibly changes, bulk repair can be enabled. If it fails, the rest of your plot is untouched.",
+                "ONLY for structural walls that mistakenly became transparent glass. This is NOT a window or decoration repair. Skip this test if your masonry and windows look correct. Tests one wall; no bulk change unless confirmed.",
                 "TEST FINISH",materialTest)
         end)
         button(finishPanel,"REPAIR ALL GLASS",16,127,178,28,wallRepair.passed,function()
