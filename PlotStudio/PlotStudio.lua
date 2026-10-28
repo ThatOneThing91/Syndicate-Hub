@@ -230,7 +230,7 @@ local footer = ui("Frame", {
     Position = UDim2.new(0,0,1,-33), Size = UDim2.new(1,0,0,33),
 }, win)
 ui("Frame", {BackgroundColor3=C.line, BorderSizePixel=0, Size=UDim2.new(1,0,0,1)}, footer)
-local footLabel = text(footer, "●  SAFE DEMO  ·  No build events are fired", 13, 3, 510, 30, 10, C.mint, true)
+local footLabel = text(footer, "●  PREVIEW IS LOCAL  ·  CONFIRMED BUILDS CHANGE YOUR PLOT", 13, 3, 510, 30, 10, C.mint, true)
 local resize = ui("TextButton", {
     BackgroundTransparency=1, Text="◢", Font=Enum.Font.GothamBold,
     TextColor3=C.muted, TextSize=20, AnchorPoint=Vector2.new(1,1),
@@ -1958,7 +1958,7 @@ local function testStairShape()
             notify("Stair shape placed and confirmed. Stair construction enabled.")
         else
             stairTest.passed=false
-            build.status="Stair test not confirmed; auto stair requests remain disabled"
+            build.status="Optional Shape test unconfirmed; shell, roof, doors and wings remain available"
             notify(fired and build.status or ("Stair test failed: "..tostring(err):sub(1,85)))
         end
         refreshBuildStatus()
@@ -4264,7 +4264,7 @@ renderPage = function(page)
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
         sectionNote(about,"PLOT STUDIO  •  VERSION 2.2",
-            "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
+            "Independent of Syndicate Hub. Local previews are conceptual; build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
                 "A standalone building interface for Storage Hunters.\n\nPlanned: blueprint import/export, community library, real material assignment, building verification, and safe stop/resume. The current version is only a GUI demonstration.")
