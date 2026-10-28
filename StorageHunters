@@ -12467,8 +12467,8 @@ task.spawn(function()
         local source = [==[
 -- Auto Shop Offers, integrated directly inside StorageHunters.
 -- RespondOffer(offerGuid, bool) is known; incoming offer schema is not confirmed.
--- V3: prioritize ShowOffer / OfferPresented and record their payload shape.
--- Do not decide when there is no reliable offer percentage.
+-- V4: fix signed-percentage parser and automatically combine live offer
+-- event payloads with visible NPC shopper prompts. No hard-coded GUIDs.
 return function(cfg)
     assert(type(cfg)=="table" and typeof(cfg.parent)=="Instance","Shop page required")
     local ReplicatedStorage=game:GetService("ReplicatedStorage")
@@ -12646,6 +12646,8 @@ return function(cfg)
         local shopper=events and events:FindFirstChild("NPCShopper")
         local remote=shopper and shopper:FindFirstChild("RespondOffer")
         if not remote or not remote:IsA("RemoteEvent") then return end
+        -- Each response uses the UUID received for THIS customer offer.
+        -- The earlier Cobalt GUIDs are never used as constants.
         decided[id]=true
         pendingIds[id]=nil
         local accept=pct>=percent
@@ -12778,7 +12780,9 @@ return function(cfg)
         if type(value)~="string" then return nil end
         local s=value:gsub("−","-"):gsub("＋","+")
         local raw=s:match("([+-]%s*%d+%.?%d*)%s*%%")
-        return raw and tonumber(raw:gsub("%s+","")) or nil
+        if not raw then return nil end
+        local cleaned=raw:gsub("%s+","")
+        return tonumber(cleaned)
     end
     local function buttonLabel(node)
         if node:IsA("TextButton") then
