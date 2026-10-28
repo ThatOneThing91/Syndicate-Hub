@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.9: captured wall elevation correction and detailed build diagnostics
+    Standalone Plot Studio v3.0: captured wall ID 5 and 15-stud wall segment probes
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -22,7 +22,7 @@ local NAME = "StorageHunters_PlotStudio"
 -- Single release version. Bump this value once per published update:
 -- 2.8 -> 2.9 -> 3.0 -> 3.1 (never 2.10).
 -- All visible version labels use this constant.
-local VERSION = "2.9"
+local VERSION = "3.0"
 
 if type(env[KEY]) == "function" then pcall(env[KEY]) end
 for _, parent in ipairs({CoreGui, player:WaitForChild("PlayerGui")}) do
@@ -1691,16 +1691,26 @@ local function buildPlan()
                     material=p:GetAttribute("PlotStudioMaterial")}
             elseif kind=="Wall" then
                 local lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y)/h),0,4)
-                local count=math.ceil(p.Size.X/15)
-                for k=1,count do
-                    local x1=-p.Size.X/2+(k-1)*p.Size.X/count
-                    local x2=-p.Size.X/2+k*p.Size.X/count
+                -- Match the 15-stud wall length from the Cobalt capture.
+                -- Previous equal subdivisions created 13.8-stud segments.
+                local length=p.Size.X
+                local full=math.floor(length/15+1e-5)
+                local x=-length*.5
+                local function appendWall(x1,x2)
+                    if x2-x1<2.25 then return end
                     local a=p.CFrame:PointToWorldSpace(Vector3.new(x1,-p.Size.Y/2,0))
                     local b=p.CFrame:PointToWorldSpace(Vector3.new(x2,-p.Size.Y/2,0))
                     units[#units+1]={kind="Wall",a=a,b=b,lv=lv,
                         zone=p:GetAttribute("PlotStudioZone"),
                         material=p:GetAttribute("PlotStudioMaterial"),
                         color=p:GetAttribute("PlotStudioColor")}
+                end
+                for k=1,full do
+                    appendWall(x,x+15)
+                    x=x+15
+                end
+                if length*.5-x>=2.25 then
+                    appendWall(x,length*.5)
                 end
             end
         end
@@ -3916,6 +3926,8 @@ local function startBuild()
         local counts={Wall=0,Floor=0,StairShape=0,Door=0,Roof=0,DetailShape=0}
         local errors={}
         local firstWallRequest,firstFloorRequest=nil,nil
+        local wallBlocked=false
+        local wallAttempted=0
         local ok,err=pcall(function()
             local function note(msg) errors[#errors+1]=msg end
             local function stage(name)
@@ -3953,21 +3965,14 @@ local function startBuild()
                 note("Plot structures changed during the preflight scan. Wait for plot streaming and retry; no requests sent.")
                 return
             end
-            local chosen
-            local structures=plot:FindFirstChild("Structures")
-            if structures then
-                for _,m in ipairs(structures:GetChildren()) do
-                    if m:IsA("Model") and
-                        typeof(m:GetAttribute("WallCFrame"))=="CFrame" and
-                        not isGlassModel(m) then
-                        chosen=chosen or m:GetAttribute("ItemId")
-                    end
-                end
-            end
-            local row=chosen and buildCatalog.byId["Walls|"..tostring(chosen)]
-            if row and scoreWall(row.name)>=0 then
-                stairCatalog.wall={id=row.id,name=row.name,category="Walls"}
-            end
+            -- Use the wall ID from the actual Cobalt capture instead
+            -- of silently adopting an unrelated existing wall (ID 3 failed).
+            local captured=buildCatalog.byId["Walls|5"]
+            stairCatalog.wall={id="5",
+                name=captured and captured.name or "Captured PlaceWall #5",
+                category="Walls",source="user Cobalt capture"}
+            note("Wall item selected from captured PlaceWall: ID 5"..
+                (captured and (" / "..captured.name) or " (not indexed in catalog)") )
             if not running() then return end
             local wallUnits,floorUnits={},{}
             for _,u in ipairs(units) do
@@ -3977,6 +3982,7 @@ local function startBuild()
             local budget=1600
             local failures={}
             local consecutive=0
+            local wallProbeLimit=6
             local function nearFailed(u)
                 local point=(u.a+u.b)*.5
                 for _,entry in ipairs(failures) do
@@ -3990,11 +3996,13 @@ local function startBuild()
             end
             stage("walls (live overlap detection)")
             for _,requested in ipairs(wallUnits) do
-                if not running() or build.sent>=budget or consecutive>=12 then break end
+                if not running() or build.sent>=budget or consecutive>=12 or
+                    (counts.Wall==0 and wallAttempted>=wallProbeLimit) then break end
                 -- Clip to the portions not already occupied by real walls.
                 for _,u in ipairs(openWallSegments(requested,
                     occupiedFromPlot(plot,origin))) do
-                    if not running() or build.sent>=budget or consecutive>=12 then break end
+                    if not running() or build.sent>=budget or consecutive>=12 or
+                    (counts.Wall==0 and wallAttempted>=wallProbeLimit) then break end
                     if not nearFailed(u) and not
                         shellConfirmed(u,occupiedFromPlot(plot,origin)) then
                         local before={}
@@ -4014,6 +4022,7 @@ local function startBuild()
                         end
                         local worked,reason=pcall(function() fireUnit(u) end)
                         build.sent=build.sent+1
+                        wallAttempted=wallAttempted+1
                         local function newWallNear()
                             local folder=plot:FindFirstChild("Structures")
                             if not folder then return false end
@@ -4056,8 +4065,15 @@ local function startBuild()
                     end
                 end
             end
-            if consecutive>=12 then
-                note("12 separated wall placements were unconfirmed; moved to floors and other sections instead of shutting down.")
+            if counts.Wall==0 and wallAttempted>=wallProbeLimit then
+                wallBlocked=true
+                note("WALL STAGE BLOCKED: "..wallAttempted..
+                    " requests using captured ID 5 were unconfirmed. "..
+                    "Independent floors and details can continue.")
+            elseif consecutive>=12 then
+                wallBlocked=true
+                note("WALL STAGE INCOMPLETE: 12 consecutive unconfirmed "..
+                    "wall requests; independent stages can continue.")
             end
             if not running() then return end
             -- Adapt floors to physical occupancy: split partially covered
@@ -4337,6 +4353,8 @@ local function startBuild()
                 "\nRemote requests sent (not proof of success): "..build.sent..
                 "\nFirst wall call: "..(firstWallRequest or "none")..
                 "\nFirst floor call: "..(firstFloorRequest or "none")..
+                "\nWall stage blocked: "..tostring(wallBlocked)..
+                "\nWall calls attempted: "..wallAttempted..
                 "\nPlot origin: "..tostring(origin.Position)..
                 "\nStill missing from shell: "..missingWalls..
                 " walls / "..missingFloors.." floors"..
@@ -4349,9 +4367,10 @@ local function startBuild()
                 build.status="NOT BUILT: 0 pieces confirmed / "..build.sent..
                     " requests. Use COPY LOG for diagnostics."
             elseif missingWalls+missingFloors>0 then
-                build.status="INCOMPLETE: "..missingWalls.." walls and "..
-                    missingFloors.." floors still missing; "..
-                    totalConfirmed.." new pieces confirmed."
+                build.status=(wallBlocked and "WALLS BLOCKED: " or "INCOMPLETE: ")..
+                    missingWalls.." walls and "..missingFloors..
+                    " floors still missing; "..totalConfirmed..
+                    " new pieces confirmed. COPY LOG."
             elseif build.sent==0 then
                 build.status="No new requests: structural plan already covered or empty."
             else
@@ -5573,4 +5592,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v"..VERSION.." active. Independent of Syndicate Hub.")
+print("[Plot Studio] v"..VERSION.." active: captured ID 5 wall probes. Independent of Syndicate Hub.")
