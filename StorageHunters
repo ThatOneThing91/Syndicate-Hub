@@ -13003,6 +13003,18 @@ return function(cfg)
     end
     local function readGuiOffer(container)
         local labels,acceptButton,declineButton,guiId={},nil,nil,nil
+        -- The game's live offer GUI is named NPCShopperOffer_<offerGUID>.
+        -- Wrappers and buttons have no GUID attributes. Resolve only the
+        -- enclosing offer GUI, so simultaneous customers keep separate IDs.
+        local ancestor=container
+        while ancestor do
+            local candidate=ancestor.Name:match("^NPCShopperOffer_(.+)$")
+            if uuid(candidate) then
+                guiId=candidate
+                break
+            end
+            ancestor=ancestor.Parent
+        end
         for _,node in ipairs(container:GetDescendants()) do
             if node:IsA("GuiObject") and visible(node) then
                 if node:IsA("TextLabel") or node:IsA("TextButton") or
@@ -13038,7 +13050,7 @@ return function(cfg)
             end
         end
         for key,val in pairs(container:GetAttributes()) do
-            if uuid(val) and (key:lower():find("offer",1,true) or
+            if not guiId and uuid(val) and (key:lower():find("offer",1,true) or
                 key:lower():find("shopper",1,true)) then
                 guiId=val; break
             end
