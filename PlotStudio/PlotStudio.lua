@@ -1,5 +1,5 @@
 --[[
-  PLOT COPIER V3.1 | Storage Hunters
+  PLOT COPIER V3.2 | Storage Hunters
   Replaces the old Plot Studio interface (backed up in PlotStudio/Archive).
   Captures replicated builds as relative JSON blueprints.
   Local JSON: SyndicateHub/SavedBases/<name>.json
@@ -14,7 +14,7 @@ local UIS=game:GetService("UserInputService")
 local CoreGui=game:GetService("CoreGui")
 local player=Players.LocalPlayer
 if not player then return end
-local VERSION="3.1"
+local VERSION="3.2"
 local GUI_NAME="Syndicate_PlotCopier"
 local ENV=_G
 pcall(function() if type(getgenv)=="function" then ENV=getgenv() end end)
@@ -168,18 +168,100 @@ connect(UIS.InputChanged,function(i)
             original.Y.Scale,original.Y.Offset+d.Y)
     end
 end)
-local function plotOwner(plot)
-    local id=plot:GetAttribute("OwnerUserId")
-    if type(id)=="number" and id>0 then return id==player.UserId end
-    local name=plot:GetAttribute("OwnerName") or plot:GetAttribute("OwnerUsername")
-    if type(name)=="string" and name~="" then return name:lower()==player.Name:lower() end
-    local b=plot:FindFirstChild("OwnerHeadshot",true)
-    local o=b and b:FindFirstChild("OwnerName",true)
-    if o then
-        if o:IsA("StringValue") then name=o.Value
-        elseif o:IsA("TextLabel") or o:IsA("TextButton") then name=o.Text end
+-- Resolve the actual active Player instead of displaying a hard-coded "(PLAYER)".
+-- The game has used OwnerUserId, owner attributes, and
+-- OwnerHeadshot.OwnerName (TextLabel/StringValue) in different layouts.
+-- Only claim someone is active when they exist in Players.
+local function ownerInfo(plot)
+    local names,ids={},{}
+    local function observe(value)
+        if typeof(value)=="Instance" then
+            if value:IsA("Player") then
+                ids[#ids+1]=value.UserId
+                names[#names+1]=value.Name
+            elseif value:IsA("ObjectValue") then
+                observe(value.Value)
+            elseif value:IsA("StringValue") then
+                names[#names+1]=value.Value
+            elseif value:IsA("IntValue") or value:IsA("NumberValue") then
+                ids[#ids+1]=value.Value
+            elseif value:IsA("TextLabel") or value:IsA("TextButton")
+                or value:IsA("TextBox") then
+                names[#names+1]=value.Text
+            end
+        elseif type(value)=="number" and value>0 then
+            ids[#ids+1]=value
+        elseif type(value)=="string" and value~="" then
+            names[#names+1]=value
+        end
     end
-    return type(name)=="string" and name:lower():find(player.Name:lower(),1,true)~=nil
+    for _,key in ipairs({"OwnerUserId","OwnerId","OwnerID",
+        "PlayerUserId","UserId"}) do
+        observe(plot:GetAttribute(key))
+    end
+    for _,key in ipairs({"OwnerUsername","OwnerName","Owner",
+        "PlayerName","Username","OwnedBy"}) do
+        observe(plot:GetAttribute(key))
+    end
+    for _,key in ipairs({"Owner","OwnerPlayer","Player","OwnerName",
+        "OwnerUserId","OwnerUsername"}) do
+        local child=plot:FindFirstChild(key)
+        if child then observe(child) end
+    end
+    local sign=plot:FindFirstChild("OwnerHeadshot",true)
+    if sign then
+        for _,key in ipairs({"OwnerName","OwnerUsername","Username",
+            "PlayerName","OwnerUserId"}) do
+            local child=sign:FindFirstChild(key,true)
+            if child then observe(child) end
+        end
+    end
+    -- Numeric IDs take priority, including numeric strings stored in labels.
+    for _,id in ipairs(ids) do
+        local p=Players:GetPlayerByUserId(tonumber(id) or 0)
+        if p then return p,nil end
+    end
+    local people=Players:GetPlayers()
+    local candidate
+    for _,raw in ipairs(names) do
+        local value=tostring(raw):match("^%s*(.-)%s*$")
+        local handle=value:match("@([%w_]+)")
+        local norm=(handle or value):lower()
+        local number=tonumber(norm)
+        if number then
+            local byId=Players:GetPlayerByUserId(number)
+            if byId then return byId,nil end
+        end
+        if norm~="" and norm~="player" and norm~="none" and
+            norm~="unclaimed" and norm~="nobody" and norm~="empty" and
+            norm~="no owner" and norm~="available" then
+            candidate=candidate or (handle or value)
+            -- Match true account usernames first. DisplayNames can repeat,
+            -- so only use them when they are uniquely matched in this server.
+            for _,p in ipairs(people) do
+                if p.Name:lower()==norm then return p,nil end
+            end
+            local match,matches=nil,0
+            for _,p in ipairs(people) do
+                if p.DisplayName:lower()==norm then
+                    match=p;matches=matches+1
+                end
+            end
+            if matches==1 then return match,nil end
+        end
+    end
+    return nil,candidate
+end
+local function plotOwner(plot)
+    local owner=ownerInfo(plot)
+    return owner==player
+end
+local function plotOwnerLabel(plot)
+    local owner,unverified=ownerInfo(plot)
+    if owner==player then return "@"..owner.Name.." (YOU)" end
+    if owner then return "@"..owner.Name end
+    if unverified then return tostring(unverified).." (unverified)" end
+    return "NO OWNER SHOWN"
 end
 local function plotFrame(plot)
     if not plot then return nil end
@@ -258,7 +340,10 @@ local function capture(plot)
     if not origin then return nil,"Could not read this plot's origin" end
     local bp={format="plotcopier-1",version=1,
         name=plot.Name.."_"..os.date("%Y%m%d_%H%M"),
-        creator=tostring(plot:GetAttribute("OwnerName") or plot:GetAttribute("OwnerUsername") or "Unknown"),
+        creator=(function()
+            local owner,raw=ownerInfo(plot)
+            return owner and owner.Name or raw or "Unknown"
+        end)(),
         sourcePlot=plot.Name,created=os.time(),storeyHeight=getStoreyHeight(),parts={}}
     local seen={}
     local ignored=0
@@ -372,7 +457,9 @@ local function fillScroll(scrollObj,rows,selected,clicked)
             Size=UDim2.new(1,-5,0,30),
             Position=UDim2.fromOffset(0,(i-1)*34),
             BorderSizePixel=0},scrollObj),6)
-        connect(b.Activated,function() clicked(row.id) end)
+        -- Destroyed row buttons automatically disconnect these handlers.
+        -- Do not retain a new global connection on every live refresh.
+        b.Activated:Connect(function() clicked(row.id) end)
     end
     scrollObj.CanvasSize=UDim2.fromOffset(0,#rows*34+4)
 end
@@ -397,16 +484,30 @@ local function sortedLibrary()
     return a
 end
 local refresh
-refresh=function()
+local plotListSignature=nil
+local updatePlotRows
+updatePlotRows=function(force)
     local rows={}
+    local identity={}
     for _,p in ipairs(plots()) do
-        rows[#rows+1]={id=p.Name,label=p.Name..
-            (plotOwner(p) and "  (MY PLOT)" or "  (PLAYER)")}
+        local label=p.Name.."  •  "..plotOwnerLabel(p)
+        rows[#rows+1]={id=p.Name,label=label}
+        identity[#identity+1]=label
     end
+    local signature=table.concat(identity,"|").."|selected:"..tostring(selectedPlot)
+    if not force and signature==plotListSignature then return end
+    plotListSignature=signature
     fillScroll(leftScroll,rows,selectedPlot,function(value)
         selectedPlot=value
-        refresh()
+        local plot=getSelectedPlot()
+        if plot then
+            inform("Selected "..plot.Name.." — "..plotOwnerLabel(plot))
+        end
+        updatePlotRows(true)
     end)
+end
+refresh=function()
+    updatePlotRows(true)
     fillScroll(rightScroll,sortedLibrary(),selectedBase,function(value)
         selectedBase=value
         armed=false
@@ -723,5 +824,16 @@ local logBtn=btn(win,"COPY LOG",W-109,extraY+1,93,20,function()
 end)
 loadLocal()
 refresh()
-inform("Plot Copier V"..VERSION.." ready. Select a visible plot and press COPY PLOT.")
+-- Refresh plot-owner display while the GUI is open, without rebuilding
+-- the saved-base list or disturbing the selected plot.
+task.spawn(function()
+    while alive do
+        task.wait(1.5)
+        if alive and win.Visible then
+            local ok,err=pcall(function() updatePlotRows(false) end)
+            if not ok then log("Plot list refresh failed: "..tostring(err)) end
+        end
+    end
+end)
+inform("Plot Copier V"..VERSION.." ready. Plot usernames refresh automatically.")
 print("[Plot Copier] V"..VERSION.." | Local storage "..folder.." | Plot Studio legacy archived.")
