@@ -755,20 +755,31 @@ local function beginPreview()
             end
             -- A separate floor-level START landing is essential. Without it,
             -- the next storey's first flight begins across an empty cutout.
-            local start=deco("Stair landing",leftLane,
-                bottom-stairThickness*.5,south-1.15,
-                laneW+1.65,stairThickness,6.2,stone)
-            if start then start:SetAttribute("PlotStudioStorey",lv) end
+            if lv>=1 then
+                local start=deco("Stair landing",leftLane,
+                    bottom-stairThickness*.5,south-1.15,
+                    laneW+1.65,stairThickness,6.2,stone)
+                if start then
+                    start:SetAttribute("PlotStudioStorey",lv)
+                    start:SetAttribute("StairLandingRole","Start")
+                end
+            end
             -- Midway U-turn. It connects both parallel flights without
             -- overlapping either flight at a different elevation.
             local middle=deco("Stair landing",cx+wellX,bottom+h*.5-stairThickness*.5,
                 north+.4,wellW-.7,stairThickness,5.2,light)
-            if middle then middle:SetAttribute("PlotStudioStorey",lv) end
+            if middle then
+                middle:SetAttribute("PlotStudioStorey",lv)
+                middle:SetAttribute("StairLandingRole","Turn")
+            end
             -- Exit bridge reaches the SOUTH gallery at the next storey,
             -- with enough width to turn off the staircase into the room.
             local exit=deco("Stair landing",rightLane,bottom+h-stairThickness*.5,
                 south-1.25,laneW+2.4,stairThickness,6.8,light)
-            if exit then exit:SetAttribute("PlotStudioStorey",lv+1) end
+            if exit then
+                exit:SetAttribute("PlotStudioStorey",lv+1)
+                exit:SetAttribute("StairLandingRole","Exit")
+            end
             -- Architectural support under the halfway turn.
             deco("Stair landing support",cx+wellX,bottom+h*.23,
                 north+.9,wellW*.58,h*.44,1.3,dark)
@@ -1585,6 +1596,7 @@ local function rawStairUnits(plot,origin)
                 kind="StairShape",
                 id=stairCatalog.shape.id,
                 label=p.Name,
+                role=p:GetAttribute("StairLandingRole"),
                 cf=p.CFrame,
                 size=p.Size,
                 color=p:GetAttribute("PlotStudioColor"),
@@ -2087,9 +2099,14 @@ local function repairStairGaps()
         return
     end
     table.sort(missing,function(a,b)
-        local aLanding=a.label=="Stair landing"
-        local bLanding=b.label=="Stair landing"
-        if aLanding~=bLanding then return aLanding end
+        local function priority(u)
+            if u.role=="Exit" then return 100 end
+            if u.role=="Start" and u.lv>=1 then return 95 end
+            if u.role=="Turn" then return 85 end
+            if u.role=="Start" then return 20 end
+            return 10
+        end
+        if priority(a)~=priority(b) then return priority(a)>priority(b) end
         if a.lv~=b.lv then return a.lv<b.lv end
         return a.cf.Position.Y<b.cf.Position.Y
     end)
