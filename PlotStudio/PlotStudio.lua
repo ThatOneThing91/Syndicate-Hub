@@ -1,5 +1,5 @@
 --[[
-  PLOT COPIER V3.2 | Storage Hunters
+  PLOT COPIER V3.3 | Storage Hunters
   Replaces the old Plot Studio interface (backed up in PlotStudio/Archive).
   Captures replicated builds as relative JSON blueprints.
   Local JSON: SyndicateHub/SavedBases/<name>.json
@@ -14,7 +14,7 @@ local UIS=game:GetService("UserInputService")
 local CoreGui=game:GetService("CoreGui")
 local player=Players.LocalPlayer
 if not player then return end
-local VERSION="3.2"
+local VERSION="3.3"
 local GUI_NAME="Syndicate_PlotCopier"
 local ENV=_G
 pcall(function() if type(getgenv)=="function" then ENV=getgenv() end end)
@@ -396,7 +396,15 @@ local function capture(plot)
                                 cf=packCf(origin:ToObjectSpace(effectiveCf)),
                                 size={size.X,size.Y,size.Z}}
                             if kind=="Wall" then row.length=wallLen end
-                            if kind=="Roof" then row.style=object:GetAttribute("RoofStyle") end
+                            if kind=="Roof" then
+                                row.style=object:GetAttribute("RoofStyle") or "Hip"
+                                local part=object:IsA("BasePart") and object or
+                                    object:FindFirstChildWhichIsA("BasePart",true)
+                                if part then
+                                    row.color={part.Color.R,part.Color.G,part.Color.B}
+                                    row.material=tostring(part.Material.Name)
+                                end
+                            end
                             bp.parts[#bp.parts+1]=row
                         else ignored=ignored+1 end
                     else ignored=ignored+1 end
@@ -409,10 +417,13 @@ local function capture(plot)
 end
 local function canPlace(part)
     if part.kind=="Wall" then return part.id~=nil end
-    if part.kind=="Floor" then return true end
+    if part.kind=="Floor" or part.kind=="Roof" then return true end
     if part.kind=="Item" then
-        return part.id~=nil and
-            (part.category=="Shapes" or part.category=="Doors")
+        -- Keep the game's captured category rather than silently dropping
+        -- furniture, windows and decorations. The server can still reject
+        -- unsupported categories; verification remains mandatory.
+        return part.id~=nil and type(part.category)=="string" and
+            part.category~="" and #part.category<60
     end
     return false
 end
@@ -628,34 +639,134 @@ local function copyJson()
             "Could not copy JSON",not ok)
     end
 end
-local function readModels(plot)
-    local models={}
-    for _,rootName in ipairs({"Structures","Floors","Furniture","Shapes","Decorations","Roofs"}) do
+-- Physical plot inventory. Never count nearby arbitrary new models as success:
+-- every placed piece must match the saved item's type, identity, geometry
+-- and position. A single destination model can satisfy ONE source piece.
+local ROOTS={"Structures","Floors","Furniture","Shapes","Decorations","Roofs"}
+local function scene(plot)
+    local result,seen={},{}
+    for _,rootName in ipairs(ROOTS) do
         local root=plot:FindFirstChild(rootName)
         if root then
-            for _,m in ipairs(root:GetChildren()) do
-                if m:IsA("Model") or m:IsA("BasePart") then models[m]=true end
-            end
-        end
-    end
-    return models
-end
-local function newNearby(plot,previous,target,kind)
-    for m in pairs(readModels(plot)) do
-        if not previous[m] then
-            local pos
-            local ok=pcall(function()
-                pos=m:IsA("BasePart") and m.Position or m:GetPivot().Position
-            end)
-            if ok and typeof(pos)=="Vector3" and (pos-target).Magnitude<
-                (kind=="Wall" and 15 or 20) then
-                if kind~="Wall" or typeof(m:GetAttribute("WallCFrame"))=="CFrame" then
-                    return true
+            for _,m in ipairs(root:GetDescendants()) do
+                local isModel=m:IsA("Model")
+                local isPart=m:IsA("BasePart")
+                local outer=m:FindFirstAncestorOfClass("Model")
+                if (isModel and (not outer or not outer:IsDescendantOf(root)) or
+                    isPart and (not outer or not outer:IsDescendantOf(root))) and
+                    not seen[m] then
+                    seen[m]=true
+                    local wallCf=m:GetAttribute("WallCFrame")
+                    local wallLen=m:GetAttribute("WallLength")
+                    local id=m:GetAttribute("ItemId")
+                    local cat=tostring(m:GetAttribute("Category") or
+                        m:GetAttribute("ItemCategory") or rootName)
+                    local kind
+                    if typeof(wallCf)=="CFrame" and
+                        type(wallLen)=="number" and wallLen>1 then
+                        kind="Wall"
+                    elseif cat=="Floors" or rootName=="Floors" or
+                        tostring(id or "")=="32" then
+                        kind="Floor"
+                    elseif cat=="Roofs" or rootName=="Roofs" or
+                        m:GetAttribute("RoofStyle")~=nil then
+                        kind="Roof"
+                    elseif id~=nil then
+                        kind="Item"
+                    end
+                    if kind then
+                        local ok,box,size=pcall(function()
+                            if m:IsA("BasePart") then return m.CFrame,m.Size end
+                            return m:GetBoundingBox()
+                        end)
+                        if ok and typeof(box)=="CFrame" and typeof(size)=="Vector3" then
+                            local cf=kind=="Wall" and wallCf or box
+                            if kind=="Item" and m:IsA("Model") then
+                                local op,pivot=pcall(function()return m:GetPivot()end)
+                                if op then cf=pivot end
+                            end
+                            result[#result+1]={object=m,kind=kind,
+                                id=id~=nil and tostring(id) or nil,
+                                category=cat,cf=cf,size=size,length=wallLen}
+                        end
+                    end
                 end
             end
         end
     end
-    return false
+    return result
+end
+local function expectedCf(part,origin)
+    local cf=unpackCf(part.cf)
+    return cf and origin*cf or nil
+end
+local function closeSize(a,b,kind)
+    if type(a)~="table" or #a~=3 then return false end
+    local limits=kind=="Item" and .32 or .16
+    local absolute=kind=="Item" and 1.5 or 1.0
+    for i,v in ipairs({b.X,b.Y,b.Z}) do
+        if math.abs((tonumber(a[i]) or 0)-v)>math.max(absolute,v*limits) then
+            return false
+        end
+    end
+    return true
+end
+local function matches(part,expected,found)
+    if not expected or found.kind~=part.kind then return false end
+    if part.kind=="Item" then
+        if not part.id or not found.id or
+            tostring(part.id)~=tostring(found.id) then return false end
+        if part.category~=found.category and
+            found.category~="Furniture" and
+            found.category~="Structures" and
+            found.category~="Decorations" then
+            return false
+        end
+    elseif part.kind=="Wall" then
+        if part.id and found.id and tostring(part.id)~=tostring(found.id) then return false end
+        if not part.length or not found.length or
+            math.abs(part.length-found.length)>math.max(.8,part.length*.09) then
+            return false
+        end
+    elseif part.kind=="Floor" then
+        if part.id and found.id and tostring(part.id)~=tostring(found.id) then return false end
+    elseif part.kind=="Roof" then
+        if part.style and found.object:GetAttribute("RoofStyle") and
+            tostring(part.style)~=tostring(found.object:GetAttribute("RoofStyle")) then
+            return false
+        end
+    end
+    local distance=(expected.Position-found.cf.Position).Magnitude
+    local radius=part.kind=="Item" and 2.0 or part.kind=="Roof" and 3.0 or 1.5
+    if distance>radius then return false end
+    local alignment=math.abs(expected.RightVector:Dot(found.cf.RightVector))
+    if alignment<.94 then return false end
+    if part.kind=="Wall" then return true end
+    return closeSize(part.size,found.size,part.kind)
+end
+local function reconcile(bp,origin,physical)
+    local used,matched={},{}
+    local count=0
+    for i,p in ipairs(bp.parts) do
+        local desired=expectedCf(p,origin)
+        local best,bestDistance=nil,math.huge
+        if desired then
+            for j,real in ipairs(physical) do
+                if not used[j] and matches(p,desired,real) then
+                    local distance=(desired.Position-real.cf.Position).Magnitude
+                    if distance<bestDistance then
+                        best,bestDistance=j,distance
+                    end
+                end
+            end
+        end
+        if best then
+            used[best]=true
+            matched[i]=true
+            count=count+1
+        end
+    end
+    return matched,count
 end
 local function remote(name)
     local e=RS:FindFirstChild("Events")
@@ -664,10 +775,9 @@ local function remote(name)
     return r and r:IsA("RemoteEvent") and r or nil
 end
 local function placeOne(part,origin,storey)
-    local cf=unpackCf(part.cf)
+    local cf=expectedCf(part,origin)
     if not cf then return false,"Invalid captured CFrame" end
-    cf=origin*cf
-    local lv=math.clamp(tonumber(part.lv) or 0,0,4)
+    local lv=math.clamp(math.floor(tonumber(part.lv) or 0),0,4)
     if part.kind=="Wall" then
         local r=remote("Wall")
         if not r then return false,"PlaceWall remote unavailable" end
@@ -676,8 +786,10 @@ local function placeOne(part,origin,storey)
         local a=cf.Position-cf.RightVector*(length*.5)
         local b=cf.Position+cf.RightVector*(length*.5)
         local d=b-a
-        -- The old Cobalt capture uses reference Y on the storey base.
         local refY=origin.Position.Y+lv*storey
+        -- Preserve the vertical offset observed in the captured editor call.
+        a=Vector3.new(a.X,refY-.3405,a.Z)
+        b=Vector3.new(b.X,refY-.3405,b.Z)
         r:FireServer(part.id,"Walls",a,b,length,
             math.atan2(-d.Z,d.X),refY,nil,nil,nil,lv)
     elseif part.kind=="Floor" then
@@ -689,104 +801,224 @@ local function placeOne(part,origin,storey)
     elseif part.kind=="Item" then
         local r=remote("Item")
         if not r then return false,"PlaceItem remote unavailable" end
-        if part.category=="Shapes" then
-            local size=part.size or {2,2,2}
-            r:FireServer(part.id,"Shapes",cf,nil,nil,.25,
-                Vector3.new(size[1],size[2],size[3]),lv)
-        elseif part.category=="Doors" then
-            r:FireServer(part.id,"Doors",cf,nil,nil,.25,nil,lv)
-        else
-            return false,"Unsupported item category"
-        end
+        local sz=part.size or {2,2,2}
+        local optionalSize=part.category=="Shapes" and
+            Vector3.new(tonumber(sz[1]) or 2,tonumber(sz[2]) or 2,
+                tonumber(sz[3]) or 2) or nil
+        -- Preserve actual item ID and category instead of replacing it
+        -- with a guessed generic item.
+        r:FireServer(part.id,part.category,cf,nil,nil,.25,optionalSize,lv)
+    elseif part.kind=="Roof" then
+        local r=remote("Roof")
+        if not r then return false,"PlaceRoof remote unavailable" end
+        local pos=origin:ToObjectSpace(cf).Position
+        local rgb=part.color
+        local color=type(rgb)=="table" and Color3.new(
+            tonumber(rgb[1]) or .5,tonumber(rgb[2]) or .5,
+            tonumber(rgb[3]) or .5) or Color3.fromRGB(90,90,90)
+        r:FireServer(part.style or "Hip",pos.X,pos.Z,
+            tonumber(part.size and part.size[1]) or 10,
+            tonumber(part.size and part.size[3]) or 10,
+            .6,.8,.4,color,tostring(part.material or "Slate"),nil,lv)
     else
-        return false,"This object type has no validated placement signature"
+        return false,"Unsupported captured type"
     end
-    return true,cf.Position
+    return true
+end
+local function progressPath(bp,plot)
+    local identity=safeName(bp.name or "SavedBase")
+    return folder.."/_progress_"..identity.."_"..
+        tostring(bp.created or 0).."_"..safeName(plot.Name)..".json"
+end
+local function readProgress(bp,plot)
+    local p={format="plotcopier-progress-1",
+        name=bp.name,created=bp.created or 0,plot=plot.Name,
+        owner=player.UserId,attempts={},lastMissing={},updated=os.time()}
+    local path=progressPath(bp,plot)
+    if type(readfile)=="function" then
+        local ok,body=pcall(readfile,path)
+        if ok and type(body)=="string" then
+            local valid,old=pcall(function()return Http:JSONDecode(body)end)
+            if valid and type(old)=="table" and
+                old.format==p.format and old.name==p.name and
+                old.created==p.created and old.plot==p.plot and
+                old.owner==p.owner and type(old.attempts)=="table" then
+                p.attempts=old.attempts
+                p.lastMissing=old.lastMissing or {}
+            end
+        end
+    end
+    return p,path
+end
+local function writeProgress(p,path,missing)
+    p.updated=os.time()
+    p.lastMissing=missing
+    if type(writefile)=="function" then
+        ensureFolder()
+        local ok,err=pcall(writefile,path,Http:JSONEncode(p))
+        if not ok then log("Progress checkpoint failed: "..tostring(err)) end
+    end
 end
 local pasteButton
 local function paste()
-    if busy then inform("Already building",true);return end
+    if busy then inform("Already transferring; use STOP if needed.",true);return end
     local bp,err=chooseBase()
     if not bp then inform(err or "Select a saved base",true);return end
     local own=ownPlot()
     if not own then inform("Could not identify your owned plot",true);return end
     local origin=plotFrame(own)
     if not origin then inform("Could not read your plot origin",true);return end
-    local existing=readModels(own)
-    local count=0
-    for _ in pairs(existing) do count=count+1 end
-    if count>0 then
-        inform("Paste blocked: your plot has "..count.." existing items. Clear it first.",true)
+    local baseline=scene(own)
+    local matched,already=reconcile(bp,origin,baseline)
+    -- Refuse to overwrite an unrelated occupied plot. If some blueprint
+    -- pieces are already there, resume against those existing pieces.
+    if #baseline>0 and already==0 then
+        inform("Your plot has "..#baseline..
+            " objects but none match this saved base. Paste blocked.",true)
         return
     end
     if not armed then
         armed=true
-        pasteButton.Text="CONFIRM PASTE"
-        inform("Ready to paste "..tostring(bp.name)..". Press CONFIRM PASTE.")
+        pasteButton.Text="CONFIRM TRANSFER"
+        inform("Matched "..already.."/"..#bp.parts..
+            " existing pieces. Press CONFIRM to paste/repair missing.")
         return
     end
     armed=false
-    pasteButton.Text="PASTE TO MY PLOT"
-    busy=true; cancel=false
+    pasteButton.Text="PASTE / REPAIR"
+    busy=true;cancel=false
     task.spawn(function()
-        local confirmed,failed,skipped,attempted=0,0,0,0
-        local firstErrors={}
-        local ordered={}
-        for _,kind in ipairs({"Floor","Wall","Item","Roof"}) do
-            for _,p in ipairs(bp.parts) do
-                if p.kind==kind then ordered[#ordered+1]=p end
+        local ok,problem=pcall(function()
+            local progress,progressFile=readProgress(bp,own)
+            local physical=baseline
+            local verified=matched
+            local passList={}
+            local unsupported={}
+            local total=#bp.parts
+            local sent=0
+            for i,p in ipairs(bp.parts) do
+                if not canPlace(p) then
+                    unsupported[#unsupported+1]=i
+                end
             end
-        end
-        local categoryFailures={}
-        local maxAttempts=math.min(#ordered,1600)
-        for i,p in ipairs(ordered) do
-            if not alive or cancel or attempted>=maxAttempts then break end
-            if not canPlace(p) then skipped=skipped+1
-            elseif (categoryFailures[p.kind] or 0)>=6 then
-                skipped=skipped+1
-            else
-                local before=readModels(own)
-                local ok,success,position=pcall(placeOne,p,origin,bp.storeyHeight or 15)
-                attempted=attempted+1
-                local accepted=false
-                if ok and success and typeof(position)=="Vector3" then
-                    for j=1,10 do
-                        if not alive or cancel then break end
-                        if newNearby(own,before,position,p.kind) then
-                            accepted=true;break
+            local function scan()
+                physical=scene(own)
+                verified=select(1,reconcile(bp,origin,physical))
+            end
+            local function missing()
+                local found,unresolved={},0
+                for i=1,total do
+                    if not verified[i] then
+                        found[#found+1]=i
+                        unresolved=unresolved+1
+                    end
+                end
+                return found,unresolved
+            end
+            local function confirmedCount()
+                local n=0
+                for _,match in pairs(verified) do if match then n=n+1 end end
+                return n
+            end
+            local function checkpoint()
+                local remaining=missing()
+                writeProgress(progress,progressFile,remaining)
+            end
+            -- First pass is fast. Unconfirmed targets go into a later retry
+            -- pass rather than blocking a successful transfer for 2 seconds.
+            for pass=1,3 do
+                if not alive or cancel then break end
+                scan()
+                local targets={}
+                -- Preserve stable construction order so supports arrive first.
+                for _,kind in ipairs({"Floor","Wall","Item","Roof"}) do
+                    for i,p in ipairs(bp.parts) do
+                        if p.kind==kind and not verified[i] and canPlace(p) then
+                            targets[#targets+1]=i
                         end
-                        task.wait(.2)
                     end
                 end
-                if accepted then
-                    confirmed=confirmed+1
-                    categoryFailures[p.kind]=0
-                else
-                    failed=failed+1
-                    categoryFailures[p.kind]=(categoryFailures[p.kind] or 0)+1
-                    if #firstErrors<12 then
-                        firstErrors[#firstErrors+1]=tostring(p.kind).." #"..i..
-                            " ID="..tostring(p.id).." : "..
-                            tostring(ok and (success and "not replicated" or position) or success)
+                if #targets==0 then break end
+                local batch=pass==1 and 7 or pass==2 and 4 or 2
+                local spacing=pass==1 and .075 or pass==2 and .13 or .22
+                local settle=pass==1 and .4 or pass==2 and .7 or 1.1
+                local rejected={}
+                log("Pass "..pass.." starts: "..#targets.." pending, batch "..batch)
+                for offset=1,#targets,batch do
+                    if not alive or cancel then break end
+                    local limit=math.min(offset+batch-1,#targets)
+                    for j=offset,limit do
+                        if cancel or not alive then break end
+                        local i=targets[j]
+                        local piece=bp.parts[i]
+                        local okay,sentOkay,sendReason=pcall(placeOne,piece,origin,
+                            tonumber(bp.storeyHeight) or 15)
+                        sent=sent+1
+                        local k=tostring(i)
+                        progress.attempts[k]=(tonumber(progress.attempts[k]) or 0)+1
+                        if not okay or not sentOkay then
+                            rejected[#rejected+1]="# "..i.." "..tostring(piece.kind)..
+                                " ID="..tostring(piece.id).." "..tostring(
+                                okay and sendReason or sentOkay)
+                        end
+                        task.wait(spacing)
                     end
+                    -- A single snapshot verifies the whole batch by actual
+                    -- item identity and geometry, not arbitrary proximity.
+                    task.wait(settle)
+                    scan()
+                    if offset==1 or limit%35<batch or limit==#targets then
+                        inform("PASS "..pass.." | verified "..confirmedCount()..
+                            "/"..total.." | checked "..limit.."/"..#targets..
+                            " | requests "..sent)
+                    end
+                    if limit%35<batch or limit==#targets then checkpoint() end
                 end
-                if i%4==0 or not accepted then
-                    inform("PASTE "..i.."/"..#ordered.." | confirmed "..confirmed..
-                        " | failed "..failed.." | skipped "..skipped)
-                end
-                task.wait(.16)
+                scan()
+                local rest=missing()
+                log("Pass "..pass.." done: "..confirmedCount()..
+                    " verified, "..#rest.." missing.")
+                for j=1,math.min(#rejected,15) do log(rejected[j]) end
+                checkpoint()
+                if #rest==0 then break end
+                -- A short pause before retries lets late replication arrive.
+                if pass<3 and alive and not cancel then task.wait(.65*pass) end
             end
-        end
+            scan()
+            local rest=missing()
+            checkpoint()
+            local kinds={}
+            local samples={}
+            for _,i in ipairs(rest) do
+                local p=bp.parts[i]
+                kinds[p.kind]=(kinds[p.kind] or 0)+1
+                if #samples<15 then
+                    samples[#samples+1]="#"..i.." "..p.kind..
+                        " ID="..tostring(p.id).." "..tostring(p.category)..
+                        " attempts="..tostring(progress.attempts[tostring(i)] or 0)
+                end
+            end
+            local kindText={}
+            for kind,count in pairs(kinds) do
+                kindText[#kindText+1]=kind..":"..count
+            end
+            table.sort(kindText)
+            log("Progress file: "..progressFile)
+            log("Missing by type: "..table.concat(kindText,", "))
+            for _,line in ipairs(samples) do log("MISSING "..line) end
+            log("Unsupported types in capture: "..#unsupported)
+            local count=confirmedCount()
+            local summary=(cancel and "TRANSFER STOPPED" or
+                (#rest==0 and "TRANSFER VERIFIED" or "TRANSFER INCOMPLETE"))..
+                ": "..count.."/"..total.." matched, "..#rest..
+                " missing, "..sent.." requests. PASTE / REPAIR retries remaining."
+            inform(summary,#rest>0)
+        end)
         busy=false
-        local result="PASTE "..(cancel and "STOPPED" or "FINISHED")..
-            ": "..confirmed.." confirmed, "..failed.." unconfirmed, "..
-            skipped.." skipped. "..attempted.." requests."
-        inform(result,failed>0)
-        log("Supported items are experimental; a sent remote is NOT proof of acceptance.")
-        for kind,failures in pairs(categoryFailures) do
-            if failures>=6 then log(kind.." stage paused after six consecutive unconfirmed requests") end
+        if not ok then
+            inform("Transfer error: "..tostring(problem),true)
+            log("Use COPY LOG for diagnostics.")
         end
-        for _,e in ipairs(firstErrors) do log(e) end
     end)
 end
 action(1,1,"COPY PLOT",function()
@@ -799,14 +1031,14 @@ action(1,1,"COPY PLOT",function()
     selectedBase=nil
     nameEntry.Text=bp.name
     armed=false
-    if pasteButton then pasteButton.Text="PASTE TO MY PLOT" end
+    if pasteButton then pasteButton.Text="PASTE / REPAIR" end
     refresh()
     inform("Captured "..#bp.parts.." objects from "..p.Name..
         " ("..ignored.." skipped). Press SAVE BASE.")
 end,true)
 action(2,1,"SAVE BASE",saveCurrent,true)
 action(3,1,"COPY JSON",copyJson)
-pasteButton=action(1,2,"PASTE TO MY PLOT",paste,true)
+pasteButton=action(1,2,"PASTE / REPAIR",paste,true)
 action(2,2,"STOP",function()
     cancel=true
     if busy then inform("Stopping after current verification...")
