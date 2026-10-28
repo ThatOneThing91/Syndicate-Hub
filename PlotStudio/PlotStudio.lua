@@ -925,7 +925,7 @@ local function beginPreview()
 end
 
 -- Build engine v0.3. The first real action is always a one-wall test.
-local build={busy=false,cancel=false,passed=false,signature=nil,firstIndex=nil,status="Not started",sent=0,total=0}
+local build={busy=false,cancel=false,passed=false,signature=nil,firstIndex=nil,status="Not started",sent=0,total=0,lastAudit="No construction audit yet"}
 -- Timing presets apply only to actual construction requests.
 -- Delays are intentionally bounded to avoid an unbounded remote spam loop.
 local BUILD_SPEEDS={
@@ -2236,8 +2236,15 @@ local function startBuild()
     if stairTest.passed and stairTest.signature==buildSignature(plot,origin) then
         local finishing=staircaseAndDetails(plot,origin)
         if finishing then
-            for _,u in ipairs(finishing) do units[#units+1]=u end
-            notify("Including "..#finishing.." verified-ID stair/detail Shapes")
+            local stairCount=0
+            for _,u in ipairs(finishing) do
+                if u.kind=="StairShape" then
+                    units[#units+1]=u
+                    stairCount=stairCount+1
+                end
+            end
+            notify("Including "..stairCount..
+                " verified staircase Shapes. Ornamental details are held until AFTER structural windows.")
         end
     elseif state.floors>1 then
         notify("Stairs not verified: full castle blocked to prevent inaccessible floors")
@@ -2274,6 +2281,7 @@ local function startBuild()
     notify("Build started / "..selectedSpeed.." mode / "..build.total.." requests")
     task.spawn(function()
         local sent,failures,extraSkips=0,0,0
+        build.lastAudit="Build in progress; final audit pending"
         local submitted={}
         local fresh=occupiedFromPlot(plot,origin)
         for i,u in ipairs(units) do
@@ -2377,9 +2385,44 @@ local function startBuild()
             if not build.cancel then
                 task.wait(.9)
                 snapshot=occupiedFromPlot(plot,origin)
+                local byKind={}
+                local samples={}
                 for _,u in ipairs(submitted) do
-                    if not present(u) then stillMissing=stillMissing+1 end
+                    if not present(u) then
+                        stillMissing=stillMissing+1
+                        byKind[u.kind]=(byKind[u.kind] or 0)+1
+                        if #samples<12 then
+                            local p=u.cf and u.cf.Position or
+                                (u.a and u.b and (u.a+u.b)*.5) or
+                                (u.x and Vector3.new(u.x,0,u.z)) or Vector3.zero
+                            samples[#samples+1]=u.kind..
+                                "  floor "..tostring((u.lv or 0)+1)..
+                                "  at ("..math.floor(p.X+.5)..", "..
+                                math.floor(p.Y+.5)..", "..
+                                math.floor(p.Z+.5)..")"
+                        end
+                    end
                 end
+                local report={
+                    "UNCONFIRMED CONSTRUCTION AUDIT",
+                    "Sent: "..sent.." / repair requests: "..repairSent,
+                    "Occupied before send: "..extraSkips,
+                    "Still unconfirmed: "..stillMissing,
+                    "Wall/Shape conflicts NOT retried: "..serverConflicts,
+                    "These are local replication checks, not server rejection reasons.",
+                    ""
+                }
+                for _,kind in ipairs({"Wall","Floor","Roof","StairShape","DetailShape"}) do
+                    if byKind[kind] then
+                        report[#report+1]=kind..": "..byKind[kind]
+                    end
+                end
+                if #samples>0 then
+                    report[#report+1]=""
+                    report[#report+1]="EXAMPLE UNCONFIRMED LOCATIONS"
+                    for _,line in ipairs(samples) do report[#report+1]=line end
+                end
+                build.lastAudit=table.concat(report,"\n")
             end
         end
         build.busy=false
@@ -3015,7 +3058,7 @@ renderPage = function(page)
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"Structural floors and walls go first. Use real Windows after the walls exist, then verified staircase and ornament Shapes. Inspect ACTUAL BUILD VIEW.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"Build floors, walls, roofs and VERIFIED stairs first. Install real Windows next; add decorative Shapes last. Inspect ACTUAL BUILD VIEW.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
@@ -3026,10 +3069,13 @@ renderPage = function(page)
         button(builderPanel,"2. START BUILD",176,115,160,34,build.passed,function()
             if not build.passed then modal("Test required","Press TEST ONE WALL and wait for a successful confirmation before starting the shell build.");return end
             modal("Build only after inspecting the route",
-                "Review ACTUAL BUILD VIEW, HIGHLIGHT ACCESS and CHECK DESIGN first. The builder will attempt real masonry, galleries and the verified staircase/ornaments. Native Windows are a separate step after walls exist. Some parts may still be rejected by the game.\n\nDo NOT bulldoze to retest. You can add verified windows and finishing details to existing masonry. Permanent changes may cost currency.",
+                "Review ACTUAL BUILD VIEW, HIGHLIGHT ACCESS and CHECK DESIGN first. The builder attempts floors, walls, roofs and verified stairs. Next use native Windows, then ADD STAIRS + DECOR for final ornament. Some pieces may still be rejected by the game.\n\nDo NOT bulldoze to retest. You can add verified windows and finishing details to existing masonry. Permanent changes may cost currency.",
                 "BUILD STRUCTURE",startBuild)
         end)
         button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
+        button(builderPanel,"VIEW BUILD AUDIT",153,156,182,26,false,function()
+            modal("Last construction audit",build.lastAudit)
+        end)
         local note=block(scroll,80)
         sectionNote(note,"NO MORE PLOT RESETS FOR TESTING",
             "Inspect the U-shaped stair route first, test one solid wall and one walkable Shape. Finish the existing castle instead of rebuilding its shell.",7)
