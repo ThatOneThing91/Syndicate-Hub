@@ -311,6 +311,24 @@ local function plotFrame(plot)
     end
     return nil
 end
+local function teleportPlotCenter()
+    local plot=ownedPlot()
+    local frame=plot and plotFrame(plot)
+    local char=player.Character
+    local root=char and char:FindFirstChild("HumanoidRootPart")
+    if not frame or not root then
+        notify("Your plot or character is unavailable")
+        return
+    end
+    local target=frame.Position+Vector3.new(0,5,0)
+    local ray=workspace:Raycast(target+Vector3.new(0,30,0),Vector3.new(0,-80,0))
+    if ray and ray.Position.Y>frame.Position.Y-3 and ray.Position.Y<frame.Position.Y+7 then
+        target=Vector3.new(target.X,ray.Position.Y+4,target.Z)
+    end
+    root.CFrame=CFrame.new(target)*CFrame.Angles(0,math.rad(plot:GetAttribute("RotationY") or 0),0)
+    notify("Teleported to your plot center")
+end
+
 local function previewFrame()
     local owned=ownedPlot()
     local f=plotFrame(owned)
@@ -884,7 +902,7 @@ local build={busy=false,cancel=false,passed=false,signature=nil,firstIndex=nil,s
 local BUILD_SPEEDS={
     Steady={interval=.24,burst=12,cooldown=.12},
     Fast={interval=.08,burst=18,cooldown=.12},
-    Turbo={interval=.045,burst=20,cooldown=.10},
+    Turbo={interval=.12,burst=8,cooldown=.32},
 }
 local buildStatusText=nil
 local function refreshBuildStatus()
@@ -1911,7 +1929,18 @@ local function startBuild()
             notify("Including "..#finishing.." verified-ID stair/detail Shapes")
         end
     elseif state.floors>1 then
-        notify("Shape test not passed: only core shell will be submitted")
+        notify("Stairs not verified: full castle blocked to prevent inaccessible floors")
+        return
+    end
+    if state.floors>1 then
+        local hasStairs=false
+        for _,u in ipairs(units) do
+            if u.kind=="StairShape" then hasStairs=true;break end
+        end
+        if not hasStairs then
+            notify("No buildable staircase found. Refusing another inaccessible castle.")
+            return
+        end
     end
     if #units>900 then notify("Blueprint exceeds 900-piece limit");return end
     notify("Occupancy scan: "..(stats and stats.skipped or 0)..
@@ -2336,6 +2365,7 @@ renderPage = function(page)
         text(selected,d.name,16,44,430,30,20,C.white,true,{Size=UDim2.new(1,-34,0,30)})
         button(selected,"CHANGE",16,79,102,23,false,function() switchPage("Blueprints") end)
         button(selected,"BUILD CATALOG",126,79,150,23,false,function() switchPage("Catalog") end)
+        button(selected,"GO TO CENTER",284,79,157,23,false,teleportPlotCenter)
 
         local opts=block(scroll,165)
         text(opts,"BUILD SETTINGS",16,13,350,27,15,C.white,true)
@@ -2374,7 +2404,7 @@ renderPage = function(page)
             b.Position=UDim2.new((i-1)/3,6,0,42)
             b.Size=UDim2.new(1/3,-12,0,31)
         end
-        text(speedBox,"Fast: ~0.08s/request  ·  Turbo: ~0.045s/request  ·  Server limits may apply",16,82,470,29,10,C.dim,false,{
+        text(speedBox,"Turbo now uses paced batches to reduce missed placements. Server acceptance still needs verification.",16,82,470,29,10,C.dim,false,{
             Size=UDim2.new(1,-32,0,29),TextWrapped=true
         })
 
@@ -2779,7 +2809,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 1.5",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 1.6",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -2877,4 +2907,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v1.5 catalog-ready; building definitions scan automatically. Auction inventory is excluded.")
+print("[Plot Studio] v1.6 catalog-ready; building definitions scan automatically. Auction inventory is excluded.")
