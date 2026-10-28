@@ -1679,7 +1679,7 @@ end
 local function previewAccessAudit()
     if not previewFolder then beginPreview() end
     if not previewFolder then notify("Unable to construct the preview");return end
-    local counts={wall=0,floor=0,detail=0,glass=0,stairs=0,landings=0,bridges=0}
+    local counts={wall=0,floor=0,roof=0,detail=0,glass=0,stairs=0,landings=0,bridges=0}
     local flights,turns,exits={},{},{}
     local materialSet={}
     for _,p in ipairs(previewFolder:GetChildren()) do
@@ -1689,6 +1689,7 @@ local function previewAccessAudit()
             if mat then materialSet[mat]=true end
             if kind=="Wall" then counts.wall=counts.wall+1 end
             if kind=="Floor" then counts.floor=counts.floor+1 end
+            if kind=="Roof" then counts.roof=counts.roof+1 end
             if kind=="Decor" then counts.detail=counts.detail+1 end
             if kind=="Glass" then counts.glass=counts.glass+1 end
             if p.Name=="Stair tread" then
@@ -1728,17 +1729,17 @@ local function previewAccessAudit()
     local materials=0
     for _ in pairs(materialSet) do materials=materials+1 end
     local textBody=string.format(
-        "%d levels / %d distinct materials / %d walls / %d floor parts\n"..
+        "%d levels / %d distinct materials / %d walls / %d floor parts / %d ROOF PLANS\n"..
         "%d ornate details / %d glass panes / %d stair treads / %d landings / %d skybridges\n\n"..
         "Stair layout: two SEPARATE parallel flights, a U-turn at half-height, and an upper-floor gallery exit. Ground-floor courtyard is preserved.\n\n",
-        floors,materials,counts.wall,counts.floor,counts.detail,counts.glass,
+        floors,materials,counts.wall,counts.floor,counts.roof,counts.detail,counts.glass,
         counts.stairs,counts.landings,counts.bridges)
     if #missing>0 then
         textBody=textBody.."PREVIEW INCOMPLETE: "..table.concat(missing,", ")
     else
         textBody=textBody.."PREVIEW ROUTES PLANNED for every level."
     end
-    textBody=textBody.."\n\nOnly verified server-placed Shapes are guaranteed to be usable. Check the real stairs and walls before running a whole build."
+    textBody=textBody.."\n\nRoof plans are NOT installed by the masonry build. Use TEST ONE ROOF, then ADD REAL ROOFS. Check actual stairs and walls before more construction."
     modal("Castle blueprint audit",textBody)
 end
 local function highlightStairRoute()
@@ -2172,7 +2173,8 @@ local function finishCastle()
     build.total=#units;build.sent=0
     build.status="Finishing: 0 / "..#units.." Shapes"
     refreshBuildStatus()
-    notify("Finishing "..stairs.." stair treads and up to "..details.." detail shapes")
+    notify("Attempting up to 85 verified Shape placements this run; "..stairs..
+        " stair units and "..details.." decorative units are planned")
     task.spawn(function()
         local sent,confirmed,failed,skip,consecutive=0,0,0,skipped,0
         local stairOK,detailOK=0,0
@@ -3794,7 +3796,7 @@ renderPage = function(page)
         })
         button(finishPanel,"ADD STAIRS + DECOR",16,90,178,31,stairTest.passed,function()
             modal("Finish the existing castle?",
-                "Requires existing structural walls and one verified Shape tread. Adds custom stair treads and up to 260 decorative Shapes, without rebuilding the walls. These may cost game currency. The server can reject placements.",
+                "Requires existing structural walls and one verified Shape tread. Attempts up to 85 missing stair/decorative Shapes per run, checking each one and stopping after 3 consecutive unconfirmed pieces. You can rerun for more. No walls are rebuilt.",
                 "ADD FINISHES",finishCastle)
         end)
         button(finishPanel,"GLASS WALLS ONLY",201,90,155,31,false,function()
