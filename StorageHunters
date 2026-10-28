@@ -10561,6 +10561,10 @@ local function DestroyHub()
                       
                                                               
     HubDestroyed = true
+    State.AutoShopOffers = false
+    if ThisHubInstance.StopAutoShopOffers then
+        pcall(ThisHubInstance.StopAutoShopOffers)
+    end
     if ThisHubInstance.StopPlotPotionPickup then
         pcall(ThisHubInstance.StopPlotPotionPickup)
     end
@@ -12580,11 +12584,16 @@ do
         end
     end))
     -- Controller activation steps the slider 5%; number entry supports exact values.
-    TrackConnection(offerTrack.Activated:Connect(function()
-        if not HubDestroyed and not sliding then
-            local nextValue = (State.AutoShopOffersPercent or 0) + 5
-            setThreshold(nextValue > 100 and -100 or nextValue)
+    TrackConnection(offerTrack.Activated:Connect(function(input)
+        if HubDestroyed or sliding then return end
+        -- Pointer interaction is already handled by InputBegan.
+        if not input or
+            (input.UserInputType ~= Enum.UserInputType.Keyboard and
+             input.UserInputType ~= Enum.UserInputType.Gamepad1) then
+            return
         end
+        local nextValue = (State.AutoShopOffersPercent or 0) + 5
+        setThreshold(nextValue > 100 and -100 or nextValue)
     end))
     TrackConnection(percentBox.FocusLost:Connect(function()
         setThreshold(tonumber(percentBox.Text:match("[+-]?%d+")) or
@@ -12593,7 +12602,7 @@ do
 
     local function uuid(value)
         return type(value) == "string"
-            and value:match("^[%x]+%-%x+%-%x+%-%x+%-%x]+$") ~= nil
+            and value:match("^[%x]+%-%x+%-%x+%-%x+%-%x+$") ~= nil
     end
     local function getField(data, keys)
         for _, name in ipairs(keys) do
@@ -12664,8 +12673,8 @@ do
         if ok then
             answeredOffers[id] = now
             pendingOffers[id] = nil
-            setOfferStatus((accepted and "Accepted " or "Declined ") ..
-                pctString(math.floor(pct + .5)) .. " offer")
+            setOfferStatus((accepted and "Sent accept: " or "Sent decline: ") ..
+                pctString(math.floor(pct + .5)))
         else
             pendingOffers[id] = nil
             warn("[Syndicate Auto Shop Offers] Response failed: " .. tostring(err))
@@ -12715,9 +12724,8 @@ do
     end
     local function registerEvent(item)
         if not item:IsA("RemoteEvent") or item == responseEvent then return end
-        local name = item.Name:lower()
-        if not (name:find("offer", 1, true) or name:find("shopper", 1, true)
-            or name:find("customer", 1, true)) then return end
+        -- All inbound NPCShopper events are potential offer sources;
+        -- only payloads with an offer GUID and verified value are actionable.
         local connection = item.OnClientEvent:Connect(function(...)
             if not HubDestroyed and State.AutoShopOffers then
                 inspectEvent(...)
