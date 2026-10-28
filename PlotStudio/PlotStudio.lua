@@ -1178,6 +1178,10 @@ local nativeWindow={
     id=nil,name=nil,passed=false,signature=nil,
     status="Scan the catalog to identify real structural windows"
 }
+local nativeDoor={
+    id=nil,name=nil,passed=false,signature=nil,
+    status="Scan the catalog to identify native entrance doors"
+}
 local stairStatus="Build catalog has not been scanned"
 local function scoreWall(name)
     local lower=name:lower()
@@ -1342,7 +1346,7 @@ local function scanStairs()
         return a.id<b.id
     end)
     local stairs,shapes,walls={},{},{}
-    local windows={}
+    local windows,doors={},{} 
     for _,entry in ipairs(entries) do
         local low=entry.name:lower()
         if low:find("stair",1,true) or low:find("steps",1,true) then
@@ -1358,6 +1362,8 @@ local function scanStairs()
         end
         if entry.category=="Windows" then
             windows[#windows+1]=entry
+        elseif entry.category=="Doors" then
+            doors[#doors+1]=entry
         end
         if entry.category=="Walls" then
             local wall={
@@ -1368,6 +1374,18 @@ local function scanStairs()
         end
     end
     table.sort(stairs,function(a,b)return a.name:lower()<b.name:lower() end)
+    table.sort(doors,function(a,b)
+        local function score(v)
+            local n=v.name:lower()
+            return (n:find("castle",1,true) and 50 or 0)
+                +(n:find("gothic",1,true) and 40 or 0)
+                +(n:find("double",1,true) and 25 or 0)
+                +(n:find("arched",1,true) and 20 or 0)
+                +(n:find("door",1,true) and 10 or 0)
+        end
+        if score(a)~=score(b) then return score(a)>score(b) end
+        return a.name:lower()<b.name:lower()
+    end)
     table.sort(windows,function(a,b)
         local function score(v)
             local n=v.name:lower()
@@ -1411,6 +1429,21 @@ local function scanStairs()
     stairCatalog.shape=stairCatalog.shape or shapes[1]
     stairCatalog.models=stairs
     stairCatalog.walls=walls
+    local oldDoor=nativeDoor.id
+    local doorChoice
+    for _,entry in ipairs(doors) do
+        if entry.id==oldDoor then doorChoice=entry;break end
+    end
+    doorChoice=doorChoice or doors[1]
+    if (doorChoice and doorChoice.id or nil)~=oldDoor then
+        nativeDoor.passed=false
+        nativeDoor.signature=nil
+    end
+    nativeDoor.id=doorChoice and doorChoice.id or nil
+    nativeDoor.name=doorChoice and doorChoice.name or nil
+    nativeDoor.status=doorChoice and
+        ("Native doors: "..#doors.." / "..doorChoice.name..
+        " / test one entrance") or "No native Doors found in catalog"
     local priorWindow=nativeWindow.id
     local chosenWindow
     for _,entry in ipairs(windows) do
@@ -1441,7 +1474,7 @@ local function scanStairs()
     buildCatalog.status="Found "..#entries.." building items in "..
         tostring(#BUILD_CATEGORIES).." eligible categories"
     stairStatus=#stairs.." stair models | "..#shapes..
-        " shapes | "..#walls.." walls | "..#windows.." native windows"
+        " shapes | "..#walls.." walls | "..#windows.." windows | "..#doors.." doors"
     notify("Build Catalog: "..#entries.." build items / stock & inventory excluded")
     return true
 end
@@ -2274,6 +2307,117 @@ local function addNativeWindows()
             " consecutive failures")
         refreshBuildStatus()
         notify(build.status)
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+
+-- First-floor doors are actual Doors catalog items, not a Shape panel.
+-- Only test at the authored ground-floor opening. The editor may require
+-- WallSnap for some styles; if PlaceItem fails, STOP instead of guessing.
+local function entrancePosition(plot,origin)
+    if not previewFolder then beginPreview() end
+    local selected,score
+    if not previewFolder then return nil end
+    for _,p in ipairs(previewFolder:GetChildren()) do
+        if p:IsA("BasePart") and
+            p:GetAttribute("PlotStudioKind")=="Entrance" then
+            local relative=origin:ToObjectSpace(p.CFrame)
+            local value=math.abs(relative.Position.X)*3+
+                math.abs(relative.Position.Z)*.05
+            if not score or value<score then
+                selected=p;score=value
+            end
+        end
+    end
+    if not selected then return nil end
+    return selected.CFrame,selected.Size
+end
+local function realDoors(plot)
+    local out={}
+    for _,folderName in ipairs({"Furniture","Structures"}) do
+        local folder=plot:FindFirstChild(folderName)
+        if folder then
+            for _,m in ipairs(folder:GetChildren()) do
+                if m:IsA("Model") then
+                    local id=m:GetAttribute("ItemId")
+                    local known=id and
+                        buildCatalog.byId["Doors|"..tostring(id)]
+                    if known or m:GetAttribute("Category")=="Doors" or
+                        m:GetAttribute("ItemCategory")=="Doors" then
+                        out[#out+1]=m
+                    end
+                end
+            end
+        end
+    end
+    return out
+end
+local function newDoorConfirmed(plot,before,position,itemId)
+    for _,m in ipairs(realDoors(plot)) do
+        if not before[m] then
+            local id=m:GetAttribute("ItemId")
+            local ok,cf=pcall(function() return m:GetPivot() end)
+            if ok and (id==nil or tostring(id)==tostring(itemId)) and
+                Vector2.new(cf.Position.X-position.X,
+                    cf.Position.Z-position.Z).Magnitude<7 and
+                math.abs(cf.Position.Y-position.Y)<10 then
+                return true
+            end
+        end
+    end
+    return false
+end
+local function testNativeDoor()
+    if build.busy then notify("A build is already running");return end
+    if not ensureCatalog() or not nativeDoor.id then
+        notify("No real Doors item found. Scan or select from the catalog.")
+        return
+    end
+    local r=eventFor("Item")
+    if not r then notify("PlaceItem event missing");return end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin then notify("Owned plot not detected");return end
+    local cf=entrancePosition(plot,origin)
+    if not cf then notify("No first-floor entrance marked in this design");return end
+    for _,m in ipairs(realDoors(plot)) do
+        local ok,p=pcall(function() return m:GetPivot() end)
+        if ok and (p.Position-cf.Position).Magnitude<8 then
+            notify("A real door is already near this entrance. No duplicate sent.")
+            return
+        end
+    end
+    local before={}
+    for _,m in ipairs(realDoors(plot)) do before[m]=true end
+    local id=nativeDoor.id
+    build.busy=true;build.cancel=false
+    build.status="Testing ONE real ground-floor door..."
+    refreshBuildStatus()
+    task.spawn(function()
+        local ok,err=pcall(function()
+            r:FireServer(id,"Doors",cf,nil,nil,.25,nil,0)
+        end)
+        local passed=false
+        if ok then
+            for i=1,24 do
+                if not alive or build.cancel then break end
+                if newDoorConfirmed(plot,before,cf.Position,id) then
+                    passed=true;break
+                end
+                task.wait(.25)
+            end
+        end
+        nativeDoor.passed=passed
+        nativeDoor.signature=passed and
+            (plot.Name.."|"..tostring(id)) or nil
+        nativeDoor.status=passed and
+            ("Ground-floor door CONFIRMED: "..tostring(nativeDoor.name)) or
+            "Door not confirmed. No additional door requests sent."
+        build.busy=false
+        build.status=nativeDoor.status
+        refreshBuildStatus()
+        notify(nativeDoor.status..
+            (not ok and (" / "..tostring(err):sub(1,70)) or ""))
         if alive and state.page=="Builder" then switchPage("Builder") end
     end)
 end
@@ -3500,6 +3644,18 @@ renderPage = function(page)
                                 stairTest.passed=false
                                 notify("Shape candidate: "..item.name..". Retest stair tread.")
                             end
+                        end
+                    elseif item.category=="Doors" then
+                        message=message..
+                            "\n\nSelect this genuine Doors catalog item for a ONE-DOOR test at the ground-floor entrance. The test uses PlaceItem and must be confirmed in the plot."
+                        label="SELECT DOOR"
+                        action=function()
+                            nativeDoor.id=item.id
+                            nativeDoor.name=item.name
+                            nativeDoor.passed=false
+                            nativeDoor.signature=nil
+                            nativeDoor.status="Selected "..item.name.." / test one entrance"
+                            notify("Native entrance door selected: "..item.name)
                         end
                     elseif item.category=="Windows" then
                         message=message..
