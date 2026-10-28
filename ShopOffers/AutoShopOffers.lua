@@ -1,6 +1,7 @@
 -- Syndicate Hub optional module: Auto Shop Offers (isolated from hub startup).
 -- RespondOffer(offerGuid, bool) is known; incoming offer schema is not confirmed.
--- Only decide when BOTH a real offer UUID and a value-based difference are supplied.
+-- V2: detect offer data from events AND the visible customer offer GUI.
+-- Do not decide when there is no reliable offer percentage.
 return function(cfg)
     assert(type(cfg)=="table" and typeof(cfg.parent)=="Instance","Shop page required")
     local ReplicatedStorage=game:GetService("ReplicatedStorage")
@@ -18,6 +19,12 @@ return function(cfg)
     local closed=false
     local percent=0
     local decided={}
+    local pendingIds={}
+    local guiHandled={}
+    local lastGui={}
+    local eventCount=0
+    local lastEventName=""
+    local watchedNames={}
     local function create(class,properties,parentObject)
         local item=Instance.new(class)
         for key,value in pairs(properties) do item[key]=value end
@@ -79,10 +86,23 @@ return function(cfg)
         ClearTextOnFocus=false,TextXAlignment=Enum.TextXAlignment.Center
     },adjust)
     corner(edit,6)
-    local status=frame(28)
+    local status=frame(52)
     local statusText=create("TextLabel",{
-        Position=UDim2.fromOffset(12,0),Size=UDim2.new(1,-24,1,0),
+        Position=UDim2.fromOffset(12,0),Size=UDim2.new(1,-24,0,23),
         BackgroundTransparency=1,Text="OFF · Requires a verifiable offer percentage",
+        TextColor3=muted,TextSize=10,Font=Enum.Font.Gotham,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        TextTruncate=Enum.TextTruncate.AtEnd
+    },status)
+    local diagnose=create("TextButton",{
+        Position=UDim2.new(1,-118,0,25),Size=UDim2.fromOffset(106,22),
+        BackgroundColor3=dark,TextColor3=white,Text="SCAN OFFER",
+        TextSize=10,Font=Enum.Font.GothamBold,BorderSizePixel=0
+    },status)
+    corner(diagnose,5)
+    local hint=create("TextLabel",{
+        Position=UDim2.fromOffset(12,25),Size=UDim2.new(1,-140,0,22),
+        BackgroundTransparency=1,Text="Detects offers in game UI and remotes",
         TextColor3=muted,TextSize=10,Font=Enum.Font.Gotham,
         TextXAlignment=Enum.TextXAlignment.Left,
         TextTruncate=Enum.TextTruncate.AtEnd
@@ -123,10 +143,17 @@ return function(cfg)
             return tonumber(clean)
         end
     end
-    local ids={"offerId","OfferId","OfferID","offerGuid","OfferGuid","guid","Guid","GUID","id","Id","UUID"}
-    local prices={"offerPrice","OfferPrice","offeredPrice","OfferedPrice","offerAmount","OfferAmount"}
-    local values={"itemValue","ItemValue","marketValue","MarketValue","baseValue","BaseValue","listedPrice","ListedPrice"}
-    local diffs={"differencePercent","DifferencePercent","percentageDifference","PercentageDifference","offerDifferencePercent","OfferDifferencePercent"}
+    local ids={"offerId","OfferId","OfferID","offerGuid","OfferGuid","OfferUUID","offerUUID",
+        "CustomerOfferId","customerOfferId","OfferIdentifier","guid","Guid","GUID","id","Id","UUID"}
+    local prices={"offerPrice","OfferPrice","offeredPrice","OfferedPrice","offerAmount","OfferAmount",
+        "BidAmount","bidAmount","PriceOffered","priceOffered","CurrentOffer","currentOffer","offerValue"}
+    local values={"itemValue","ItemValue","marketValue","MarketValue","baseValue","BaseValue",
+        "listedPrice","ListedPrice","Price","OriginalValue","originalValue","askingPrice","AskingPrice",
+        "ItemWorth","itemWorth","ActualValue","actualValue"}
+    local diffs={"differencePercent","DifferencePercent","percentageDifference","PercentageDifference",
+        "offerDifferencePercent","OfferDifferencePercent","OfferPercentDifference",
+        "profitPercent","ProfitPercent","PriceDifferencePercent","priceDifferencePercent",
+        "percentAboveValue","PercentAboveValue","percentage","Percentage"}
     local function difference(tbl)
         local price=num(field(tbl,prices))
         local worth=num(field(tbl,values))
@@ -150,6 +177,7 @@ return function(cfg)
         local remote=shopper and shopper:FindFirstChild("RespondOffer")
         if not remote or not remote:IsA("RemoteEvent") then return end
         decided[id]=true
+        pendingIds[id]=nil
         local accept=pct>=percent
         local ok,err=pcall(function() remote:FireServer(id,accept) end)
         if ok then
@@ -167,21 +195,35 @@ return function(cfg)
         local id=field(tbl,ids)
         if not uuid(id) then id=inherited end
         local diff=difference(tbl)
-        if uuid(id) and diff then handleOffer(id,diff) end
+        if uuid(id) then
+            if not decided[id] then pendingIds[id]=os.clock() end
+            if diff then handleOffer(id,diff) end
+        end
         for _,item in pairs(tbl) do
             if type(item)=="table" then inspect(item,id,depth+1,seen) end
         end
     end
-    local function readEvent(...)
+    local function readEvent(sourceName,...)
         if not active then return end
+        eventCount=eventCount+1
+        lastEventName=tostring(sourceName)
         local args={...}
         local possibleId=nil
+        local numeric={}
         for _,arg in ipairs(args) do
-            if uuid(arg) then possibleId=arg;break end
+            if uuid(arg) then possibleId=arg end
+            if type(arg)=="number" then numeric[#numeric+1]=arg end
         end
+        if possibleId and not decided[possibleId] then pendingIds[possibleId]=os.clock() end
         local seen={}
         for _,arg in ipairs(args) do
             if type(arg)=="table" then inspect(arg,possibleId,0,seen) end
+        end
+        -- Positional (UUID, offer price, fair item value) is valid only with
+        -- exactly two distinct positive numeric fields; no blind single value.
+        if possibleId and #numeric==2 and numeric[1]>=0 and numeric[2]>0 then
+            local delta=(numeric[1]/numeric[2]-1)*100
+            handleOffer(possibleId,delta)
         end
     end
     local function subscribe()
