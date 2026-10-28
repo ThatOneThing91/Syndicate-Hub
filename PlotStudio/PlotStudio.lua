@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.2: structural-first repairs, compact controls, and real shell previews
+    Standalone Plot Studio v2.3: live plot repair snapshots, verified Shape diagnostics and optional roof cap
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -165,7 +165,7 @@ local emblem = corner(ui("Frame", {
     BackgroundColor3 = C.purple, BorderSizePixel = 0,
 }, header), 10)
 text(emblem, "P", 0, 0, 38, 38, 22, C.bg, true, {TextXAlignment = Enum.TextXAlignment.Center})
-text(header, "PLOT STUDIO  V2.2", 65, 12, 285, 25, 19, C.white, true)
+text(header, "PLOT STUDIO  V2.3", 65, 12, 285, 25, 19, C.white, true)
 text(header, "STORAGE HUNTERS  /  BLUEPRINT LAB", 65, 36, 280, 17, 10, C.dim, false)
 local headerStatus = corner(ui("Frame", {
     AnchorPoint = Vector2.new(1, 0.5),
@@ -173,7 +173,7 @@ local headerStatus = corner(ui("Frame", {
     Size = UDim2.fromOffset(102, 25),
     BackgroundColor3 = C.purpleDark, BorderSizePixel = 0,
 }, header), 12)
-text(headerStatus, "●  V2.2 BETA", 8, 0, 92, 25, 10, C.white, true)
+text(headerStatus, "●  V2.3 BETA", 8, 0, 92, 25, 10, C.white, true)
 
 local minus = button(header, "—", 0, 0, 32, 30, false, nil)
 minus.AnchorPoint = Vector2.new(1, 0.5)
@@ -216,7 +216,7 @@ for i, data in ipairs(navSpecs) do
     navButtons[data[1]] = {button=b, label=lbl}
     on(b.MouseButton1Click, function() if switchPage then switchPage(data[1]) end end)
 end
-local sidebarBottom = text(sidebar, "V2.2  •  PLOT STUDIO", 15, 0, 164, 18, 10, C.muted, true)
+local sidebarBottom = text(sidebar, "V2.3  •  PLOT STUDIO", 15, 0, 164, 18, 10, C.muted, true)
 sidebarBottom.AnchorPoint = Vector2.new(0,1)
 sidebarBottom.Position = UDim2.new(0,15,1,-16)
 
@@ -3255,6 +3255,58 @@ local function startBuild()
     end)
 end
 
+-- The server-replicated plot is the layout snapshot. Nothing is
+-- deleted or redrawn when a script update changes the design concept.
+local function inspectCurrentPlot()
+    if build.busy then notify("Finish the active build job first");return end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin then notify("Owned plot not found");return end
+    beginPreview()
+    local occupied=occupiedFromPlot(plot,origin)
+    local units,_,_,stats=buildPlan()
+    local existing={Wall=0,Floor=0,Roof=0}
+    for _,v in ipairs(occupied) do
+        if existing[v.kind]~=nil then
+            existing[v.kind]=existing[v.kind]+1
+        end
+    end
+    local missing={Wall=0,Floor=0,Roof=0}
+    local protected=0
+    if units then
+        for _,u in ipairs(units) do
+            if u.kind=="Wall" or u.kind=="Floor" then
+                if not shellConfirmed(u,occupied) then
+                    if newShellCanAttach(u,occupied) then
+                        missing[u.kind]=missing[u.kind]+1
+                    else
+                        protected=protected+1
+                    end
+                end
+            end
+        end
+    end
+    local w,d=getFootprint(plot)
+    build.lastAudit="LIVE PLOT SNAPSHOT (READ ONLY)\n"..
+        "Plot: "..plot.Name..
+        "\nUsable footprint: "..math.floor(w+.5).." x "..math.floor(d+.5)..
+        "\nReal walls: "..existing.Wall..
+        "\nReal floors: "..existing.Floor..
+        "\nReal roofs: "..existing.Roof..
+        "\nShape-like instances: "..#shapeModels(plot)..
+        "\nMissing wall segments near existing layout: "..missing.Wall..
+        "\nMissing interior floor tiles: "..missing.Floor..
+        "\nUnrelated/new layout pieces held back: "..protected..
+        "\n\nWindows/doors are separate native items."..
+        "\nPreview geometry is NOT a saved original blueprint."..
+        "\nLayout is reconstructed from the actual plot on every run."
+    build.status="Plot scanned: "..existing.Wall.." walls, "..
+        existing.Floor.." floors; "..(missing.Wall+missing.Floor)..
+        " candidate repairs."
+    refreshBuildStatus()
+    modal("CURRENT PLOT • READ ONLY",build.lastAudit)
+end
+
 -- A truthful, request-derived preview. Concept-only embellishments fade away;
 -- walls/floors and VERIFIED Stair/Detail Shapes appear where their placement
 -- requests would actually go, after the plot's current occupancy is scanned.
@@ -3861,7 +3913,7 @@ renderPage = function(page)
             })
 
         end -- advanced Shape diagnostics and Windows setup
-        local completion=block(scroll,318,C.raised)
+        local completion=block(scroll,369,C.raised)
         text(completion,"ENTRANCE • ROOF • COURTYARD",16,10,440,25,15,C.white,true)
         text(completion,"Non-destructive repairs for the castle already on your plot. Each new placement type starts with a one-piece test.",
             16,37,435,38,11,C.dim,false,{
@@ -3919,9 +3971,14 @@ renderPage = function(page)
             state.advancedBuilder=true
             switchPage("Builder")
         end)
-        text(completion,"Safe sequence: structure → door → stair gaps → low wings → real roofs → ornaments.",
-            16,284,430,22,10,C.dim,false,{
-                Size=UDim2.new(1,-32,0,22),TextWrapped=true
+        button(completion,"FLAT ROOF FALLBACK",16,281,187,31,false,function()
+            modal("Try a real flat roof-cap floor?",
+                "ONLY if the native pitched roof isn't placing. Tests real PlaceFloor slabs at the roof line over existing supported rooms and checks every result. A flat cap isn't a pitched roof. No existing structures are deleted. This may cost currency.",
+                "TRY FLAT ROOF",addFlatRoofCap)
+        end)
+        text(completion,"Order: shell → door → stair gaps → wings → native roof (or flat fallback) → ornaments.",
+            16,319,435,37,10,C.dim,false,{
+                Size=UDim2.new(1,-32,0,37),TextWrapped=true
             })
 
         if state.advancedBuilder then
@@ -3953,7 +4010,7 @@ renderPage = function(page)
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"Build only missing walls and floors, even when the stair test fails. Roofs, doors, windows and Shapes use separate operations. The concept preview is NOT a guaranteed result.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"Scan your current plot and fill missing walls/floors without erasing the existing layout. Native roofs, doors, windows and Shapes are independent. Preview is not a guarantee.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"BUILD / REPAIR SHELL",16,115,229,34,false,function()
@@ -3962,7 +4019,8 @@ renderPage = function(page)
                 "BUILD STRUCTURE",startBuild)
         end)
         button(builderPanel,"STOP",252,115,84,34,false,stopBuild)
-        button(builderPanel,"VIEW BUILD AUDIT",16,156,190,26,false,function()
+        button(builderPanel,"SCAN PLOT",16,156,135,26,false,inspectCurrentPlot)
+        button(builderPanel,"VIEW BUILD AUDIT",160,156,178,26,false,function()
             modal("Last construction audit",build.lastAudit)
         end)
         local note=block(scroll,80)
@@ -4290,7 +4348,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 2.2",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 2.3",
             "Independent of Syndicate Hub. Local previews are conceptual; build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -4388,4 +4446,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v2.2 structural shell independent of stair tests, compact controls, safer curved facade plan.")
+print("[Plot Studio] v2.3 live plot snapshots, safer confirmed repairs, roof-cap fallback, Shape diagnostics.")
