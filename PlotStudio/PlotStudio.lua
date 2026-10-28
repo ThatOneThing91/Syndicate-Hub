@@ -4795,7 +4795,7 @@ renderPage = function(page)
         sectionNote(tip,"COMMUNITY BLUEPRINTS — COMING SOON",
             "Import, save, browse and share builds with other players once the format is ready.",8)
     elseif page=="Builder" then
-        pageHead(scroll,"Construction desk","Customize your project before you build.")
+        pageHead(scroll,"Construction desk","Load a blueprint and build it automatically.")
         local d=designs[state.design]
         local selected=block(scroll,107,C.raised)
         pill(selected,"CURRENT DESIGN",16,12,130,C.mint)
@@ -4824,9 +4824,29 @@ renderPage = function(page)
         plusF.TextSize=19
         text(opts,"MAX 5  •  STAIRS DO NOT BLOCK MASONRY",16,132,350,18,10,C.muted,true)
 
+        local builderPanel=block(scroll,245,C.raised)
+        text(builderPanel,"BLUEPRINT BUILD CONTROLS",16,10,425,26,15,C.white,true)
+        text(builderPanel,"Load your selected castle plan, then press START. Missing pieces are placed, overlaps are adjusted and isolated errors are skipped automatically.",16,40,435,43,11,C.dim,false,{
+            Size=UDim2.new(1,-32,0,43),TextWrapped=true
+        })
+        button(builderPanel,"LOAD BLUEPRINT",16,92,183,38,false,function()
+            if loadBlueprint(false) then switchPage("Builder") end
+        end)
+        button(builderPanel,"START BUILD",208,92,216,38,true,startBuild)
+        button(builderPanel,"REPAIR MISSING",16,144,187,37,false,repairBlueprint)
+        button(builderPanel,"STOP",213,144,103,37,false,stopBuild)
+        buildStatusText=text(builderPanel,build.status,16,189,425,48,11,C.mint,false,{
+            Size=UDim2.new(1,-32,0,48),TextWrapped=true
+        })
+        if state.advancedBuilder then
+            button(builderPanel,"VIEW AUDIT",327,144,102,37,false,function()
+                modal("Construction summary",build.lastAudit)
+            end)
+        end
+
         local advancedControl=block(scroll,65,C.raised)
         text(advancedControl,"ESSENTIAL WORKFLOW",16,8,284,21,13,C.white,true)
-        text(advancedControl,"Structure, repairs and a verified preview first.",16,31,300,20,10,C.dim,false)
+        text(advancedControl,"Optional tests, manual finishing and diagnostics.",16,31,300,20,10,C.dim,false)
         button(advancedControl,state.advancedBuilder and "HIDE ADVANCED" or "ADVANCED TOOLS",
             0,17,142,31,state.advancedBuilder,function()
                 state.advancedBuilder=not state.advancedBuilder
@@ -4871,8 +4891,8 @@ renderPage = function(page)
 
         end -- advanced construction speed + palette
         local action=block(scroll,177,C.raised)
-        text(action,"DESIGN IDEA vs. REAL SHELL REQUESTS",16,10,410,24,15,C.mint,true)
-        text(action,"Concept is an artistic mockup. Real Shell View shows ONLY missing walls/floors after occupancy checks. It does not promise doors, roof, windows or ornaments.",16,38,430,43,12,C.dim,false,{
+        text(action,"BLUEPRINT PREVIEW",16,10,410,24,15,C.mint,true)
+        text(action,"The concept preview shows your selected blueprint. Real Shell View highlights missing structural requests; START BUILD places the real pieces.",16,38,430,43,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,36),TextWrapped=true
         })
         button(action,"CONCEPT ONLY",16,86,145,32,false,beginPreview)
@@ -4956,6 +4976,7 @@ renderPage = function(page)
             })
 
         end -- advanced Shape diagnostics and Windows setup
+        if state.advancedBuilder then
         local completion=block(scroll,369,C.raised)
         text(completion,"ENTRANCE • ROOF • COURTYARD",16,10,440,25,15,C.white,true)
         text(completion,"Non-destructive repairs for the castle already on your plot. Each new placement type starts with a one-piece test.",
@@ -5055,39 +5076,7 @@ renderPage = function(page)
         })
 
         end -- advanced glass-wall and Shape tools
-        local builderPanel=block(scroll,270,C.raised)
-        text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
-        buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"START BUILD automatically verifies the first wall, floors, stairs, door and roof, then continues confirmed placements. Existing pieces are skipped; windows stay separate.",16,63,435,47,12,C.dim,false,{
-            Size=UDim2.new(1,-32,0,47),TextWrapped=true
-        })
-        button(builderPanel,"START BUILD",16,115,229,38,true,startBuild)
-        button(builderPanel,"STOP",252,115,84,38,false,stopBuild)
-        button(builderPanel,"AUTO REPAIR SHELL + GAPS",16,163,229,32,false,function()
-            modal("Automatically repair missing walls and floor gaps?",
-                "Runs up to 4 live plot scans and 120 paced requests without needing to press the button again. Each location gets up to 3 attempts with confirmation checks and cooldowns. Missing 4-stud floor sections are prioritized. Stops on request budget, no progress, or STOP. Existing structures are not removed. Full failure diagnostics are available in COPY LOG.",
-                "START AUTO REPAIR",autoRepairShell)
-        end)
-        button(builderPanel,"SCAN PLOT",252,163,135,32,false,inspectCurrentPlot)
-        button(builderPanel,"VIEW AUDIT",16,207,131,26,false,function()
-            modal("Last construction audit",build.lastAudit)
-        end)
-        button(builderPanel,"COPY FULL LOG",159,207,138,26,false,function()
-            local copy=type(setclipboard)=="function" and setclipboard or
-                (type(toclipboard)=="function" and toclipboard or nil)
-            if not copy then
-                notify("Clipboard unavailable. Read VIEW AUDIT or executor log.")
-                print("[Plot Studio Build Audit]\n"..tostring(build.lastAudit))
-                return
-            end
-            local ok=pcall(copy,tostring(build.lastAudit))
-            notify(ok and "Copied last construction audit." or
-                "Clipboard copy failed; check executor log.")
-            if not ok then print("[Plot Studio Build Audit]\n"..tostring(build.lastAudit)) end
-        end)
-        local note=block(scroll,80)
-        sectionNote(note,"KEEP YOUR EXISTING PLOT",
-            "START BUILD is the normal one-click workflow. AUTO REPAIR is optional and guarded; it is not required for normal building. Neither mode deletes existing plot parts.",7)
+        end -- advanced finishing tools
     elseif page=="Catalog" then
         pageHead(scroll,"Build Catalog","Live building items discovered in Storage Hunters.")
         local summary=block(scroll,132,C.raised)
