@@ -369,9 +369,11 @@ local function capture(plot)
                     if typeof(wallCf)=="CFrame" and type(wallLen)=="number" and wallLen>1 then
                         kind="Wall"
                     elseif cat=="Floors" or tostring(id or "")=="32" or
-                        (rootName=="Floors") then
+                        rootName=="Floors" or
+                        object.Name:lower():find("floor",1,true) then
                         kind="Floor"
                     elseif cat=="Roofs" or rootName=="Roofs" or
+                        object.Name:lower():find("roof",1,true) or
                         object:GetAttribute("RoofStyle")~=nil then
                         kind="Roof"
                     elseif id~=nil then
@@ -666,9 +668,11 @@ local function scene(plot)
                         type(wallLen)=="number" and wallLen>1 then
                         kind="Wall"
                     elseif cat=="Floors" or rootName=="Floors" or
-                        tostring(id or "")=="32" then
+                        tostring(id or "")=="32" or
+                        m.Name:lower():find("floor",1,true) then
                         kind="Floor"
                     elseif cat=="Roofs" or rootName=="Roofs" or
+                        m.Name:lower():find("roof",1,true) or
                         m:GetAttribute("RoofStyle")~=nil then
                         kind="Roof"
                     elseif id~=nil then
@@ -744,21 +748,48 @@ local function matches(part,expected,found)
     if part.kind=="Wall" then return true end
     return closeSize(part.size,found.size,part.kind)
 end
+-- Spatial index makes validation close to O(n) on large furnished plots;
+-- scanning every source piece against every model caused avoidable lag.
 local function reconcile(bp,origin,physical)
     local used,matched={},{}
     local count=0
+    local buckets={}
+    local function bucketKey(x,y,z)
+        return tostring(x)..":"..tostring(y)..":"..tostring(z)
+    end
+    local function bucketCoord(position)
+        return math.floor(position.X/8),math.floor(position.Y/8),
+            math.floor(position.Z/8)
+    end
+    for j,item in ipairs(physical) do
+        local x,y,z=bucketCoord(item.cf.Position)
+        local key=bucketKey(x,y,z)
+        local list=buckets[key]
+        if not list then
+            list={}
+            buckets[key]=list
+        end
+        list[#list+1]=j
+    end
     for i,p in ipairs(bp.parts) do
         local desired=expectedCf(p,origin)
         local best,bestDistance=nil,math.huge
         if desired then
-            for j,real in ipairs(physical) do
-                if not used[j] and matches(p,desired,real) then
-                    local distance=(desired.Position-real.cf.Position).Magnitude
-                    if distance<bestDistance then
-                        best,bestDistance=j,distance
+            local x,y,z=bucketCoord(desired.Position)
+            for dx=-1,1 do for dy=-1,1 do for dz=-1,1 do
+                local list=buckets[bucketKey(x+dx,y+dy,z+dz)]
+                if list then
+                    for _,j in ipairs(list) do
+                        local real=physical[j]
+                        if not used[j] and matches(p,desired,real) then
+                            local distance=(desired.Position-real.cf.Position).Magnitude
+                            if distance<bestDistance then
+                                best,bestDistance=j,distance
+                            end
+                        end
                     end
                 end
-            end
+            end end end
         end
         if best then
             used[best]=true
@@ -872,16 +903,18 @@ local function paste()
     local matched,already=reconcile(bp,origin,baseline)
     -- Refuse to overwrite an unrelated occupied plot. If some blueprint
     -- pieces are already there, resume against those existing pieces.
-    if #baseline>0 and already==0 then
-        inform("Your plot has "..#baseline..
-            " objects but none match this saved base. Paste blocked.",true)
-        return
-    end
+    local riskyOverlap=#baseline>0 and already==0
     if not armed then
         armed=true
-        pasteButton.Text="CONFIRM TRANSFER"
-        inform("Matched "..already.."/"..#bp.parts..
-            " existing pieces. Press CONFIRM to paste/repair missing.")
+        pasteButton.Text=riskyOverlap and "CONFIRM OVERLAP" or "CONFIRM TRANSFER"
+        if riskyOverlap then
+            inform("WARNING: "..#baseline.." existing objects; none match "..
+                "this blueprint exactly. Pasting may overlap/duplicate. "..
+                "Press CONFIRM OVERLAP only if intentional.",true)
+        else
+            inform("Matched "..already.."/"..#bp.parts..
+                " existing pieces. Press CONFIRM to paste/repair missing.")
+        end
         return
     end
     armed=false
@@ -890,6 +923,11 @@ local function paste()
     task.spawn(function()
         local ok,problem=pcall(function()
             local progress,progressFile=readProgress(bp,own)
+            log("Starting transfer: "..#bp.parts.." captured, "..#baseline..
+                " existing objects, "..already.." exact preexisting matches.")
+            if #progress.lastMissing>0 then
+                log("Prior session remembered "..#progress.lastMissing.." missing pieces.")
+            end
             local physical=baseline
             local verified=matched
             local passList={}
