@@ -587,49 +587,103 @@ local function beginPreview()
 
     -- Atrium cutout is left uncovered on upper decks. The staircase model is
     -- local-preview geometry until actual stair item IDs are recorded.
+    -- One coordinated stairwell plan shared by floor cutouts and both flights.
+    -- Floor N exits at the SOUTH edge; the mid-floor U-turn happens at the NORTH.
+    local function stairwell(wx,dz)
+        local wellW=math.clamp(wx*.27,17,34)
+        local wellD=math.clamp(dz*.65,27,56)
+        local wellX=wx*.14
+        local gap=math.clamp(wellW*.10,1.3,2.4)
+        local laneW=(wellW-gap-1.2)*.5
+        local spread=(laneW+gap)*.5
+        return wellX,wellW,wellD,laneW,spread
+    end
     local function galleryWithWell(cx,cz,wx,dz,lv)
         if lv<1 then return end
-        local wellX=wx*.17
-        local wellW=math.max(12,wx*.22)
-        local wellD=math.max(23,dz*.65)
+        local wellX,wellW,wellD=stairwell(wx,dz)
         local west=wellX-wellW/2
         local east=wellX+wellW/2
         local leftW=west+wx/2
         local rightW=wx/2-east
         local yy=lv*h-.28
-        if leftW>2 then deck("Gallery floor",cx-wx/2+leftW/2,yy,cz,leftW,dz-2,stone) end
-        if rightW>2 then deck("Gallery floor",cx+east+rightW/2,yy,cz,rightW,dz-2,stone) end
-        local strip=(dz-wellD)/2
+        -- Two full galleries flank the shaft, rather than covering the stairwell.
+        if leftW>2 then
+            deck("Gallery floor",cx-wx/2+leftW/2,yy,cz,leftW,dz-2,stone)
+        end
+        if rightW>2 then
+            deck("Gallery floor",cx+east+rightW/2,yy,cz,rightW,dz-2,stone)
+        end
+        local strip=(dz-wellD)*.5
         if strip>2 then
-            deck("North landing",cx+wellX,yy,cz+wellD/2+strip/2,wellW,strip,stone)
-            deck("South landing",cx+wellX,yy,cz-wellD/2-strip/2,wellW,strip,stone)
+            deck("North gallery connector",cx+wellX,yy,
+                cz+wellD*.5+strip*.5,wellW,strip,stone)
+            deck("South gallery exit",cx+wellX,yy,
+                cz-wellD*.5-strip*.5,wellW,strip,stone)
         end
+        -- Atrium railing around the opening, leaving SOUTH access for stairs.
         for _,side in ipairs({-1,1}) do
-            local bx=cx+wellX+side*wellW/2
-            deco("Open atrium balustrade",bx,lv*h+1.4,cz,.6,2.8,wellD,light)
+            deco("Open stairwell balustrade",cx+wellX+side*wellW*.5,
+                lv*h+1.4,cz,.5,2.8,wellD,light)
         end
+        deco("Northern stairwell guard",cx+wellX,lv*h+1.4,
+            cz+wellD*.5,wellW,.4,.4,light)
     end
     local function grandStaircase(cx,cz,wx,dz,levels)
-        local wellX=wx*.17
-        local wellD=math.max(23,dz*.65)
-        local treadW=math.max(6,wx*.10)
-        local n=18
+        if levels<2 then return end
+        local wellX,wellW,wellD,laneW,spread=stairwell(wx,dz)
+        local south=cz-wellD*.5+2.3
+        local north=cz+wellD*.5-2.3
+        local run=north-south
+        local steps=math.max(10,math.ceil(run/2.8))
+        local treadDepth=run/steps+.16
+        local stairThickness=.72
+        local leftLane=cx+wellX-spread
+        local rightLane=cx+wellX+spread
+        -- The FIRST lane climbs south -> north to the middle landing.
+        -- The SECOND lane returns north -> south, reaching the next gallery.
         for lv=0,levels-2 do
-            for i=1,n do
-                local t=(i-.5)/n
-                local direction=lv%2==0 and 1 or -1
-                local px=cx+wellX
-                local pz=cz-direction*(wellD*.43)+direction*t*wellD*.86
-                local yy=lv*h+t*h
-                deco("Stair tread",px,yy,pz,treadW,.65,wellD*.86/n+.25,
-                    lv%2==0 and light or stone)
+            local bottom=lv*h
+            local rise=h/(2*steps)
+            for i=1,steps do
+                local z1=south+(i-.5)*run/steps
+                local top1=bottom+i*rise
+                local t1=deco("Stair tread",leftLane,top1-stairThickness*.5,
+                    z1,laneW,stairThickness,treadDepth,stone)
+                if t1 then
+                    t1:SetAttribute("PlotStudioStorey",lv)
+                    t1:SetAttribute("StairFlight",1)
+                end
+                local z2=north-(i-.5)*run/steps
+                local top2=bottom+h*.5+i*rise
+                local t2=deco("Stair tread",rightLane,top2-stairThickness*.5,
+                    z2,laneW,stairThickness,treadDepth,stone)
+                if t2 then
+                    t2:SetAttribute("PlotStudioStorey",lv)
+                    t2:SetAttribute("StairFlight",2)
+                end
+                -- Sculpted balustrade posts outside the walking lanes.
+                if i%3==1 or i==steps then
+                    deco("Stair rail post",leftLane-laneW*.5-.45,
+                        top1+1.15,z1,.42,2.3,.42,light)
+                    deco("Stair rail post",rightLane+laneW*.5+.45,
+                        top2+1.15,z2,.42,2.3,.42,light)
+                end
             end
-            for _,side in ipairs({-1,1}) do
-                local px=cx+wellX+side*(treadW/2+.7)
-                deco("Stair railing",px,lv*h+h*.58,cz,.55,h*.90,wellD*.84,light)
-            end
-            deco("Intermediate landing",cx+wellX,(lv+1)*h-.2,
-                cz+(lv%2==0 and 1 or -1)*wellD*.44,treadW+3,.6,4,light)
+            -- Midway U-turn. It connects both parallel flights without
+            -- overlapping either flight at a different elevation.
+            local middle=deco("Stair landing",cx+wellX,bottom+h*.5-stairThickness*.5,
+                north+.65,wellW-.7,stairThickness,3.8,light)
+            if middle then middle:SetAttribute("PlotStudioStorey",lv) end
+            -- Exit bridge reaches the SOUTH gallery at the next storey,
+            -- with enough width to turn off the staircase into the room.
+            local exit=deco("Stair landing",rightLane,bottom+h-stairThickness*.5,
+                south-1.7,laneW+1.8,stairThickness,5.1,light)
+            if exit then exit:SetAttribute("PlotStudioStorey",lv+1) end
+            -- Architectural support under the halfway turn.
+            deco("Stair landing support",cx+wellX,bottom+h*.23,
+                north+.9,wellW*.58,h*.44,1.3,dark)
+            deco("Stair level emblem",cx+wellX,bottom+h*.52,
+                north+wellD*.02,2.5,1.7,.3,gold)
         end
     end
 
@@ -747,8 +801,8 @@ local function beginPreview()
         end
         crenels(0,-size/2,size,floors*h+1,0)
     end
-    notify("DESIGN PREVIEW: "..count.." curated pieces / "..profile.name..
-        " / stairways shown for planning (not yet buildable)")
+    notify("DESIGN PREVIEW: "..count.." pieces / "..profile.name..
+        " / two-flight switchback stairs + middle and upper landings")
     if state.page=="Builder" and switchPage then switchPage("Builder") end
 end
 
@@ -1097,7 +1151,7 @@ local function rawStairUnits(plot,origin)
     end)
     h=math.clamp(h,6,30)
     for _,p in ipairs(previewFolder:GetChildren()) do
-        if p:IsA("BasePart") and p.Name=="Stair tread" then
+        if p:IsA("BasePart") and (p.Name=="Stair tread" or p.Name=="Stair landing") then
             result[#result+1]={
                 kind="StairShape",
                 id=stairCatalog.shape.id,
@@ -1105,13 +1159,17 @@ local function rawStairUnits(plot,origin)
                 size=p.Size,
                 color=p:GetAttribute("PlotStudioColor"),
                 material=p:GetAttribute("PlotStudioMaterial"),
-                lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y)/h),0,4)
+                lv=math.clamp(p:GetAttribute("PlotStudioStorey") or
+                    math.floor((p.Position.Y-origin.Position.Y)/h),0,4)
             }
         end
     end
     table.sort(result,function(a,b)
         if a.lv~=b.lv then return a.lv<b.lv end
-        return a.cf.Position.Y<b.cf.Position.Y
+        if a.cf.Position.Y~=b.cf.Position.Y then
+            return a.cf.Position.Y<b.cf.Position.Y
+        end
+        return a.cf.Position.Z<b.cf.Position.Z
     end)
     return result
 end
@@ -2154,7 +2212,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 1.0",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 1.1",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -2242,4 +2300,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v1.0 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v1.1 loaded. Preview is local; confirmed builder actions may place permanent structures.")
