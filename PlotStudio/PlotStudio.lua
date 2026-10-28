@@ -1985,6 +1985,7 @@ local function startBuild()
     notify("Build started / "..selectedSpeed.." mode / "..build.total.." requests")
     task.spawn(function()
         local sent,failures,extraSkips=0,0,0
+        local submitted={}
         local fresh=occupiedFromPlot(plot,origin)
         for i,u in ipairs(units) do
             if not alive or build.cancel then break end
@@ -2008,6 +2009,7 @@ local function startBuild()
                     fresh[#fresh+1]=u
                 end
                 sent=sent+1
+                submitted[#submitted+1]=u
                 build.sent=sent
                 if i%12==0 or i==#units then
                     build.status="Building ("..selectedSpeed..") "..i.." / "..build.total..
@@ -2018,6 +2020,63 @@ local function startBuild()
                 task.wait(pace.interval+rest)
             end
         end
+        -- The original Turbo loop only counted requests SENT. It could not
+        -- distinguish accepted pieces from throttled/rejected pieces.
+        -- Do a bounded single reconciliation against actual replicated models.
+        local repairSent,stillMissing=0,0
+        if alive and not build.cancel and failures==0 and #submitted>0 then
+            build.status="Checking server-placed pieces..."
+            refreshBuildStatus()
+            task.wait(1.4)
+            local snapshot=occupiedFromPlot(plot,origin)
+            local function present(u)
+                if u.kind=="StairShape" or u.kind=="DetailShape" then
+                    return stairsAlreadyPresent(plot,u)
+                elseif u.kind=="Wall" then
+                    return #openWallSegments(u,snapshot)==0
+                else
+                    for _,placed in ipairs(snapshot) do
+                        if surfaceOverlaps(u,placed) then return true end
+                    end
+                end
+                return false
+            end
+            local missing={}
+            for i,u in ipairs(submitted) do
+                if not present(u) then missing[#missing+1]=u end
+                if i%125==0 then task.wait() end
+            end
+            local maximumRetry=math.min(#missing,75)
+            if maximumRetry>0 then
+                notify("Construction audit: "..#missing..
+                    " pieces not confirmed / rechecking up to "..maximumRetry)
+            end
+            for i=1,maximumRetry do
+                if build.cancel or not alive then break end
+                local u=missing[i]
+                if i%10==1 then snapshot=occupiedFromPlot(plot,origin) end
+                if not present(u) then
+                    local ok,err=pcall(function() fireUnit(u) end)
+                    if not ok then
+                        failures=failures+1
+                        notify("Repair stopped: "..tostring(err):sub(1,85))
+                        break
+                    end
+                    repairSent=repairSent+1
+                    build.status="Repairing missed requests "..repairSent..
+                        " / "..maximumRetry
+                    refreshBuildStatus()
+                    task.wait(.21)
+                end
+            end
+            if not build.cancel then
+                task.wait(.9)
+                snapshot=occupiedFromPlot(plot,origin)
+                for _,u in ipairs(submitted) do
+                    if not present(u) then stillMissing=stillMissing+1 end
+                end
+            end
+        end
         build.busy=false
         build.passed=false
         build.testUnit=nil
@@ -2026,10 +2085,11 @@ local function startBuild()
         elseif failures>0 then
             build.status="Stopped due to local placement error"
         else
-            build.status="Submitted "..sent.." requests; skipped "..extraSkips.." occupied"
+            build.status="Submitted "..sent.." + "..repairSent..
+                " repair requests; "..stillMissing.." unconfirmed placements"
         end
         refreshBuildStatus()
-        notify(build.status..". The game may still reject some requests; no retry loop.")
+        notify(build.status..". No repeated repair loops. Game server acceptance is not guaranteed.")
         if alive and state.page=="Builder" then switchPage("Builder") end
     end)
 end
