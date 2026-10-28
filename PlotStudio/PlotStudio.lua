@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v1.4 with usable switchback stair planning, upper skywalks, and transparent wall safety test
+    Standalone Plot Studio v1.7: open courtyard, crescent wings, aligned Shapes, and truthful construction previews
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -922,9 +922,9 @@ local build={busy=false,cancel=false,passed=false,signature=nil,firstIndex=nil,s
 -- Timing presets apply only to actual construction requests.
 -- Delays are intentionally bounded to avoid an unbounded remote spam loop.
 local BUILD_SPEEDS={
-    Steady={interval=.24,burst=12,cooldown=.12},
-    Fast={interval=.08,burst=18,cooldown=.12},
-    Turbo={interval=.12,burst=8,cooldown=.32},
+    Steady={interval=.24,burst=10,cooldown=.17},
+    Fast={interval=.15,burst=12,cooldown=.20},
+    Turbo={interval=.10,burst=9,cooldown=.24},
 }
 local buildStatusText=nil
 local function refreshBuildStatus()
@@ -2561,7 +2561,7 @@ renderPage = function(page)
             switchPage("Builder")
         end)
         plusF.TextSize=19
-        text(opts,"MAX 5  •  DEMO ONLY",16,132,240,18,10,C.muted,true)
+        text(opts,"MAX 5  •  TEST STAIRS BEFORE BUILD",16,132,285,18,10,C.muted,true)
 
         local speedBox=block(scroll,120)
         text(speedBox,"CONSTRUCTION SPEED",16,10,400,25,15,C.white,true)
@@ -2580,7 +2580,7 @@ renderPage = function(page)
             b.Position=UDim2.new((i-1)/3,6,0,42)
             b.Size=UDim2.new(1/3,-12,0,31)
         end
-        text(speedBox,"Turbo now uses paced batches to reduce missed placements. Server acceptance still needs verification.",16,82,470,29,10,C.dim,false,{
+        text(speedBox,"Turbo: paced bursts with one missing-piece check. Still verify the actual result.",16,82,470,29,10,C.dim,false,{
             Size=UDim2.new(1,-32,0,29),TextWrapped=true
         })
 
@@ -2598,7 +2598,7 @@ renderPage = function(page)
         text(choice,"The studio chooses materials by architectural role, not one material for the whole castle.",
             16,116,442,18,10,C.dim,false,{Size=UDim2.new(1,-32,0,18)})
 
-        local action=block(scroll,194,C.raised)
+        local action=block(scroll,207,C.raised)
         text(action,"CONCEPT vs. ACTUAL BUILD",16,10,410,24,15,C.mint,true)
         text(action,"Design Concept shows the artistic goal. Actual Build View shows only placement requests the current engine intends to send.",16,38,430,36,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,36),TextWrapped=true
@@ -2607,9 +2607,9 @@ renderPage = function(page)
         button(action,"ACTUAL BUILD VIEW",170,88,166,32,true,showBuildablePreview)
         button(action,"HIGHLIGHT ACCESS",16,125,157,26,false,highlightStairRoute)
         button(action,"CHECK DESIGN",180,125,141,26,false,previewAccessAudit)
-        button(action,"CLEAR PREVIEW",338,125,112,26,false,function() clearPreview(false) end)
-        text(action,"SIZE: "..lastFootprint,16,154,440,18,10,C.mint,false,{
-            Size=UDim2.new(1,-32,0,18)
+        button(action,"CLEAR PREVIEW",16,159,141,26,false,function() clearPreview(false) end)
+        text(action,"SIZE: "..lastFootprint,168,160,270,25,10,C.mint,false,{
+            Size=UDim2.new(1,-178,0,25),TextWrapped=true
         })
 
 
@@ -2986,7 +2986,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 1.6",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 1.7",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -3084,4 +3084,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v1.6 catalog-ready; building definitions scan automatically. Auction inventory is excluded.")
+print("[Plot Studio] v1.7 open-courtyard builds and placeable-only previews; auction inventory excluded.")
