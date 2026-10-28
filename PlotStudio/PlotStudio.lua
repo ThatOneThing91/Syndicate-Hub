@@ -1617,10 +1617,25 @@ end
 local function sameStairUnit(a,b)
     return a and b and a.id==b.id and (a.cf.Position-b.cf.Position).Magnitude<.45
 end
+local function shapeModels(plot)
+    local result={}
+    local seen={}
+    for _,name in ipairs({"Furniture","Structures","Shapes","Decorations"}) do
+        local folder=plot:FindFirstChild(name)
+        if folder then
+            for _,model in ipairs(folder:GetDescendants()) do
+                if model:IsA("Model") and model:GetAttribute("ItemId")~=nil
+                    and not seen[model] then
+                    seen[model]=true
+                    result[#result+1]=model
+                end
+            end
+        end
+    end
+    return result
+end
 local function verifyPlacedStair(plot,request,before)
-    local furniture=plot:FindFirstChild("Furniture")
-    if not furniture then return false end
-    for _,model in ipairs(furniture:GetChildren()) do
+    for _,model in ipairs(shapeModels(plot)) do
         if model:IsA("Model") and not before[model] and
             tostring(model:GetAttribute("ItemId") or "")==tostring(request.id) then
             if (model:GetPivot().Position-request.cf.Position).Magnitude<4 then
@@ -1651,9 +1666,7 @@ local function verifyPlacedStair(plot,request,before)
     return false
 end
 local function stairsAlreadyPresent(plot,u)
-    local furniture=plot:FindFirstChild("Furniture")
-    if not furniture then return false end
-    for _,model in ipairs(furniture:GetChildren()) do
+    for _,model in ipairs(shapeModels(plot)) do
         if model:IsA("Model") and
             tostring(model:GetAttribute("ItemId") or "")==tostring(u.id) then
             local ok,box,size=pcall(function() return model:GetBoundingBox() end)
@@ -1924,10 +1937,7 @@ local function testStairShape()
     build.status="Testing one real stair tread..."
     refreshBuildStatus()
     local snapshot={}
-    local furniture=plot:FindFirstChild("Furniture")
-    if furniture then
-        for _,obj in ipairs(furniture:GetChildren()) do snapshot[obj]=true end
-    end
+    for _,obj in ipairs(shapeModels(plot)) do snapshot[obj]=true end
     task.spawn(function()
         local fired,err=pcall(function() fireUnit(target) end)
         local accepted=false
@@ -2053,8 +2063,8 @@ local function adoptExistingStairs(plot,origin)
         return true
     end
     local planned=rawStairUnits(plot,origin)
-    local furniture=plot:FindFirstChild("Furniture")
-    if not furniture or #planned==0 then return false end
+    local existing=shapeModels(plot)
+    if #existing==0 or #planned==0 then return false end
     local found,seen=0,{}
     for _,u in ipairs(planned) do
         if stairsAlreadyPresent(plot,u) then
@@ -2063,7 +2073,7 @@ local function adoptExistingStairs(plot,origin)
             -- The game may scale a Shape differently from its requested
             -- bounding box. For adoption only, use close walkable blocks;
             -- the strict size test still controls whether a unit is skipped.
-            for _,m in ipairs(furniture:GetChildren()) do
+            for _,m in ipairs(existing) do
                 if m:IsA("Model") and not seen[m] and
                     (tostring(m:GetAttribute("ItemId") or "")==
                         tostring(stairCatalog.shape.id) or
@@ -2128,7 +2138,20 @@ local function repairStairGaps()
     if not origin then notify("Owned plot required");return end
     beginPreview()
     local all,err=staircaseAndDetails(plot,origin)
-    if not all then notify(err);return end
+    local verified=all~=nil
+    if not all then
+        -- The user may have visually usable staircase Shapes in a
+        -- different plot folder or different version of the blueprint.
+        -- Allow a SINGLE missing landing attempt instead of refusing
+        -- the entire repair action. Never speculate a 45-item batch.
+        all={}
+        for _,u in ipairs(rawStairUnits(plot,origin)) do
+            if u.label=="Stair landing" and not stairsAlreadyPresent(plot,u) then
+                all[#all+1]=u
+            end
+        end
+        notify("Shape test unconfirmed; checking ONE missing landing only. Other construction remains available.")
+    end
     local missing={}
     for _,u in ipairs(all) do
         if u.kind=="StairShape" then missing[#missing+1]=u end
@@ -2155,7 +2178,7 @@ local function repairStairGaps()
     refreshBuildStatus()
     task.spawn(function()
         local confirmed,failed,consecutive=0,0,0
-        for i=1,math.min(#missing,45) do
+        for i=1,math.min(#missing,verified and 45 or 1) do
             local u=missing[i]
             if not alive or build.cancel or consecutive>=3 then break end
             if not stairsAlreadyPresent(plot,u) then
@@ -2204,7 +2227,20 @@ local function finishCastle()
         return
     end
     local units,err,stairs,details,skipped=staircaseAndDetails(plot,origin)
-    if not units then notify(err);return end
+    local verifiedStairs=units~=nil
+    if not units then
+        -- Detail-only finishing is independent of Shape stair verification.
+        -- Try a small bounded number of ornament placements and stop
+        -- immediately if real replication checks fail.
+        units={}
+        for _,u in ipairs(ornateDetailUnits(plot,origin,260)) do
+            if not stairsAlreadyPresent(plot,u) then units[#units+1]=u end
+        end
+        stairs=0
+        details=#units
+        skipped=0
+        notify("Stair confirmation unavailable; decoration-only mode. No staircase automation will be triggered.")
+    end
     if #units==0 then
         notify("No eligible missing Shapes in the current plan. This does NOT mean the castle is complete. Check the actual build audit.")
         return
@@ -2234,7 +2270,7 @@ local function finishCastle()
     task.spawn(function()
         local sent,confirmed,failed,skip,consecutive=0,0,0,skipped,0
         local stairOK,detailOK=0,0
-        local cap=math.min(#units,85)
+        local cap=math.min(#units,verifiedStairs and 85 or 12)
         for i=1,cap do
             local u=units[i]
             if not alive or build.cancel then break end
@@ -2280,7 +2316,7 @@ local function finishCastle()
             "Unconfirmed: "..failed.."\n"..
             "Already verified in plot: "..skip.."\n"..
             "Attempted this run: "..sent.." / eligible: "..#units..
-            "\nRun cap: 85; never treats sent as placed."..
+            "\nRun cap: "..cap.."; sent never means placed."..
             "\nUnconfirmed pieces are not proof of server rejection."
         if build.cancel then build.status="Finishing stopped at "..sent
         elseif build.status:find("Finish stopped",1,true) or
