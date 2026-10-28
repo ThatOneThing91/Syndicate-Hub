@@ -1724,7 +1724,8 @@ local function fireUnit(u)
     local r=eventFor(eventName)
     if not r then error("Missing Place"..eventName) end
     if u.kind=="StairShape" or u.kind=="DetailShape" then
-        r:FireServer(u.id,"Shapes",u.cf,u.color,u.material,.25,u.size,u.lv)
+        local shapeMaterial=Enum.Material[tostring(u.material or "")] or Enum.Material.Slate
+        r:FireServer(u.id,"Shapes",u.cf,u.color,shapeMaterial,.25,u.size,u.lv)
     elseif u.kind=="Wall" then
         local diff=u.b-u.a
         local profile=DESIGN_STYLES[state.design] or DESIGN_STYLES[1]
@@ -1741,7 +1742,12 @@ local function fireUnit(u)
     elseif u.kind=="Floor" then
         r:FireServer("32","Floors",u.cf,u.sx,u.sz,u.color,u.material,u.lv)
     elseif u.kind=="Roof" then
-        r:FireServer("Flat",u.x,u.z,u.sx,u.sz,0,0,0,state.color,state.material,nil,u.lv)
+        -- Native roof options follow the game's RoofBuilder defaults.
+        -- This signature is not trusted for bulk placement until ONE
+        -- real Roof model appears after the single-roof test.
+        local roofMaterial=Enum.Material[tostring(u.material or "")] or Enum.Material.Slate
+        r:FireServer(u.style or "Hip",u.x,u.z,u.sx,u.sz,
+            .6,.8,.4,u.color or state.color,roofMaterial,nil,u.lv)
     end
 end
 local function seeNewWall(plot,before)
@@ -2272,10 +2278,189 @@ local function addNativeWindows()
     end)
 end
 
+-- Native pitched roofs are a separate, verified stage. Never send a
+-- 70-request speculative roof batch: test ONE, confirm a new plot roof,
+-- then add a few more with per-roof replication checks.
+local roofTest={passed=false,signature=nil,status="No real roof tested yet"}
+local function plannedRoofs(plot,origin)
+    if not previewFolder then beginPreview() end
+    local result={}
+    if not previewFolder then return result end
+    local h=15
+    pcall(function()
+        local cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig)
+        if type(cfg.StoreyHeight)=="number" then h=cfg.StoreyHeight end
+    end)
+    h=math.clamp(h,6,30)
+    for _,p in ipairs(previewFolder:GetChildren()) do
+        if p:IsA("BasePart") and p:GetAttribute("PlotStudioKind")=="Roof" then
+            local cf=origin:ToObjectSpace(p.CFrame)
+            result[#result+1]={
+                kind="Roof",x=cf.Position.X,z=cf.Position.Z,
+                sx=p.Size.X,sz=p.Size.Z,
+                lv=math.clamp(math.floor((cf.Position.Y+.4)/h+.1)-1,0,4),
+                style=p:GetAttribute("PlotStudioRoofStyle") or "Hip",
+                color=p:GetAttribute("PlotStudioColor"),
+                material=p:GetAttribute("PlotStudioMaterial"),
+                zone=p:GetAttribute("PlotStudioZone")
+            }
+        end
+    end
+    return result
+end
+local function realRoofs(plot)
+    local out={}
+    for _,name in ipairs({"Roofs","Structures"}) do
+        local folder=plot:FindFirstChild(name)
+        if folder then
+            for _,m in ipairs(folder:GetChildren()) do
+                if (m:IsA("Model") or m:IsA("BasePart")) and
+                    (name=="Roofs" or m:GetAttribute("RoofStyle")~=nil or
+                    m:GetAttribute("Category")=="Roofs") then
+                    out[#out+1]=m
+                end
+            end
+        end
+    end
+    return out
+end
+local function roofCenter(origin,u)
+    return origin:PointToWorldSpace(Vector3.new(u.x,0,u.z))
+end
+local function roofAt(plot,origin,u)
+    local point=roofCenter(origin,u)
+    for _,m in ipairs(realRoofs(plot)) do
+        local ok,cf=pcall(function() return m:GetPivot() end)
+        if ok then
+            local p=cf.Position
+            if Vector2.new(p.X-point.X,p.Z-point.Z).Magnitude<math.max(6,math.min(u.sx,u.sz)*.18)
+                and math.abs(p.Y-origin.Position.Y-(u.lv+1)*15)<24 then
+                return true
+            end
+        end
+    end
+    return false
+end
+local function newRoofConfirmed(plot,origin,u,before)
+    local point=roofCenter(origin,u)
+    for _,m in ipairs(realRoofs(plot)) do
+        if not before[m] then
+            local ok,cf=pcall(function() return m:GetPivot() end)
+            if ok then
+                local p=cf.Position
+                if Vector2.new(p.X-point.X,p.Z-point.Z).Magnitude<math.max(7,u.sx*.2)
+                    and math.abs(p.Y-origin.Position.Y-(u.lv+1)*15)<26 then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+local function testNativeRoof()
+    if build.busy then notify("A build is already running");return end
+    if not eventFor("Roof") then notify("PlaceRoof remote is missing");return end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin then notify("Owned plot required for roof test");return end
+    local chosen
+    for _,u in ipairs(plannedRoofs(plot,origin)) do
+        if not roofAt(plot,origin,u) then chosen=u;break end
+    end
+    if not chosen then notify("All planned roofs already have roof models, or none are planned");return end
+    local before={}
+    for _,m in ipairs(realRoofs(plot)) do before[m]=true end
+    build.busy=true;build.cancel=false
+    build.status="Testing ONE native "..chosen.style.." roof..."
+    refreshBuildStatus()
+    task.spawn(function()
+        local ok,err=pcall(function() fireUnit(chosen) end)
+        local confirmed=false
+        if ok then
+            for i=1,24 do
+                if not alive or build.cancel then break end
+                if newRoofConfirmed(plot,origin,chosen,before) then
+                    confirmed=true;break
+                end
+                task.wait(.25)
+            end
+        end
+        roofTest.passed=confirmed
+        roofTest.signature=confirmed and buildSignature(plot,origin) or nil
+        roofTest.status=confirmed and "Native pitched roof CONFIRMED" or
+            "Roof not confirmed. No more roof requests will be sent."
+        build.busy=false
+        build.status=roofTest.status
+        refreshBuildStatus()
+        notify(roofTest.status..
+            (not ok and (": "..tostring(err):sub(1,75)) or ""))
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+local function addVerifiedRoofs()
+    if build.busy then notify("A build is already running");return end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin or not roofTest.passed or
+        roofTest.signature~=buildSignature(plot,origin) then
+        notify("TEST ONE ROOF must succeed for this exact design first.")
+        return
+    end
+    local roofs=plannedRoofs(plot,origin)
+    build.busy=true;build.cancel=false
+    task.spawn(function()
+        local added,missing,occupied=0,0,0
+        for _,u in ipairs(roofs) do
+            if not alive or build.cancel or added>=6 or missing>=2 then break end
+            if roofAt(plot,origin,u) then
+                occupied=occupied+1
+            else
+                local before={}
+                for _,m in ipairs(realRoofs(plot)) do before[m]=true end
+                local ok,err=pcall(function() fireUnit(u) end)
+                local confirmed=false
+                if ok then
+                    for i=1,20 do
+                        if not alive or build.cancel then break end
+                        if newRoofConfirmed(plot,origin,u,before) then
+                            confirmed=true;break
+                        end
+                        task.wait(.25)
+                    end
+                end
+                if confirmed then
+                    added=added+1
+                    missing=0
+                else
+                    missing=missing+1
+                    if not ok then notify("Roof test error: "..tostring(err):sub(1,75)) end
+                end
+                build.status="Roofs: "..added.." confirmed / "..occupied..
+                    " existing / "..missing.." consecutive failures"
+                refreshBuildStatus()
+            end
+        end
+        build.busy=false
+        build.status=build.cancel and "Roof installation stopped" or
+            ("Roofs: "..added.." confirmed, "..occupied..
+            " already present, "..missing.." consecutive unconfirmed")
+        refreshBuildStatus()
+        notify(build.status)
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+
 local function startBuild()
     if build.busy then notify("A build is already running");return end
     local units,plot,origin,stats=buildPlan()
     if not units or not plot then notify("No owned plot detected; build stopped");return end
+    -- Roofs require their OWN server-confirmed test and are never sent
+    -- automatically during a masonry build.
+    local masonry={}
+    for _,u in ipairs(units) do
+        if u.kind~="Roof" then masonry[#masonry+1]=u end
+    end
+    units=masonry
     if not build.passed or build.signature~=buildSignature(plot,origin) then
         build.passed=false
         notify("TEST ONE WALL first for this design and storey count")
@@ -2319,7 +2504,7 @@ local function startBuild()
     notify("Occupancy scan: "..(stats and stats.skipped or 0)..
         " occupied skipped; "..(stats and stats.trimmed or 0).." walls trimmed.")
     if #units==0 then notify("All planned positions occupied; no work needed");return end
-    for _,kind in ipairs({"Wall","Floor","Roof"}) do
+    for _,kind in ipairs({"Wall","Floor"}) do
         if not eventFor(kind) then notify("Place"..kind.." remote missing");return end
     end
     if stairTest.passed and not eventFor("Item") then
@@ -2511,6 +2696,13 @@ local function showBuildablePreview()
         notify("Owned plot required to preview the actual build plan")
         return
     end
+    -- Unverified roofs are shown only in the DESIGN CONCEPT. Actual Build
+    -- View reflects the masonry pass, not a roof remote we have not tested.
+    local noRoof={}
+    for _,u in ipairs(units) do
+        if u.kind~="Roof" then noRoof[#noRoof+1]=u end
+    end
+    units=noRoof
     local previewShapes=false
     if stairTest.passed and stairTest.signature==buildSignature(plot,origin)
         and stairCatalog.shape and stairTest.itemId==stairCatalog.shape.id then
