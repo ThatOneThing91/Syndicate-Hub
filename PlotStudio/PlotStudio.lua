@@ -2043,25 +2043,65 @@ local function ornateDetailUnits(plot,origin,maxUnits)
     end
     return result
 end
-local function staircaseAndDetails(plot,origin)
-    local result,skipped={},0
-    if not stairTest.passed or stairTest.signature~=buildSignature(plot,origin)
-        or stairTest.itemId~=(stairCatalog.shape and stairCatalog.shape.id) then
-        -- Re-execution should not force another test tread into a staircase
-        -- that already exists. Adopt only a size-matched, solid real tread.
-        for _,u in ipairs(rawStairUnits(plot,origin)) do
-            if stairsAlreadyPresent(plot,u) then
-                stairTest.passed=true
-                stairTest.signature=buildSignature(plot,origin)
-                stairTest.itemId=u.id
-                stairTest.first=u
-                break
+-- A test success is a session flag, not proof that already placed
+-- Shapes disappeared. Recognize multiple existing walkable Shapes that
+-- line up with this blueprint before asking for a fresh test.
+local function adoptExistingStairs(plot,origin)
+    if not stairCatalog.shape then return false end
+    local sig=buildSignature(plot,origin)
+    if stairTest.passed and stairTest.signature==sig
+        and stairTest.itemId==stairCatalog.shape.id then
+        return true
+    end
+    local planned=rawStairUnits(plot,origin)
+    local furniture=plot:FindFirstChild("Furniture")
+    if not furniture or #planned==0 then return false end
+    local found,seen=0,{}
+    for _,u in ipairs(planned) do
+        if stairsAlreadyPresent(plot,u) then
+            found=found+1
+        else
+            -- The game may scale a Shape differently from its requested
+            -- bounding box. For adoption only, use close walkable blocks;
+            -- the strict size test still controls whether a unit is skipped.
+            for _,m in ipairs(furniture:GetChildren()) do
+                if m:IsA("Model") and not seen[m] and
+                    (tostring(m:GetAttribute("ItemId") or "")==
+                        tostring(stairCatalog.shape.id) or
+                    m:GetAttribute("Category")=="Shapes") then
+                    local ok,p=pcall(function() return m:GetPivot().Position end)
+                    if ok and (p-u.cf.Position).Magnitude<2.4 then
+                        local walkable=false
+                        for _,piece in ipairs(m:GetDescendants()) do
+                            if piece:IsA("BasePart") and piece.CanCollide
+                                and piece.CFrame.UpVector.Y>.7 then
+                                walkable=true;break
+                            end
+                        end
+                        if walkable then
+                            found=found+1
+                            seen[m]=true
+                            break
+                        end
+                    end
+                end
             end
         end
+        if found>=2 then
+            stairTest.passed=true
+            stairTest.signature=sig
+            stairTest.itemId=stairCatalog.shape.id
+            stairTest.first=u
+            return true
+        end
     end
-    if not stairTest.passed or stairTest.signature~=buildSignature(plot,origin)
-        or stairTest.itemId~=(stairCatalog.shape and stairCatalog.shape.id) then
-        return nil,"No size-verified existing tread. TEST STAIR TREAD first."
+    return false
+end
+
+local function staircaseAndDetails(plot,origin)
+    local result,skipped={},0
+    if not adoptExistingStairs(plot,origin) then
+        return nil,"No verified stair test or matching existing walkable Shapes. TEST STAIR TREAD only if building new stairs."
     end
     local stairs=rawStairUnits(plot,origin)
     local details=ornateDetailUnits(plot,origin,260)
@@ -2840,35 +2880,27 @@ local function startBuild()
         notify("Solid wall style unavailable; stopping to prevent all-glass build")
         return
     end
-    -- Multi-storey shells are allowed. An accepted real Shapes tread unlocks
-    -- the preview-derived staircase. Prefabricated stair sets are only catalogued
-    -- until their actual dimensions and placement can be checked in-game.
-    if stairTest.passed and stairTest.signature==buildSignature(plot,origin) then
+    -- Reuse real Shapes from previous executions instead of demanding
+    -- another stair test. This check only applies to a NEW full castle
+    -- build, not to roof, door, or wing completion actions.
+    local hasExistingStairs=adoptExistingStairs(plot,origin)
+    if state.floors>1 and not hasExistingStairs then
+        notify("New multi-storey build requires one verified Shape tread, or matching existing walkable stairs. Existing castle repairs remain available.")
+        return
+    end
+    if hasExistingStairs then
         local finishing=staircaseAndDetails(plot,origin)
+        local stairCount=0
         if finishing then
-            local stairCount=0
             for _,u in ipairs(finishing) do
                 if u.kind=="StairShape" then
                     units[#units+1]=u
                     stairCount=stairCount+1
                 end
             end
-            notify("Including "..stairCount..
-                " verified staircase Shapes. Ornamental details are held until AFTER structural windows.")
         end
-    elseif state.floors>1 then
-        notify("Stairs not verified: full castle blocked to prevent inaccessible floors")
-        return
-    end
-    if state.floors>1 then
-        local hasStairs=false
-        for _,u in ipairs(units) do
-            if u.kind=="StairShape" then hasStairs=true;break end
-        end
-        if not hasStairs then
-            notify("No buildable staircase found. Refusing another inaccessible castle.")
-            return
-        end
+        notify("Existing walkable Shape stairs recognized; "..
+            stairCount.." missing staircase units included.")
     end
     if #units>900 then notify("Blueprint exceeds 900-piece limit");return end
     notify("Occupancy scan: "..(stats and stats.skipped or 0)..
