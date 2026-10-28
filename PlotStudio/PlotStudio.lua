@@ -1261,7 +1261,17 @@ local function verifyPlacedStair(plot,request,before)
                     if math.abs(actual.X-intended.X)<math.max(2,intended.X*.4)
                         and math.abs(actual.Y-intended.Y)<math.max(1,intended.Y*.75)
                         and math.abs(actual.Z-intended.Z)<math.max(2,intended.Z*.4) then
-                        return true
+                        local solidSurface=false
+                        for _,piece in ipairs(model:GetDescendants()) do
+                            if piece:IsA("BasePart") and piece.CanCollide
+                                and piece.CFrame.UpVector.Y>.7 then
+                                solidSurface=true
+                                break
+                            end
+                        end
+                        -- A correctly sized but non-collidable Shape is
+                        -- decoration, not a climbable staircase.
+                        if solidSurface then return true end
                     end
                 end
             end
@@ -1281,6 +1291,106 @@ local function stairsAlreadyPresent(plot,u)
         end
     end
     return false
+end
+
+
+-- Non-destructive access/design audit. This checks preview geometry, not
+-- whether the server accepted actual PlaceItem/PlaceFloor requests.
+local function previewAccessAudit()
+    if not previewFolder then beginPreview() end
+    if not previewFolder then notify("Unable to construct the preview");return end
+    local counts={wall=0,floor=0,detail=0,glass=0,stairs=0,landings=0,bridges=0}
+    local flights,turns,exits={},{},{}
+    local materialSet={}
+    for _,p in ipairs(previewFolder:GetChildren()) do
+        if p:IsA("BasePart") then
+            local kind=p:GetAttribute("PlotStudioKind")
+            local mat=p:GetAttribute("PlotStudioMaterial")
+            if mat then materialSet[mat]=true end
+            if kind=="Wall" then counts.wall=counts.wall+1 end
+            if kind=="Floor" then counts.floor=counts.floor+1 end
+            if kind=="Decor" then counts.detail=counts.detail+1 end
+            if kind=="Glass" then counts.glass=counts.glass+1 end
+            if p.Name=="Stair tread" then
+                counts.stairs=counts.stairs+1
+                local level=p:GetAttribute("PlotStudioStorey")
+                local flight=p:GetAttribute("StairFlight")
+                if type(level)=="number" then
+                    flights[level]=flights[level] or {[1]=0,[2]=0}
+                    if flight==1 or flight==2 then
+                        flights[level][flight]=flights[level][flight]+1
+                    end
+                end
+            end
+            if p.Name=="Stair landing" then
+                counts.landings=counts.landings+1
+                local level=p:GetAttribute("PlotStudioStorey")
+                if type(level)=="number" then
+                    if p.Position.Y>0 then
+                        turns[level]=(turns[level] or 0)+1
+                    end
+                end
+            end
+            if p.Name:find("skybridge",1,true) or
+                p.Name:find("connecting gallery",1,true) or
+                p.Name:find("Rampart skywalk",1,true) then
+                counts.bridges=counts.bridges+1
+            end
+        end
+    end
+    local floors=math.min(state.floors,(designs[state.design] or designs[1]).floors)
+    local missing={}
+    for lv=0,floors-2 do
+        if not flights[lv] or flights[lv][1]<8 or flights[lv][2]<8 then
+            missing[#missing+1]="L"..(lv+1).."-"..(lv+2).." flights"
+        end
+    end
+    local materials=0
+    for _ in pairs(materialSet) do materials=materials+1 end
+    local textBody=string.format(
+        "%d levels / %d distinct materials / %d walls / %d floor parts\n"..
+        "%d ornate details / %d glass panes / %d stair treads / %d landings / %d skybridges\n\n"..
+        "Stair layout: two SEPARATE parallel flights, a U-turn at half-height, and an upper-floor gallery exit. Ground-floor courtyard is preserved.\n\n",
+        floors,materials,counts.wall,counts.floor,counts.detail,counts.glass,
+        counts.stairs,counts.landings,counts.bridges)
+    if #missing>0 then
+        textBody=textBody.."PREVIEW INCOMPLETE: "..table.concat(missing,", ")
+    else
+        textBody=textBody.."PREVIEW ROUTES PLANNED for every level."
+    end
+    textBody=textBody.."\n\nOnly verified server-placed Shapes are guaranteed to be usable. Check the real stairs and walls before running a whole build."
+    modal("Castle blueprint audit",textBody)
+end
+local function highlightStairRoute()
+    if not previewFolder then beginPreview() end
+    if not previewFolder then return end
+    for _,p in ipairs(previewFolder:GetChildren()) do
+        if p:IsA("BasePart") then
+            local route=p.Name=="Stair tread" or p.Name=="Stair landing"
+                or p.Name=="South gallery exit" or
+                p.Name:find("skybridge",1,true) or
+                p.Name:find("connecting gallery",1,true) or
+                p.Name=="Rampart skywalk"
+            local e=p:FindFirstChildOfClass("SelectionBox")
+            if route then
+                p.Transparency=.08
+                if p.Name=="Stair landing" then
+                    p.Color=Color3.fromRGB(246,193,89)
+                elseif p.Name=="Stair tread" then
+                    p.Color=p:GetAttribute("StairFlight")==1
+                        and Color3.fromRGB(75,188,255)
+                        or Color3.fromRGB(88,236,174)
+                else
+                    p.Color=Color3.fromRGB(175,144,241)
+                end
+                if e then e.Transparency=0;e.LineThickness=.11 end
+            else
+                p.Transparency=.94
+                if e then e.Transparency=.92 end
+            end
+        end
+    end
+    notify("Access route highlighted: blue up / green return / gold landings")
 end
 
 local function fireUnit(u)
@@ -2086,15 +2196,17 @@ renderPage = function(page)
         text(choice,"The studio chooses materials by architectural role, not one material for the whole castle.",
             16,116,442,18,10,C.dim,false,{Size=UDim2.new(1,-32,0,18)})
 
-        local action=block(scroll,174,C.raised)
+        local action=block(scroll,194,C.raised)
         text(action,"ORNATE BLUEPRINT PREVIEW",16,10,380,24,15,C.mint,true)
         text(action,"Castle-scale structure with curated materials, stairwells and custom steps. Show Castle creates a safe local preview.",16,38,430,36,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,36),TextWrapped=true
         })
         button(action,"SHOW CASTLE",16,88,147,32,true,beginPreview)
         button(action,"CLEAR PREVIEW",171,88,143,32,false,function() clearPreview(false) end)
-        text(action,"SIZE: "..lastFootprint,16,131,440,23,10,C.mint,false,{
-            Size=UDim2.new(1,-32,0,23)
+        button(action,"HIGHLIGHT ACCESS",16,125,157,26,false,highlightStairRoute)
+        button(action,"CHECK DESIGN",180,125,141,26,false,previewAccessAudit)
+        text(action,"SIZE: "..lastFootprint,16,154,440,18,10,C.mint,false,{
+            Size=UDim2.new(1,-32,0,18)
         })
 
 
@@ -2282,7 +2394,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 1.2",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 1.3",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -2370,4 +2482,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v1.2 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v1.3 loaded. Preview is local; confirmed builder actions may place permanent structures.")
