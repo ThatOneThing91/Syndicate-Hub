@@ -12690,7 +12690,13 @@ return function(cfg)
         local diff=difference(tbl)
         if uuid(id) then
             if not decided[id] then pendingIds[id]=os.clock() end
-            if diff then handleOffer(id,diff) end
+            if diff~=nil then
+                handleOffer(id,diff)
+            elseif percent<=-100 then
+                -- At the minimum threshold, a live, verified offer GUID
+                -- alone is sufficient to accept; no guessed value needed.
+                handleOffer(id,-100)
+            end
         end
         for _,item in pairs(tbl) do
             if type(item)=="table" or typeof(item)=="Instance" then
