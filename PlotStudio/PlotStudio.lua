@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone GUI v0.3 with outlined previews and gated build
+    Standalone GUI v0.4 with plot-sized ornate previews and gated structural shell build
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -332,93 +332,295 @@ local function previewFrame()
     end
     return nil,"No position"
 end
+-- Plot Studio v0.4: architectural previews scaled to the available plot.
+local lastFootprint="Not measured"
+local function getFootprint(plot)
+    local width,depth,reason
+    local function attr(keys)
+        if not plot then return nil end
+        for _,key in ipairs(keys) do
+            local n=plot:GetAttribute(key)
+            if type(n)=="number" and n>=60 and n<=300 then return n end
+        end
+    end
+    width=attr({"FullSizeX","SizeX","PlotSizeX","Width"})
+    depth=attr({"FullSizeZ","SizeZ","PlotSizeZ","Depth"})
+    if width and depth then reason="Plot attributes" end
+    local base=plot and plot:FindFirstChild("Base")
+    local floorPart=base and base:FindFirstChild("Floor")
+    if floorPart and floorPart:IsA("BasePart") then
+        width=width or floorPart.Size.X
+        depth=depth or floorPart.Size.Z
+        if not reason then reason="Base.Floor" end
+    end
+    width=math.clamp((width or 180)*.93,64,171)
+    depth=math.clamp((depth or 180)*.93,64,171)
+    lastFootprint=string.format("%d x %d studs / %s",math.floor(width+.5),math.floor(depth+.5),reason or "180-stud estimate")
+    return width,depth
+end
+
 local function beginPreview()
     clearPreview(true)
     local origin,where=previewFrame()
     if not origin then notify("No plot or player position for preview");return end
+    local w,d=getFootprint(ownedPlot())
     local selected=designs[state.design]
     if not selected then return end
     local cfg
     pcall(function() cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig) end)
-    local storeyHeight=cfg and cfg.StoreyHeight or 15
-    if typeof(storeyHeight)~="number" or storeyHeight<6 or storeyHeight>30 then storeyHeight=15 end
-    local material=Enum.Material.Slate
-    pcall(function()
-        local candidate=Enum.Material[state.material]
-        if candidate then material=candidate end
-    end)
+    local h=cfg and cfg.StoreyHeight or 15
+    if type(h)~="number" or h<6 or h>30 then h=15 end
+    local floors=math.min(state.floors,selected.floors)
+    local primary=state.color
+    local stone=Color3.fromRGB(174,167,194):Lerp(primary,.32)
+    local light=Color3.fromRGB(225,220,233):Lerp(primary,.22)
+    local dark=Color3.fromRGB(53,54,78):Lerp(primary,.23)
+    local gold=Color3.fromRGB(229,178,100)
+    local glass=Color3.fromRGB(85,174,221)
+    local roof=Color3.fromRGB(80,55,111)
+    local mat=Enum.Material.Slate
+    pcall(function() mat=Enum.Material[state.material] or mat end)
     previewFolder=Instance.new("Folder")
     previewFolder.Name=PREVIEW_NAME
     previewFolder.Parent=workspace
-    local floors=math.min(state.floors,selected.floors)
-    local w=state.design==5 and 22 or (state.design==2 and 48 or (state.design==4 and 38 or 56))
-    local d=state.design==4 and 50 or w
     local count=0
-    local function make(label,x,y,z,sx,sy,sz,rotation,shade)
+    -- Explicit kind is vital: decorations must never be interpreted as wall requests.
+    local function part(name,kind,x,y,z,sx,sy,sz,rot,color)
+        if count>=850 then return end
+        if math.min(sx,sy,sz)<.1 then return end
         local p=Instance.new("Part")
-        p.Name=label
-        p.Anchored=true
-        p.CanCollide=false;p.CanTouch=false;p.CanQuery=false
-        p.CastShadow=false
-        p.Material=material
-        p.Color=shade or state.color
-        p.Transparency=.74
+        p.Name=name;p.Anchored=true;p.CanCollide=false;p.CanQuery=false
+        p.CanTouch=false;p.CastShadow=false;p.Material=kind=="Glass" and Enum.Material.Glass or mat
+        p.Color=color or stone
+        p.Transparency=kind=="Glass" and .32 or (kind=="Decor" and .42 or .72)
         p.Size=Vector3.new(sx,sy,sz)
-        p.CFrame=origin*CFrame.new(x,y,z)*CFrame.Angles(0,rotation or 0,0)
+        p.CFrame=origin*CFrame.new(x,y,z)*CFrame.Angles(0,rot or 0,0)
+        p:SetAttribute("PlotStudioKind",kind)
         p.Parent=previewFolder
-        local edge=Instance.new("SelectionBox")
-        edge.Name="BlueprintEdge"
-        edge.Adornee=p
-        edge.Color3=C.purple
-        edge.LineThickness=.08
-        edge.Transparency=0
-        edge.SurfaceTransparency=1
-        edge.Parent=p
+        local e=Instance.new("SelectionBox")
+        e.Adornee=p;e.Color3=kind=="Glass" and glass or (kind=="Decor" and light or C.purple)
+        e.LineThickness=kind=="Decor" and .04 or .075
+        e.Transparency=.08;e.SurfaceTransparency=1;e.Parent=p
         count=count+1
+        return p
     end
-    local function room(cx,cz,width,depth,level,door)
-        local y=level*storeyHeight
-        local h=storeyHeight
-        if level>0 then make("Floor",cx,y-.25,cz,width,.5,depth) end
-        make("Back wall",cx,y+h/2,cz+depth/2,width,h,.55)
-        make("Left wall",cx-width/2,y+h/2,cz,depth,h,.55,math.pi/2)
-        make("Right wall",cx+width/2,y+h/2,cz,depth,h,.55,math.pi/2)
-        if door and level==0 and width>18 then
-            local side=(width-12)/2
-            make("Front wall L",cx-width/2+side/2,y+h/2,cz-depth/2,side,h,.55)
-            make("Front wall R",cx+width/2-side/2,y+h/2,cz-depth/2,side,h,.55)
-        else
-            make("Front wall",cx,y+h/2,cz-depth/2,width,h,.55)
+    local function deco(name,x,y,z,sx,sy,sz,col,rot)
+        return part(name,"Decor",x,y,z,sx,sy,sz,rot,col)
+    end
+    local function wall(name,x,y,z,len,height,rot,col)
+        return part(name,"Wall",x,y,z,len,height,.65,rot,col)
+    end
+    local function deck(name,x,y,z,sx,sz,col)
+        return part(name,"Floor",x,y,z,sx,.55,sz,nil,col)
+    end
+    local function glaze(x,y,z,sx,sy,rot)
+        return part("Stained glass","Glass",x,y,z,sx,sy,.22,rot,glass)
+    end
+    local function crenels(x,z,len,y,rot)
+        wall("Rampart",x,y,z,len,2.3,rot,dark)
+        local n=math.max(2,math.floor(len/5))
+        for j=1,n do
+            local off=(j-.5)*len/n-len/2
+            deco("Battlement",x+math.cos(rot)*off,y+2.1,z-math.sin(rot)*off,len/n*.57,2.5,1.5,light,rot)
         end
     end
-    for level=0,floors-1 do
-        if state.design==3 then
-            room(-21,0,22,44,level,true)
-            room(21,0,22,44,level,true)
-            if level>0 then make("Skybridge",0,level*storeyHeight-.25,0,22,.5,9) end
-        else
-            room(0,0,w,d,level,true)
+    local function openings(x,z,len,level,rot)
+        if level==0 then return end
+        local n=math.max(1,math.floor((len-7)/12))
+        for j=1,n do
+            local off=(j-(n+1)/2)*len/(n+1)
+            local px=x+math.cos(rot)*off
+            local pz=z-math.sin(rot)*off
+            local y=level*h+h*.57
+            glaze(px,y,pz,3,h*.38,rot)
+            deco("Stone lintel",px,y+h*.22,pz,5,.65,1.25,light,rot)
+            deco("Window sill",px,y-h*.23,pz,4.5,.55,1.15,light,rot)
         end
     end
+    local function walls(cx,cz,wx,dz,lv,col,entry)
+        local cy=lv*h+h/2
+        wall("North wall",cx,cy,cz+dz/2,wx,h,0,col)
+        wall("West wall",cx-wx/2,cy,cz,dz,h,math.pi/2,col)
+        wall("East wall",cx+wx/2,cy,cz,dz,h,math.pi/2,col)
+        if entry and lv==0 then
+            local open=math.min(wx*.29,19)
+            local chunk=(wx-open)/2
+            for _,sign in ipairs({-1,1}) do
+                wall("Entrance masonry",cx+sign*(open+chunk)/2,cy,cz-dz/2,chunk,h,0,col)
+            end
+            wall("Gate arch",cx,lv*h+h*.88,cz-dz/2,open,h*.22,0,light)
+            deco("Portcullis lintel",cx,lv*h+h*.58,cz-dz/2-1,open*.9,.65,1,gold)
+            for i=-3,3 do
+                deco("Iron gate rod",cx+i*open/8,lv*h+h*.35,cz-dz/2-1,.52,h*.65,.5,gold)
+            end
+        else
+            wall("South wall",cx,cy,cz-dz/2,wx,h,0,col)
+        end
+        if lv>0 then
+            openings(cx,cz+dz/2,wx,lv,0)
+            openings(cx,cz-dz/2,wx,lv,0)
+        end
+    end
+    local function tower(x,z,r,levels,spire)
+        for level=0,levels-1 do
+            local y=level*h+h/2
+            local facet=r*1.16
+            for _,rot in ipairs({0,math.pi/2}) do
+                for _,s in ipairs({-1,1}) do
+                    local px=x+(rot==0 and 0 or s*r)
+                    local pz=z+(rot==0 and s*r or 0)
+                    wall("Turret face",px,y,pz,facet,h,rot,dark)
+                end
+            end
+            for _,sx in ipairs({-1,1}) do
+                for _,sz in ipairs({-1,1}) do
+                    wall("Octagonal corner",x+sx*r*.69,y,z+sz*r*.69,r*.82,h,
+                        sx==sz and -math.pi/4 or math.pi/4,dark)
+                end
+            end
+            if level>0 then deck("Floor",x,level*h-.28,z,r*2.1,r*2.1,stone) end
+            deco("Turret cornice",x,(level+1)*h-.35,z,r*2.2,.8,r*2.2,light)
+            if level>=1 then glaze(x,level*h+h*.55,z-r-.1,2.5,h*.3,0) end
+        end
+        local top=levels*h
+        deco("Crown cornice",x,top+.15,z,r*2.3,1,r*2.3,light)
+        for j=1,8 do
+            local ang=j*math.pi/4
+            deco("Tower battlement",x+r*math.cos(ang),top+2,z+r*math.sin(ang),2.4,3.1,2.4,dark)
+        end
+        if spire then
+            for i=1,8 do
+                local scale=1-i/9
+                deco("Layered gothic spire",x,top+1+i*h*.29,z,
+                    math.max(.9,r*2*scale),h*.31,math.max(.9,r*2*scale),
+                    i%2==0 and roof or dark)
+            end
+            deco("Gold finial",x,top+h*3.8,z,.7,6,.7,gold)
+        end
+    end
+    local function columns(x,z,len,axis)
+        local n=math.max(3,math.floor(len/11))
+        for j=0,n do
+            local off=(j/n-.5)*len
+            local px=x+(axis=="X" and off or 0)
+            local pz=z+(axis=="Z" and off or 0)
+            deco("Colonnade pillar",px,h*.45,pz,1.4,h*.88,1.4,light)
+            deco("Carved capital",px,h*.9,pz,2.7,.7,2.7,gold)
+        end
+        deco("Colonnade beam",x,h*.97,z,axis=="X" and len+2 or 2.7,1.1,axis=="Z" and len+2 or 2.7,light)
+    end
+    local function lantern(x,z)
+        deco("Lantern plinth",x,.45,z,2,1.1,2,dark)
+        deco("Lantern pedestal",x,2.8,z,.6,4.6,.6,light)
+        deco("Lantern",x,5.7,z,1.7,1.8,1.7,gold)
+    end
+
     if state.design==1 or state.design==2 then
-        local tw=state.design==1 and 13 or 11
-        for _,sx in ipairs({-1,1}) do
-            for _,sz in ipairs({-1,1}) do
-                local x,z=sx*w/2,sz*d/2
-                for level=0,floors-1 do room(x,z,tw,tw,level,false) end
-                make("Tower roof",x,floors*storeyHeight-.25,z,tw+1,.5,tw+1)
+        local majestic=state.design==1
+        local ox,oz=w*.42,d*.42
+        local r=math.clamp(math.min(w,d)*.083,6.5,13)
+        -- Huge outside walls follow the property instead of the old 56-stud box.
+        wall("Northern rampart",0,h*.68,oz,ox*2,h*1.36,0,dark)
+        wall("Western rampart",-ox,h*.68,0,oz*2,h*1.36,math.pi/2,dark)
+        wall("Eastern rampart",ox,h*.68,0,oz*2,h*1.36,math.pi/2,dark)
+        local door=math.min(20,w*.16)
+        local side=(ox*2-door)/2
+        wall("West gate wall",-(door+side)/2,h*.68,-oz,side,h*1.36,0,dark)
+        wall("East gate wall",(door+side)/2,h*.68,-oz,side,h*1.36,0,dark)
+        wall("Vaulted gateway",0,h*1.2,-oz,door,h*.3,0,light)
+        for _,x in ipairs({-ox,ox}) do
+            for _,z in ipairs({-oz,oz}) do tower(x,z,r,floors+1,majestic) end
+        end
+        crenels(0,oz,ox*2,h*1.36,0)
+        crenels(-ox,0,oz*2,h*1.36,math.pi/2)
+        crenels(ox,0,oz*2,h*1.36,math.pi/2)
+        -- Rear keep allows a sprawling ceremonial courtyard and usable ground floor.
+        local kw,kd=w*.52,d*.39
+        local kz=d*.12
+        for lv=0,floors-1 do
+            walls(0,kz,kw,kd,lv,majestic and stone or dark,lv==0)
+            if lv>0 then deck("Floor",0,lv*h-.3,kz,kw-2,kd-2,stone) end
+            deco("Carved floor cornice",0,(lv+1)*h-.35,kz,kw+1,1.2,kd+1,light)
+        end
+        deck("Roof terrace",0,floors*h-.3,kz,kw+1,kd+1,dark)
+        for _,z in ipairs({kz-kd/2,kz+kd/2}) do crenels(0,z,kw,floors*h+1,0) end
+        for _,x in ipairs({-kw/2,kw/2}) do crenels(x,kz,kd,floors*h+1,math.pi/2) end
+        if majestic then
+            tower(0,kz,math.min(kw*.17,12),floors+2,true)
+            tower(-kw*.31,kz+kd*.25,math.min(kw*.11,8),floors+1,true)
+            tower(kw*.31,kz+kd*.25,math.min(kw*.11,8),floors+1,true)
+        else
+            tower(-kw*.31,kz,math.min(kw*.13,10),floors+1,false)
+            tower(kw*.31,kz,math.min(kw*.13,10),floors+1,false)
+        end
+        -- Twin entrance towers and stone columns across the whole forecourt.
+        for _,x in ipairs({-door*1.12,door*1.12}) do tower(x,-oz,r*.77,3,majestic) end
+        for _,x in ipairs({-w*.23,w*.23}) do columns(x,-d*.11,d*.27,"Z") end
+        for _,x in ipairs({-w*.31,w*.31}) do lantern(x,-d*.28) end
+        deco("Grand courtyard promenade",0,.17,-d*.23,w*.24,.3,d*.26,light)
+        for _,x in ipairs({-ox,ox}) do
+            for _,z in ipairs({-oz,oz}) do
+                deco("Royal banner staff",x,(floors+1)*h+8,z,.7,10,.7,gold)
+                deco("Purple royal banner",x+1.9,(floors+1)*h+8,z,3.7,6,.3,primary)
             end
         end
-    end
-    if state.design==3 then
-        make("West roof",-21,floors*storeyHeight-.25,0,24,.5,46)
-        make("East roof",21,floors*storeyHeight-.25,0,24,.5,46)
+    elseif state.design==3 then
+        -- Palace: two huge wings and a central cour d'honneur with marble arcade.
+        local wingW,wingD=w*.27,d*.68
+        local pos=w*.34
+        for _,sx in ipairs({-1,1}) do
+            local x=sx*pos
+            for lv=0,floors-1 do
+                walls(x,d*.06,wingW,wingD,lv,light,lv==0)
+                if lv>0 then deck("Floor",x,lv*h-.3,d*.06,wingW,wingD,stone) end
+            end
+            deck("Roof terrace",x,floors*h-.3,d*.06,wingW+2,wingD+2,stone)
+            columns(x,-d*.31,wingW,"X")
+            for _,z in ipairs({-d*.21,d*.27}) do tower(x,z,math.min(wingW*.23,10),floors+1,true) end
+        end
+        for lv=0,floors-1 do
+            walls(0,d*.3,w*.43,d*.22,lv,stone,lv==0)
+            if lv>0 then deck("Floor",0,lv*h-.3,d*.3,w*.43,d*.22,light) end
+        end
+        tower(0,d*.3,math.min(w*.085,12),floors+2,true)
+        columns(0,-d*.43,w*.49,"X")
+        deco("Formal central garden",0,.08,-d*.18,w*.25,.18,d*.3,Color3.fromRGB(75,128,89))
+        for _,x in ipairs({-w*.13,w*.13}) do lantern(x,-d*.34) end
+    elseif state.design==4 then
+        -- Showroom: long glazed gallery, floating illuminated roof ribs, atrium.
+        local wx,dz=w*.77,d*.84
+        for lv=0,floors-1 do
+            walls(0,0,wx,dz,lv,dark,lv==0)
+            if lv>0 then deck("Floor",0,lv*h-.3,0,wx,dz,stone) end
+            openings(0,dz/2,wx,math.max(1,lv),0)
+        end
+        for i=-6,6 do
+            local x=i*wx/13
+            deco("Facade mullion",x,floors*h/2,-dz/2-1,1,floors*h,1,light)
+            glaze(x,floors*h/2,-dz/2-1,wx/15,floors*h,0)
+        end
+        deck("Roof terrace",0,floors*h+.3,0,wx+3,dz+3,light)
+        for _,z in ipairs({-dz*.32,-dz*.11,dz*.11,dz*.32}) do
+            deco("Atrium gilded roof rib",0,floors*h+1.1,z,wx+4,2,1.3,gold)
+        end
+        columns(0,-dz*.48,wx*.91,"X")
     else
-        make("Roof",0,floors*storeyHeight-.25,0,w+.7,.5,d+.7)
+        -- Tower outpost: monolithic citadel plus tall spired central observatory.
+        local size=math.min(w,d)*.51
+        for lv=0,floors-1 do
+            walls(0,0,size,size,lv,dark,lv==0)
+            if lv>0 then deck("Floor",0,lv*h-.3,0,size,size,stone) end
+        end
+        deck("Roof terrace",0,floors*h-.3,0,size+3,size+3,light)
+        tower(0,0,math.min(size*.24,13),floors+4,true)
+        for _,x in ipairs({-w*.36,w*.36}) do
+            tower(x,d*.27,math.min(w*.073,9),floors+1,false)
+            deco("Suspended skybridge",x*.5,h*.9,d*.15,math.abs(x),1.2,6,light)
+        end
+        crenels(0,-size/2,size,floors*h+1,0)
     end
-    notify("Outlines: "..selected.name.." / "..count.." parts / "..where)
+    notify("ORNATE PREVIEW: "..count.." parts / "..lastFootprint)
 end
-
 
 -- Build engine v0.3. The first real action is always a one-wall test.
 local build={busy=false,cancel=false,passed=false,signature=nil,firstIndex=nil,status="Not started"}
@@ -438,9 +640,9 @@ local function buildPlan()
     if type(h)~="number" or h<6 or h>30 then h=15 end
     local units={}
     for _,p in ipairs(previewFolder:GetChildren()) do
-        if p:IsA("BasePart") then
-            local name=p.Name
-            if name=="Floor" or name=="Skybridge" then
+        if p:IsA("BasePart") and p:GetAttribute("PlotStudioKind") then
+            local kind=p:GetAttribute("PlotStudioKind")
+            if kind=="Floor" then
                 local lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y+.55)/h+.1),0,4)
                 local nx,nz=math.ceil(p.Size.X/40),math.ceil(p.Size.Z/40)
                 for ix=1,nx do for iz=1,nz do
@@ -448,7 +650,7 @@ local function buildPlan()
                     local cf=p.CFrame*CFrame.new((ix-.5)*sx-p.Size.X/2,0,(iz-.5)*sz-p.Size.Z/2)
                     units[#units+1]={kind="Floor",cf=cf,sx=sx,sz=sz,lv=lv}
                 end end
-            elseif name:find("roof") or name:find("Roof") then
+            elseif kind=="Roof" then
                 local lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y+.4)/h+.1)-1,0,4)
                 local cf=origin:ToObjectSpace(p.CFrame)
                 local nx,nz=math.ceil(p.Size.X/40),math.ceil(p.Size.Z/40)
@@ -457,7 +659,7 @@ local function buildPlan()
                     local c=cf*CFrame.new((ix-.5)*sx-p.Size.X/2,0,(iz-.5)*sz-p.Size.Z/2)
                     units[#units+1]={kind="Roof",x=c.Position.X,z=c.Position.Z,sx=sx,sz=sz,lv=lv}
                 end end
-            else
+            elseif kind=="Wall" then
                 local lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y)/h),0,4)
                 local count=math.ceil(p.Size.X/15)
                 for k=1,count do
@@ -556,7 +758,7 @@ local function startBuild()
         notify("TEST ONE WALL first for this design and storey count")
         return
     end
-    if #units>400 then notify("Blueprint exceeds 400-piece limit");return end
+    if #units>900 then notify("Blueprint shell exceeds placement limit");return end
     for _,kind in ipairs({"Wall","Floor","Roof"}) do
         if not eventFor(kind) then notify("Place"..kind.." remote missing");return end
     end
@@ -823,18 +1025,21 @@ renderPage = function(page)
             "Material: "..state.material.."     /     Accent: "..state.colorName,10)
         button(choice,"CHOOSE MATERIAL",16,76,165,28,false,function() switchPage("Materials") end)
 
-        local action=block(scroll,143,C.raised)
-        text(action,"BLUEPRINT OUTLINES",16,10,380,24,15,C.mint,true)
-        text(action,"Client-only outlines, visible even if your plot owner marker is missing. No pieces are purchased.",16,38,430,36,12,C.dim,false,{
+        local action=block(scroll,174,C.raised)
+        text(action,"ORNATE BLUEPRINT PREVIEW",16,10,380,24,15,C.mint,true)
+        text(action,"Giant plot-scale architecture: spires, turrets, stained glass, battlements and gatehouses. Nothing is purchased.",16,38,430,36,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,36),TextWrapped=true
         })
-        button(action,"SHOW OUTLINES",16,86,147,32,true,beginPreview)
-        button(action,"CLEAR OUTLINES",171,86,143,32,false,function() clearPreview(false) end)
+        button(action,"SHOW CASTLE",16,88,147,32,true,beginPreview)
+        button(action,"CLEAR PREVIEW",171,88,143,32,false,function() clearPreview(false) end)
+        text(action,"SIZE: "..lastFootprint,16,131,440,23,10,C.mint,false,{
+            Size=UDim2.new(1,-32,0,23)
+        })
 
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"First confirm one wall can be placed. Then continue the experimental shell build (walls, floors, flat roofs).",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"The build test supports only basic walls and floors. Decorative spires, arches and windows are visual concepts for now.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
@@ -842,7 +1047,7 @@ renderPage = function(page)
         end)
         button(builderPanel,"2. START BUILD",176,115,160,34,build.passed,function()
             if not build.passed then modal("Test required","Press TEST ONE WALL and wait for a successful confirmation before starting the shell build.");return end
-            modal("Start experimental shell?","This can send many permanent placements and spend in-game money. Designs are basic shells only, without stairs, doors or windows. You may need to clean up failed or overlapping pieces manually.","START BUILD",startBuild)
+            modal("Start experimental shell?","This can spend in-game money, placing only the basic walls and floors. Spires, battlements, arches, windows, stairs and furniture are preview-only. You may need to clean up failed or overlapping pieces manually.","START BUILD",startBuild)
         end)
         button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
         local note=block(scroll,80)
@@ -953,7 +1158,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 0.3",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 0.4",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -1041,4 +1246,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v0.3 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v0.4 loaded. Preview is local; confirmed builder actions may place permanent structures.")
