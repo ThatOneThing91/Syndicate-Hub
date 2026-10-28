@@ -12580,7 +12580,7 @@ return function(cfg)
     corner(diagnose,5)
     local hint=create("TextLabel",{
         Position=UDim2.fromOffset(12,25),Size=UDim2.new(1,-140,0,22),
-        BackgroundTransparency=1,Text="Detects offers in game UI and remotes",
+        BackgroundTransparency=1,Text="OfferPresented: 114.34 => +14.34% (test)",
         TextColor3=muted,TextSize=10,Font=Enum.Font.Gotham,
         TextXAlignment=Enum.TextXAlignment.Left,
         TextTruncate=Enum.TextTruncate.AtEnd
@@ -12650,6 +12650,7 @@ return function(cfg)
         lastIncomingOfferAt=0
         if outboundRegistry and outboundRegistry.owner==outboundOwner then
             outboundRegistry.callback=nil
+            outboundRegistry.target=nil
             outboundRegistry.owner=nil
         end
     end
@@ -13265,9 +13266,12 @@ return function(cfg)
             entry={installed=false,callback=nil,owner=nil}
             local original
             local function intercept(self,...)
-                if self==presented and getnamecallmethod()=="FireServer" then
-                    local callback=entry.callback
-                    if callback then pcall(callback,...) end
+                if self==entry.target then
+                    local okay,method=pcall(getnamecallmethod)
+                    if okay and method=="FireServer" then
+                        local callback=entry.callback
+                        if callback then pcall(callback,...) end
+                    end
                 end
                 return original(self,...)
             end
@@ -13286,6 +13290,7 @@ return function(cfg)
             env[key]=entry
         end
         entry.owner=outboundOwner
+        entry.target=presented
         entry.callback=onOutgoingPresented
         outboundRegistry=entry
         outgoingStatus="observing outgoing OfferPresented"
