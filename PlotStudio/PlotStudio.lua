@@ -4027,56 +4027,72 @@ local function startBuild()
                 note("12 separated wall placements were unconfirmed; moved to floors and other sections instead of shutting down.")
             end
             if not running() then return end
-            -- Floor construction uses the original planned slabs, not
-            -- hundreds of thin repair strips. A whole-slab verification
-            -- requires matching coverage at the intended coordinates.
-            stage("floors (checking actual slab coverage)")
-            local _,_,missingBefore=missingFloorGapUnits(
-                plot,origin,occupiedFromPlot(plot,origin),1)
-            local checkpointMissing=missingBefore
-            local checkpointCount=0
-            local floorFailure=0
-            for _,u in ipairs(floorUnits) do
-                if not running() or build.sent>=budget or floorFailure>=3 then break end
-                local live=occupiedFromPlot(plot,origin)
-                if shellCoverage(u,live)<.94 then
-                    local okay,failure=pcall(function() fireUnit(u) end)
-                    build.sent=build.sent+1
-                    local confirmed=okay and waitFor(function()
-                        return shellConfirmed(u,occupiedFromPlot(plot,origin))
-                    end,15)
-                    if confirmed then
-                        counts.Floor=counts.Floor+1
-                        floorFailure=0
-                    else
-                        floorFailure=floorFailure+1
-                        if not okay then
-                            note("Floor remote error: "..tostring(failure):sub(1,100))
-                        end
+            -- Adapt floors to physical occupancy: split partially covered
+            -- slabs into smaller, uncovered pieces instead of overlapping.
+            local function floorPieces(u,physical,depth,out)
+                local c=floorCoverage(u,physical)
+                if c>=.92 then return end
+                if c>.04 and math.max(u.sx,u.sz)>=7 and depth<5 then
+                    local alongX=u.sx>=u.sz
+                    for sign=-1,1,2 do
+                        local sx=alongX and u.sx*.5 or u.sx
+                        local sz=alongX and u.sz or u.sz*.5
+                        local cf=u.cf*CFrame.new(
+                            alongX and sign*sx*.5 or 0,0,
+                            alongX and 0 or sign*sz*.5)
+                        floorPieces({kind="Floor",cf=cf,sx=sx,sz=sz,
+                            lv=u.lv,color=u.color,material=u.material},
+                            physical,depth+1,out)
                     end
-                    checkpointCount=checkpointCount+1
-                    stage("floors: "..counts.Floor.." confirmed")
-                    if checkpointCount>=6 then
-                        local _,_,missingNow=missingFloorGapUnits(
-                            plot,origin,occupiedFromPlot(plot,origin),1)
-                        if missingNow>=checkpointMissing and counts.Floor>0 then
-                            note("Floor blueprint coverage did not improve over six attempts. Flooring paused to prevent duplicates.")
-                            floorFailure=3
-                            break
-                        end
-                        checkpointMissing=missingNow
-                        checkpointCount=0
-                    end
-                    task.wait(.12)
+                elseif c<=.04 then
+                    out[#out+1]=u
                 end
             end
-            if floorFailure>=3 then
-                note("Floor construction paused. Stairs, roofs and decorations were not placed over potentially incomplete floors.")
-                return
+            stage("floors (live gap fitting)")
+            local floorFailures=0
+            local failedFloorPoints={}
+            for _,candidate in ipairs(floorUnits) do
+                if not running() or build.sent>=budget or floorFailures>=12 then break end
+                local fragments={}
+                floorPieces(candidate,occupiedFromPlot(plot,origin),0,fragments)
+                for _,u in ipairs(fragments) do
+                    if not running() or build.sent>=budget or floorFailures>=12 then break end
+                    local rejected=false
+                    for _,point in ipairs(failedFloorPoints) do
+                        if point.lv==u.lv and
+                            (point.p-u.cf.Position).Magnitude<2.5 then
+                            rejected=true;break
+                        end
+                    end
+                    if not rejected and u.sx>=2.25 and u.sz>=2.25 then
+                        local coverage=floorCoverage(u,occupiedFromPlot(plot,origin))
+                        if coverage<=.04 then
+                            local okay,errText=pcall(function() fireUnit(u) end)
+                            build.sent=build.sent+1
+                            local confirmed=okay and waitFor(function()
+                                return floorCoverage(u,
+                                    occupiedFromPlot(plot,origin))>=.92
+                            end,15)
+                            if confirmed then
+                                counts.Floor=counts.Floor+1
+                                floorFailures=0
+                            else
+                                floorFailures=floorFailures+1
+                                failedFloorPoints[#failedFloorPoints+1]={
+                                    p=u.cf.Position,lv=u.lv
+                                }
+                                if not okay then
+                                    note("Floor error: "..tostring(errText):sub(1,90))
+                                end
+                            end
+                            stage("floors: "..counts.Floor.." confirmed")
+                            task.wait(.13)
+                        end
+                    end
+                end
             end
-            if build.sent>=budget then
-                note("Structural request budget reached. Press START BUILD again to continue.")
-                return
+            if floorFailures>=12 then
+                note("12 floor locations were unconfirmed; they were quarantined. Remaining construction stages can continue.")
             end
             if not running() then return end
             -- Auto-test ONE real stair tread, then continue with verified
@@ -4087,7 +4103,7 @@ local function startBuild()
                 local stairsOK=adoptExistingStairs(plot,origin)
                 local consecutiveStairs=0
                 for _,u in ipairs(stairs) do
-                    if not running() or build.sent>=budget or consecutiveStairs>=3 then break end
+                    if not running() or build.sent>=budget or consecutiveStairs>=8 then break end
                     if not stairsAlreadyPresent(plot,u) then
                         local snapshot={}
                         for _,m in ipairs(shapeModels(plot)) do snapshot[m]=true end
@@ -4223,8 +4239,8 @@ local function startBuild()
                 stage("ornaments (existing pieces skipped)")
                 local consecutiveDetails=0
                 for _,u in ipairs(ornateDetailUnits(plot,origin,80)) do
-                    if not running() or counts.DetailShape>=40 or
-                        consecutiveDetails>=3 or build.sent>=budget then break end
+                    if not running() or counts.DetailShape>=260 or
+                        consecutiveDetails>=8 or build.sent>=budget then break end
                     if not stairsAlreadyPresent(plot,u) then
                         local snapshot={}
                         for _,m in ipairs(shapeModels(plot)) do snapshot[m]=true end
@@ -4279,6 +4295,14 @@ local function startBuild()
         refreshBuildStatus()
         if alive and state.page=="Builder" then switchPage("Builder") end
     end)
+end
+
+local function repairBlueprint()
+    -- Repair uses the same adaptive build process, but regenerates the
+    -- missing-only blueprint from the latest real plot state first.
+    if build.busy then notify("Stop the active build first.");return end
+    loadedBlueprint=nil
+    startBuild()
 end
 
 local function inspectCurrentPlot()
