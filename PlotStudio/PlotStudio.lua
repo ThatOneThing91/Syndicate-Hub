@@ -1,5 +1,5 @@
 --[[
-  PLOT COPIER V3.3 | Storage Hunters
+  PLOT COPIER V3.4 | Storage Hunters
   Replaces the old Plot Studio interface (backed up in PlotStudio/Archive).
   Captures replicated builds as relative JSON blueprints.
   Local JSON: SyndicateHub/SavedBases/<name>.json
@@ -14,7 +14,7 @@ local UIS=game:GetService("UserInputService")
 local CoreGui=game:GetService("CoreGui")
 local player=Players.LocalPlayer
 if not player then return end
-local VERSION="3.3"
+local VERSION="3.4"
 local GUI_NAME="Syndicate_PlotCopier"
 local ENV=_G
 pcall(function() if type(getgenv)=="function" then ENV=getgenv() end end)
@@ -327,13 +327,53 @@ local function ensureFolder()
     pcall(makefolder,"SyndicateHub")
     pcall(makefolder,folder)
 end
+local function normalizeBlueprint(bp)
+    -- V3.3 incorrectly classified item "114" in category Shelves as a Floor.
+    -- The old JSON remains intact on disk. Migrate it after each load.
+    local changed=0
+    for _,piece in ipairs(bp.parts or {}) do
+        if piece.kind=="Floor" and tostring(piece.category or "")~="Floors"
+            and tostring(piece.id or "")~="32" then
+            piece.kind="Item"
+            piece.legacyBounds=true
+            changed=changed+1
+        end
+        if piece.kind=="Roof" and
+            tostring(piece.id or ""):match("^Roof_") and
+            (piece.style==nil or piece.style=="Hip") then
+            piece.style=tostring(piece.id):match("^Roof_(.+)")
+        end
+    end
+    return changed
+end
 local function getBPfromText(source)
     local ok,data=pcall(function() return Http:JSONDecode(source) end)
     if not ok or type(data)~="table" or data.format~="plotcopier-1"
         or type(data.parts)~="table" or #data.parts>12000 then
         return nil,"Invalid Plot Copier JSON"
     end
+    local migrated=normalizeBlueprint(data)
+    if migrated>0 then
+        log("Reclassified "..migrated.." old shelf/display pieces from Floor to Item.")
+    end
     return data
+end
+local function classify(rootName,category,id,name,wallCf,wallLength,roofStyle)
+    if typeof(wallCf)=="CFrame" and
+        type(wallLength)=="number" and wallLength>1 then return "Wall" end
+    if category=="Floors" or rootName=="Floors" then return "Floor" end
+    if category=="Roofs" or rootName=="Roofs" or roofStyle~=nil then
+        return "Roof"
+    end
+    -- An item with category Shelves/Shapes/Decor must not become a floor
+    -- just because its instance name contains the word "floor".
+    if id~=nil then return "Item" end
+    if category=="Structures" then
+        local n=tostring(name or ""):lower()
+        if n:find("roof",1,true) then return "Roof" end
+        if n:find("floor",1,true) then return "Floor" end
+    end
+    return nil
 end
 local function capture(plot)
     local origin=plotFrame(plot)
@@ -365,20 +405,8 @@ local function capture(plot)
                     local level=object:GetAttribute("Storey")
                     local wallCf=object:GetAttribute("WallCFrame")
                     local wallLen=object:GetAttribute("WallLength")
-                    local kind
-                    if typeof(wallCf)=="CFrame" and type(wallLen)=="number" and wallLen>1 then
-                        kind="Wall"
-                    elseif cat=="Floors" or tostring(id or "")=="32" or
-                        rootName=="Floors" or
-                        object.Name:lower():find("floor",1,true) then
-                        kind="Floor"
-                    elseif cat=="Roofs" or rootName=="Roofs" or
-                        object.Name:lower():find("roof",1,true) or
-                        object:GetAttribute("RoofStyle")~=nil then
-                        kind="Roof"
-                    elseif id~=nil then
-                        kind="Item"
-                    end
+                    local kind=classify(rootName,cat,id,object.Name,
+                        wallCf,wallLen,object:GetAttribute("RoofStyle"))
                     if kind then
                         local ok,cf,size=pcall(function()
                             if object:IsA("BasePart") then return object.CFrame,object.Size end
@@ -663,21 +691,8 @@ local function scene(plot)
                     local id=m:GetAttribute("ItemId")
                     local cat=tostring(m:GetAttribute("Category") or
                         m:GetAttribute("ItemCategory") or rootName)
-                    local kind
-                    if typeof(wallCf)=="CFrame" and
-                        type(wallLen)=="number" and wallLen>1 then
-                        kind="Wall"
-                    elseif cat=="Floors" or rootName=="Floors" or
-                        tostring(id or "")=="32" or
-                        m.Name:lower():find("floor",1,true) then
-                        kind="Floor"
-                    elseif cat=="Roofs" or rootName=="Roofs" or
-                        m.Name:lower():find("roof",1,true) or
-                        m:GetAttribute("RoofStyle")~=nil then
-                        kind="Roof"
-                    elseif id~=nil then
-                        kind="Item"
-                    end
+                    local kind=classify(rootName,cat,id,m.Name,
+                        wallCf,wallLen,m:GetAttribute("RoofStyle"))
                     if kind then
                         local ok,box,size=pcall(function()
                             if m:IsA("BasePart") then return m.CFrame,m.Size end
