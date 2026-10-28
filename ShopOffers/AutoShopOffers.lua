@@ -1,6 +1,6 @@
 -- Syndicate Hub optional module: Auto Shop Offers (isolated from hub startup).
 -- RespondOffer(offerGuid, bool) is known; incoming offer schema is not confirmed.
--- V2: detect offer data from events AND the visible customer offer GUI.
+-- V3: prioritize ShowOffer / OfferPresented and record their payload shape.
 -- Do not decide when there is no reliable offer percentage.
 return function(cfg)
     assert(type(cfg)=="table" and typeof(cfg.parent)=="Instance","Shop page required")
@@ -25,6 +25,9 @@ return function(cfg)
     local eventCount=0
     local lastEventName=""
     local watchedNames={}
+    local offerEventTraces={}
+    local eventCounts={}
+    local lastOfferSignal=nil
     local function create(class,properties,parentObject)
         local item=Instance.new(class)
         for key,value in pairs(properties) do item[key]=value end
@@ -153,7 +156,7 @@ return function(cfg)
     local diffs={"differencePercent","DifferencePercent","percentageDifference","PercentageDifference",
         "offerDifferencePercent","OfferDifferencePercent","OfferPercentDifference",
         "profitPercent","ProfitPercent","PriceDifferencePercent","priceDifferencePercent",
-        "percentAboveValue","PercentAboveValue","percentage","Percentage"}
+        "percentAboveValue","PercentAboveValue"}
     local function difference(tbl)
         local price=num(field(tbl,prices))
         local worth=num(field(tbl,values))
@@ -203,22 +206,80 @@ return function(cfg)
             if type(item)=="table" then inspect(item,id,depth+1,seen) end
         end
     end
+    local function describeArgument(value,depth,visited)
+        local kind=typeof(value)
+        if kind=="Instance" then
+            return kind.."("..value.ClassName..":"..value.Name:sub(1,55)..")"
+        end
+        if type(value)=="table" then
+            if depth>=3 or visited[value] then return "{...}" end
+            visited[value]=true
+            local chunks={}
+            local n=0
+            for key,entry in pairs(value) do
+                n=n+1
+                if n>25 then chunks[#chunks+1]="...";break end
+                local k=tostring(key):sub(1,45)
+                chunks[#chunks+1]=k.."="..
+                    describeArgument(entry,depth+1,visited)
+            end
+            table.sort(chunks)
+            return "{"..table.concat(chunks,", "):sub(1,1500).."}"
+        end
+        if type(value)=="string" then
+            return string.format("%q",value:sub(1,160))
+        end
+        return tostring(value)
+    end
+    local function traceEvent(sourceName,...)
+        -- Only record offer lifecycle events; no spam from cash/tip effects.
+        if sourceName~="ShowOffer" and sourceName~="OfferPresented"
+            and sourceName~="HideOffer" then return end
+        local n=select("#",...)
+        local detail={}
+        local args={...}
+        for i=1,math.min(n,12) do
+            detail[#detail+1]="arg"..i.."="..
+                describeArgument(args[i],0,{})
+        end
+        local record=tostring(sourceName).." ("..n.." args): "..
+            table.concat(detail," | ")
+        offerEventTraces[#offerEventTraces+1]=record
+        if #offerEventTraces>16 then table.remove(offerEventTraces,1) end
+        lastOfferSignal=sourceName
+        -- Keep the console diagnostics readable and bounded.
+        print("[Auto Shop Offers] "..record:sub(1,1700))
+    end
     local function readEvent(sourceName,...)
         if not active then return end
         eventCount=eventCount+1
         lastEventName=tostring(sourceName)
+        eventCounts[sourceName]=(eventCounts[sourceName] or 0)+1
+        traceEvent(sourceName,...)
+        if sourceName=="HideOffer" then
+            pendingIds={}
+            guiHandled={}
+            statusText.Text="Offer closed; waiting for next customer"
+            return
+        end
         local args={...}
         local possibleId=nil
         for _,arg in ipairs(args) do
             if uuid(arg) then possibleId=arg end
         end
-        if possibleId and not decided[possibleId] then pendingIds[possibleId]=os.clock() end
+        if possibleId and not decided[possibleId] then
+            pendingIds[possibleId]=os.clock()
+        end
         local seen={}
         for _,arg in ipairs(args) do
             if type(arg)=="table" then inspect(arg,possibleId,0,seen) end
         end
-        -- Do not guess whether positional numbers are prices, values,
-        -- multipliers or customer statistics. Wait for named fields or GUI.
+        if (sourceName=="ShowOffer" or sourceName=="OfferPresented")
+            and not possibleId then
+            statusText.Text=sourceName.." received; checking offer details..."
+        end
+        -- Without known field names, raw numbers could mean prices,
+        -- customer stats or percentages. Don't guess argument order.
     end
     -- Other NPCShopper scripts sometimes show the offer only through
     -- the customer's GUI, not an NPCShopper OnClientEvent. Observe visible
@@ -240,7 +301,8 @@ return function(cfg)
         if not raw then return nil end
         local amount,suffix=raw:match("([%d,%.]+)%s*([kKmMbBtT]?)")
         if not amount then return nil end
-        local v=tonumber(amount:gsub(",",""))
+        local cleaned=amount:gsub(",","")
+        local v=tonumber(cleaned)
         if not v then return nil end
         local mult={k=1e3,m=1e6,b=1e9,t=1e12}
         return v*(mult[suffix:lower()] or 1)
@@ -441,6 +503,9 @@ return function(cfg)
             "Toggle: "..tostring(active).." / target: "..tostring(percent).."%",
             "Events seen: "..tostring(eventCount)..
                 " / last event: "..lastEventName,
+            "OfferPresented seen: "..tostring(eventCounts.OfferPresented or 0)..
+                ", ShowOffer seen: "..tostring(eventCounts.ShowOffer or 0)..
+                ", HideOffer seen: "..tostring(eventCounts.HideOffer or 0),
             "Offer-related remotes: "..table.concat(watchedNames,", "),
             "Visible offer dialogs: "..tostring(#dialogs),
             "Pending remote IDs: "..tostring((function()
@@ -452,6 +517,14 @@ return function(cfg)
             for j=1,math.min(#d.labels,20) do
                 lines[#lines+1]="   "..tostring(d.labels[j]):sub(1,120)
             end
+        end
+        if #offerEventTraces>0 then
+            lines[#lines+1]="Recent incoming offer payloads:"
+            for _,trace in ipairs(offerEventTraces) do
+                lines[#lines+1]=trace
+            end
+        else
+            lines[#lines+1]="No ShowOffer / OfferPresented events captured while ON."
         end
         -- If the game's controls have different names, collect a small
         -- sample of visible offer/customer UI elements for the next fix.
@@ -501,6 +574,9 @@ return function(cfg)
         end
         watchedNames={}
         eventCount=0
+        eventCounts={}
+        offerEventTraces={}
+        lastOfferSignal=nil
         local watched={}
         local function attach(remote)
             if not remote:IsA("RemoteEvent") or
@@ -520,7 +596,12 @@ return function(cfg)
         end
         for _,remote in ipairs(events:GetDescendants()) do attach(remote) end
         watch(listeners,events.DescendantAdded,attach)
-        statusText.Text="Watching incoming events and customer offer GUI"
+        local presented=shopper:FindFirstChild("OfferPresented")
+        local shown=shopper:FindFirstChild("ShowOffer")
+        local hidden=shopper:FindFirstChild("HideOffer")
+        statusText.Text=(presented and shown and hidden)
+            and "Listening to ShowOffer / OfferPresented / HideOffer"
+            or "Some shopper lifecycle remotes are missing"
         task.spawn(function()
             while not closed and active do
                 local ok,problem=pcall(pollOfferGui)
