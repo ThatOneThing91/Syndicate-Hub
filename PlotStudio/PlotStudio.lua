@@ -3868,9 +3868,9 @@ local function startBuild()
     build.status="START BUILD: checking existing structures..."
     refreshBuildStatus()
     task.spawn(function()
+        local counts={Wall=0,Floor=0,StairShape=0,Door=0,Roof=0,DetailShape=0}
+        local errors={}
         local ok,err=pcall(function()
-            local counts={Wall=0,Floor=0,StairShape=0,Door=0,Roof=0,DetailShape=0}
-            local errors={}
             local function note(msg) errors[#errors+1]=msg end
             local function stage(name)
                 build.status="START BUILD: "..name.." / "..build.sent.." requests"
@@ -4187,7 +4187,7 @@ local function startBuild()
         build.busy=false
         if not ok then
             build.status="START BUILD stopped: client error."
-            build.lastAudit="START BUILD EXCEPTION\\n"..tostring(err)
+            build.lastAudit="START BUILD EXCEPTION\n"..tostring(err)
             notify(build.status.." Check VIEW AUDIT.")
         elseif build.cancel then
             build.status="START BUILD stopped by user."
@@ -4195,18 +4195,18 @@ local function startBuild()
         else
             -- The audit remains optional, not another required build step.
             -- Summary data is intentionally compact.
-            local issues=table.concat(errors,"\\n")
-            build.lastAudit="ONE-CLICK BUILD SUMMARY\\n"..
-                "Plot: "..plot.Name.."\\n"..
+            local issues=table.concat(errors,"\n")
+            build.lastAudit="ONE-CLICK BUILD SUMMARY\n"..
+                "Plot: "..plot.Name.."\n"..
                 "Confirmed this run: walls "..counts.Wall..
                 ", floors "..counts.Floor..
                 ", stairs "..counts.StairShape..
                 ", door "..counts.Door..
                 ", roofs "..counts.Roof..
-                ", ornaments "..counts.DetailShape.."\\n"..
-                "Requests: "..build.sent.."\\n"..
+                ", ornaments "..counts.DetailShape.."\n"..
+                "Requests: "..build.sent.."\n"..
                 "Notes: "..(issues=="" and "No reported validation stops." or issues)..
-                "\\nWindows are intentionally separate."
+                "\nWindows are intentionally separate."
             build.status="START BUILD: "..counts.Wall.." walls, "..
                 counts.Floor.." floors, "..counts.StairShape..
                 " stairs, "..counts.Door.." door, "..counts.Roof..
