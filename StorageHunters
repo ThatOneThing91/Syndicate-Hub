@@ -12639,6 +12639,9 @@ return function(cfg)
             pcall(function() connection:Disconnect() end)
         end
         listeners={}
+        pendingIds={}
+        guiHandled={}
+        lastIncomingOfferAt=0
     end
     local function handleOffer(id,pct)
         if not active or closed or not uuid(id) then return end
@@ -12663,9 +12666,25 @@ return function(cfg)
             warn("[Syndicate Auto Shop Offers] "..tostring(err))
         end
     end
-    local function inspect(tbl,inherited,depth,seen)
-        if type(tbl)~="table" or depth>4 or seen[tbl] then return end
-        seen[tbl]=true
+    local function inspect(value,inherited,depth,seen)
+        if depth>4 or seen[value] then return end
+        local tbl
+        if typeof(value)=="Instance" then
+            seen[value]=true
+            tbl=value:GetAttributes()
+            -- Named StringValue/NumberValue children may contain the live
+            -- offered price, current value or GUID rather than attributes.
+            for _,child in ipairs(value:GetChildren()) do
+                if child:IsA("ValueBase") then
+                    tbl[child.Name]=child.Value
+                end
+            end
+        elseif type(value)=="table" then
+            seen[value]=true
+            tbl=value
+        else
+            return
+        end
         local id=field(tbl,ids)
         if not uuid(id) then id=inherited end
         local diff=difference(tbl)
@@ -12674,7 +12693,9 @@ return function(cfg)
             if diff then handleOffer(id,diff) end
         end
         for _,item in pairs(tbl) do
-            if type(item)=="table" then inspect(item,id,depth+1,seen) end
+            if type(item)=="table" or typeof(item)=="Instance" then
+                inspect(item,id,depth+1,seen)
+            end
         end
     end
     local function describeArgument(value,depth,visited)
@@ -12756,7 +12777,9 @@ return function(cfg)
         local seen={}
         if offerSignal then
             for _,arg in ipairs(args) do
-                if type(arg)=="table" then inspect(arg,possibleId,0,seen) end
+                if type(arg)=="table" or typeof(arg)=="Instance" then
+                    inspect(arg,possibleId,0,seen)
+                end
             end
             -- Some client events provide a signed percent as a plain
             -- string ("-15%") alongside the live UUID.
@@ -13137,7 +13160,8 @@ return function(cfg)
         lastOfferSignal=nil
         local watched={}
         local function attach(remote)
-            if not remote:IsA("RemoteEvent") or
+            if not (remote:IsA("RemoteEvent") or
+                remote:IsA("BindableEvent")) or
                 remote==reply or watched[remote] then return end
             local lower=remote.Name:lower()
             -- CashEffect, ThoughtBubble and TipEffect can contain an item
@@ -13150,7 +13174,9 @@ return function(cfg)
                     not remote:IsDescendantOf(shopper))) then return end
             watched[remote]=true
             watchedNames[#watchedNames+1]=remote:GetFullName()
-            watch(listeners,remote.OnClientEvent,function(...)
+            local signal=remote:IsA("RemoteEvent") and
+                remote.OnClientEvent or remote.Event
+            watch(listeners,signal,function(...)
                 readEvent(remote.Name,...)
             end)
         end
