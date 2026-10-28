@@ -433,8 +433,9 @@ local function beginPreview()
             chosen=profile.metal;shade=gold
         elseif key:find("lantern") then
             chosen="Neon";shade=gold
-        elseif key:find("stair tread") or key:find("balustrade") or
-            key:find("railing") or key:find("door") then
+        elseif key:find("stair tread") then
+            chosen=profile.floor;shade=profile.floorColor
+        elseif key:find("balustrade") or key:find("railing") or key:find("door") then
             chosen=profile.wood;shade=profile.floorColor
         elseif key:find("spire") or key:find("roof") then
             chosen=profile.roof;shade=profile.roofColor
@@ -913,6 +914,58 @@ local function filterBuildUnits(units,plot,origin,extra)
     return result,{skipped=skipped,trimmed=trimmed}
 end
 
+
+-- Discover the live furniture catalog rather than guessing five stair IDs.
+local stairCatalog={scanned=false,models={},shape=nil,error=nil}
+local stairStatus="Stair catalog has not been scanned"
+local function scanStairs()
+    local ok,registry=pcall(function()
+        return require(game:GetService("ReplicatedStorage").Modules.Furniture)
+    end)
+    if not ok or type(registry)~="table" or type(registry.GetById)~="function" then
+        stairCatalog.scanned=false
+        stairCatalog.error="Furniture registry is unavailable"
+        stairStatus=stairCatalog.error
+        notify(stairStatus)
+        return false
+    end
+    local models,shapes={},{}
+    local function inspect(data,fallback)
+        if type(data)~="table" then return end
+        local id=tostring(data.Id or data.ID or data.ItemId or data.id or fallback or "")
+        local category=tostring(data.Category or "")
+        local label=tostring(data.Name or data.DisplayName or "")
+        if id=="" or label=="" then return end
+        local lower=label:lower()
+        if lower:find("stair",1,true) or lower:find("steps",1,true) then
+            models[#models+1]={id=id,name=label,category=category}
+        end
+        if category=="Shapes" and
+            (lower:find("block",1,true) or lower:find("cube",1,true)
+                or lower:find("box",1,true)) then
+            shapes[#shapes+1]={id=id,name=label,category=category}
+        end
+    end
+    local known={}
+    for i=1,1900 do
+        local okItem,data=pcall(function() return registry:GetById(tostring(i)) end)
+        if okItem and type(data)=="table" then
+            local id=tostring(data.Id or data.ID or data.ItemId or i)
+            if not known[id] then known[id]=true;inspect(data,i) end
+        end
+        if i%250==0 then task.wait() end
+    end
+    table.sort(models,function(a,b)return a.name<b.name end)
+    table.sort(shapes,function(a,b)return a.name<b.name end)
+    stairCatalog.models=models
+    stairCatalog.shape=shapes[1]
+    stairCatalog.scanned=true
+    stairCatalog.error=nil
+    stairStatus=string.format("Catalog: %d stair models / %d block shapes",#models,#shapes)
+    notify(stairStatus)
+    return #shapes>0 or #models>0
+end
+
 local function buildPlan()
     if not previewFolder then beginPreview() end
     if not previewFolder then return nil end
@@ -976,10 +1029,77 @@ local function eventFor(kind)
     local event=folder and folder:FindFirstChild("Place"..kind)
     if event and event:IsA("RemoteEvent") then return event end
 end
+
+-- Convert each ornate preview tread to a candidate PlaceItem Shapes request.
+-- This remains gated until a single shape has been accepted by the server.
+local stairTest={passed=false,signature=nil,first=nil,itemId=nil}
+local function rawStairUnits(plot,origin)
+    local result={}
+    if not previewFolder then beginPreview() end
+    if not previewFolder then return result end
+    if not stairCatalog.scanned or not stairCatalog.shape then return result end
+    local h=15
+    pcall(function()
+        local cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig)
+        if type(cfg.StoreyHeight)=="number" then h=cfg.StoreyHeight end
+    end)
+    h=math.clamp(h,6,30)
+    for _,p in ipairs(previewFolder:GetChildren()) do
+        if p:IsA("BasePart") and p.Name=="Stair tread" then
+            result[#result+1]={
+                kind="StairShape",
+                id=stairCatalog.shape.id,
+                cf=p.CFrame,
+                size=p.Size,
+                color=p:GetAttribute("PlotStudioColor"),
+                material=p:GetAttribute("PlotStudioMaterial"),
+                lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y)/h),0,4)
+            }
+        end
+    end
+    table.sort(result,function(a,b)
+        if a.lv~=b.lv then return a.lv<b.lv end
+        return a.cf.Position.Y<b.cf.Position.Y
+    end)
+    return result
+end
+local function sameStairUnit(a,b)
+    return a and b and a.id==b.id and (a.cf.Position-b.cf.Position).Magnitude<.45
+end
+local function verifyPlacedStair(plot,request,before)
+    local furniture=plot:FindFirstChild("Furniture")
+    if not furniture then return false end
+    for _,model in ipairs(furniture:GetChildren()) do
+        if model:IsA("Model") and not before[model] and
+            tostring(model:GetAttribute("ItemId") or "")==tostring(request.id) then
+            if (model:GetPivot().Position-request.cf.Position).Magnitude<8 then
+                return true
+            end
+        end
+    end
+    return false
+end
+local function stairsAlreadyPresent(plot,u)
+    local furniture=plot:FindFirstChild("Furniture")
+    if not furniture then return false end
+    for _,model in ipairs(furniture:GetChildren()) do
+        if model:IsA("Model") and
+            tostring(model:GetAttribute("ItemId") or "")==tostring(u.id) then
+            if (model:GetPivot().Position-u.cf.Position).Magnitude<1.3 then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 local function fireUnit(u)
-    local r=eventFor(u.kind)
-    if not r then error("Missing Place"..u.kind) end
-    if u.kind=="Wall" then
+    local eventName=u.kind=="StairShape" and "Item" or u.kind
+    local r=eventFor(eventName)
+    if not r then error("Missing Place"..eventName) end
+    if u.kind=="StairShape" then
+        r:FireServer(u.id,"Shapes",u.cf,u.color,u.material,1,u.size,u.lv)
+    elseif u.kind=="Wall" then
         local diff=u.b-u.a
         r:FireServer("5","Walls",u.a,u.b,Vector3.new(diff.X,0,diff.Z).Magnitude,
             math.atan2(-diff.Z,diff.X),u.a.Y,nil,nil,nil,u.lv)
@@ -1041,6 +1161,75 @@ local function testWall()
         if alive and state.page=="Builder" then switchPage("Builder") end
     end)
 end
+
+local function testStairShape()
+    if build.busy then notify("A build is already running");return end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin then
+        notify("Owned plot not detected; cannot place staircase")
+        return
+    end
+    if not stairCatalog.scanned or not stairCatalog.shape then
+        if not scanStairs() or not stairCatalog.shape then
+            modal("No verified block shape","The catalog scanner could not find a block or cube in the game's Shapes category. Use the build editor to place a block, capture its PlaceItem event and send it to me.")
+            return
+        end
+    end
+    if state.floors<2 then
+        notify("Choose at least two storeys to test a staircase")
+        return
+    end
+    if not eventFor("Item") then
+        notify("PlaceItem is unavailable")
+        return
+    end
+    local stairs=rawStairUnits(plot,origin)
+    if #stairs==0 then notify("No stair treads in this blueprint");return end
+    local target
+    for _,unit in ipairs(stairs) do
+        if not stairsAlreadyPresent(plot,unit) then target=unit;break end
+    end
+    if not target then
+        notify("All candidate stair positions already have matching shapes")
+        return
+    end
+    build.busy=true;build.cancel=false
+    build.status="Testing one real stair tread..."
+    refreshBuildStatus()
+    local snapshot={}
+    local furniture=plot:FindFirstChild("Furniture")
+    if furniture then
+        for _,obj in ipairs(furniture:GetChildren()) do snapshot[obj]=true end
+    end
+    task.spawn(function()
+        local fired,err=pcall(function() fireUnit(target) end)
+        local accepted=false
+        if fired then
+            for n=1,22 do
+                if not alive or build.cancel then break end
+                if verifyPlacedStair(plot,target,snapshot) then accepted=true;break end
+                task.wait(.2)
+            end
+        end
+        build.busy=false
+        if accepted then
+            stairTest.passed=true
+            stairTest.signature=buildSignature(plot,origin)
+            stairTest.itemId=target.id
+            stairTest.first=target
+            build.status="Stair tread verified; stair construction ready"
+            notify("Stair shape placed and confirmed. Stair construction enabled.")
+        else
+            stairTest.passed=false
+            build.status="Stair test not confirmed; auto stair requests remain disabled"
+            notify(fired and build.status or ("Stair test failed: "..tostring(err):sub(1,85)))
+        end
+        refreshBuildStatus()
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+
 local function startBuild()
     if build.busy then notify("A build is already running");return end
     local units,plot,origin,stats=buildPlan()
@@ -1053,12 +1242,31 @@ local function startBuild()
     -- Multi-storey shells are now allowed at the user's explicit request.
     -- Staircase and door props remain visual-only until real item IDs are verified.
     -- The confirmation dialog warns that upper floors may not be accessible.
-    if #units>900 then notify("Blueprint shell exceeds placement limit");return end
+    if state.floors>1 and stairTest.passed and
+        stairTest.signature==buildSignature(plot,origin) and stairTest.itemId==
+            (stairCatalog.shape and stairCatalog.shape.id) then
+        local stairUnits=rawStairUnits(plot,origin)
+        local added=0
+        for _,u in ipairs(stairUnits) do
+            if not sameStairUnit(u,stairTest.first) and not stairsAlreadyPresent(plot,u) then
+                units[#units+1]=u
+                added=added+1
+            end
+        end
+        notify("Stair builder: "..added.." custom stair treads queued")
+    elseif state.floors>1 then
+        notify("Stair shapes not verified; continuing shell without real stairs")
+    end
+    if #units>900 then notify("Blueprint exceeds 900-piece limit");return end
     notify("Occupancy scan: "..(stats and stats.skipped or 0)..
         " occupied skipped; "..(stats and stats.trimmed or 0).." walls trimmed.")
     if #units==0 then notify("All planned positions occupied; no work needed");return end
     for _,kind in ipairs({"Wall","Floor","Roof"}) do
         if not eventFor(kind) then notify("Place"..kind.." remote missing");return end
+    end
+    if stairTest.passed and not eventFor("Item") then
+        notify("PlaceItem unavailable. Staircase shapes cannot be built.")
+        return
     end
     local pace=BUILD_SPEEDS[state.buildSpeed] or BUILD_SPEEDS.Fast
     local selectedSpeed=state.buildSpeed
@@ -1075,7 +1283,9 @@ local function startBuild()
             if not alive or build.cancel then break end
             if i%pace.burst==1 then fresh=occupiedFromPlot(plot,origin) end
             local blocked=false
-            if u.kind=="Wall" then
+            if u.kind=="StairShape" then
+                blocked=stairsAlreadyPresent(plot,u)
+            elseif u.kind=="Wall" then
                 blocked=#openWallSegments(u,fresh)==0
             else
                 for _,other in ipairs(fresh) do
@@ -1087,7 +1297,7 @@ local function startBuild()
             else
                 local ok,err=pcall(function() fireUnit(u) end)
                 if not ok then failures=failures+1;notify(tostring(err):sub(1,100));break end
-                fresh[#fresh+1]=u
+                if u.kind~="StairShape" then fresh[#fresh+1]=u end
                 sent=sent+1
                 build.sent=sent
                 if i%12==0 or i==#units then
