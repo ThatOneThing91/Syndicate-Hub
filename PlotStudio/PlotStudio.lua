@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.5: multi-pass auto shell repair, measured floor-gap scanning and copyable per-placement diagnostics
+    Standalone Plot Studio v2.6: multi-pass auto shell repair, measured floor-gap scanning and copyable per-placement diagnostics
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -1697,9 +1697,7 @@ local function buildPlan()
         if x.lv~=y.lv then return x.lv<y.lv end
         return priority[x.kind]<priority[y.kind]
     end)
-    local extra=build.passed and build.testUnit and
-        build.signature==buildSignature(plot,origin) and build.testUnit or nil
-    local accepted,stats=filterBuildUnits(units,plot,origin,extra)
+    local accepted,stats=filterBuildUnits(units,plot,origin,nil)
     return accepted,plot,origin,stats
 end
 local function eventFor(kind)
@@ -3841,6 +3839,30 @@ end
 -- Primary one-click builder. Auto-tests each construction type on the first
 -- eligible, confirmed placement, then proceeds with the same verified remote.
 -- The separately named autoRepairShell remains an optional recovery tool.
+local loadedBlueprint=nil
+local function loadBlueprint(silent)
+    if build.busy then notify("Stop construction before loading another blueprint.");return nil end
+    beginPreview()
+    local units,plot,origin=buildPlan()
+    if not units or not plot or not origin then
+        notify("Could not load the selected blueprint on your plot.")
+        return nil
+    end
+    local walls,floors=0,0
+    for _,u in ipairs(units) do
+        if u.kind=="Wall" then walls=walls+1
+        elseif u.kind=="Floor" then floors=floors+1 end
+    end
+    loadedBlueprint={units=units,plot=plot,
+        signature=buildSignature(plot,origin),
+        name=(designs[state.design] and designs[state.design].name) or "Castle"}
+    build.status="Blueprint loaded: "..loadedBlueprint.name..
+        " | "..walls.." wall segments, "..floors.." floor slabs to check."
+    refreshBuildStatus()
+    if not silent then notify(build.status) end
+    return loadedBlueprint
+end
+
 local function startBuild()
     if build.busy then notify("A build is already running");return end
     if not ownedPlot() then
@@ -3855,12 +3877,14 @@ local function startBuild()
         notify("PlaceWall or PlaceFloor is unavailable.")
         return
     end
-    beginPreview()
-    local units,plot,origin=buildPlan()
-    if not units or not plot or not origin then
-        notify("Unable to generate the structural build plan.")
-        return
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    local sig=plot and origin and buildSignature(plot,origin)
+    if not loadedBlueprint or loadedBlueprint.plot~=plot or
+        loadedBlueprint.signature~=sig then
+        if not loadBlueprint(true) then return end
     end
+    local units=loadedBlueprint.units
     build.busy=true
     build.cancel=false
     build.sent=0
@@ -3928,43 +3952,81 @@ local function startBuild()
                 if u.kind=="Wall" then wallUnits[#wallUnits+1]=u
                 elseif u.kind=="Floor" then floorUnits[#floorUnits+1]=u end
             end
-            local structuralFailure=false
-            local budget=140
-            stage("walls (automatic first-piece test)")
+            local budget=1600
+            local failures={}
             local consecutive=0
-            for _,u in ipairs(wallUnits) do
-                if not running() or structuralFailure or build.sent>=budget then break end
-                local live=occupiedFromPlot(plot,origin)
-                if not shellConfirmed(u,live) then
-                    local okay,failure=pcall(function() fireUnit(u) end)
-                    build.sent=build.sent+1
-                    local confirmed=okay and waitFor(function()
-                        return shellConfirmed(u,occupiedFromPlot(plot,origin))
-                    end,14)
-                    if confirmed then
-                        counts.Wall=counts.Wall+1
-                        consecutive=0
-                        build.passed=true
-                        build.signature=buildSignature(plot,origin)
-                    else
-                        consecutive=consecutive+1
-                        if not okay then
-                            note("Wall remote error: "..tostring(failure):sub(1,100))
-                        end
-                        if consecutive>=3 then
-                            structuralFailure=true
-                            note("Three walls were unconfirmed. Stopped before flooring or decorations; no repeated wall spam.")
-                        end
+            local function nearFailed(u)
+                local point=(u.a+u.b)*.5
+                for _,entry in ipairs(failures) do
+                    if entry.lv==u.lv and
+                        Vector2.new(entry.p.X-point.X,
+                            entry.p.Z-point.Z).Magnitude<14 then
+                        return true
                     end
-                    stage("walls: "..counts.Wall.." confirmed")
-                    task.wait(.12)
+                end
+                return false
+            end
+            stage("walls (live overlap detection)")
+            for _,requested in ipairs(wallUnits) do
+                if not running() or build.sent>=budget or consecutive>=12 then break end
+                -- Clip to the portions not already occupied by real walls.
+                for _,u in ipairs(openWallSegments(requested,
+                    occupiedFromPlot(plot,origin))) do
+                    if not running() or build.sent>=budget or consecutive>=12 then break end
+                    if not nearFailed(u) and not
+                        shellConfirmed(u,occupiedFromPlot(plot,origin)) then
+                        local before={}
+                        local structs=plot:FindFirstChild("Structures")
+                        if structs then
+                            for _,m in ipairs(structs:GetChildren()) do
+                                if m:IsA("Model") then before[m]=true end
+                            end
+                        end
+                        local worked,reason=pcall(function() fireUnit(u) end)
+                        build.sent=build.sent+1
+                        local function newWallNear()
+                            local folder=plot:FindFirstChild("Structures")
+                            if not folder then return false end
+                            local mid=(u.a+u.b)*.5
+                            local wanted=(u.b-u.a).Magnitude
+                            for _,m in ipairs(folder:GetChildren()) do
+                                if m:IsA("Model") and not before[m] then
+                                    local cf=m:GetAttribute("WallCFrame")
+                                    local len=m:GetAttribute("WallLength")
+                                    if typeof(cf)=="CFrame" and type(len)=="number" and
+                                        (cf.Position-mid).Magnitude<math.max(3,wanted*.32) and
+                                        math.abs(len-wanted)<math.max(2,len*.35) then
+                                        return true
+                                    end
+                                end
+                            end
+                            return false
+                        end
+                        local confirmed=worked and waitFor(function()
+                            return shellConfirmed(u,occupiedFromPlot(plot,origin))
+                                or newWallNear()
+                        end,14)
+                        if confirmed then
+                            counts.Wall=counts.Wall+1
+                            consecutive=0
+                            build.passed=true
+                            build.signature=buildSignature(plot,origin)
+                        else
+                            consecutive=consecutive+1
+                            failures[#failures+1]={lv=u.lv,p=(u.a+u.b)*.5}
+                            if not worked then
+                                note("Wall call error: "..tostring(reason):sub(1,100))
+                            end
+                        end
+                        stage("walls: "..counts.Wall.." confirmed")
+                        task.wait(.13)
+                    end
                 end
             end
-            if not running() or structuralFailure then return end
-            if build.sent>=budget then
-                note("Structural request budget reached. Press START BUILD again to resume confirmed gaps.")
-                return
+            if consecutive>=12 then
+                note("12 separated wall placements were unconfirmed; moved to floors and other sections instead of shutting down.")
             end
+            if not running() then return end
             -- Floor construction uses the original planned slabs, not
             -- hundreds of thin repair strips. A whole-slab verification
             -- requires matching coverage at the intended coordinates.
