@@ -1938,6 +1938,20 @@ local function finishCastle()
     if not units then notify(err);return end
     if #units==0 then notify("All matching staircase/detail positions are already filled");return end
     if not eventFor("Item") then notify("PlaceItem event missing");return end
+    local hasRealMasonry=false
+    local structures=plot:FindFirstChild("Structures")
+    if structures then
+        for _,m in ipairs(structures:GetChildren()) do
+            if m:IsA("Model") and typeof(m:GetAttribute("WallCFrame"))=="CFrame" then
+                hasRealMasonry=true
+                break
+            end
+        end
+    end
+    if not hasRealMasonry then
+        notify("Build the structural walls first. Decorations cannot lead the build.")
+        return
+    end
     local pace=BUILD_SPEEDS[state.buildSpeed] or BUILD_SPEEDS.Fast
     build.busy=true;build.cancel=false
     build.total=#units;build.sent=0
@@ -1972,6 +1986,211 @@ local function finishCastle()
         else build.status="Finished sending "..sent.." Shape requests; inspect the plot" end
         refreshBuildStatus()
         notify(build.status..". Server acceptance is not guaranteed.")
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+
+-- Real structural windows are placed through PlaceWindow, NOT by layering
+-- glass panels or Shape lintels over solid walls. The game's editor supplies
+-- a wall GUID for WallSnap, so only server-created wall models are eligible.
+local function nativeWindowModels(plot)
+    local result={}
+    for _,folderName in ipairs({"Structures","Furniture"}) do
+        local folder=plot:FindFirstChild(folderName)
+        if folder then
+            for _,m in ipairs(folder:GetChildren()) do
+                if m:IsA("Model") and (m:GetAttribute("Category")=="Windows" or
+                    m:GetAttribute("ItemCategory")=="Windows") then
+                    result[#result+1]=m
+                end
+            end
+        end
+    end
+    return result
+end
+local function nativeWindowTargets(plot,origin)
+    local result={}
+    local folder=plot:FindFirstChild("Structures")
+    if not folder then return result end
+    local h=15
+    pcall(function()
+        local cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig)
+        if type(cfg.StoreyHeight)=="number" then h=cfg.StoreyHeight end
+    end)
+    h=math.clamp(h,6,30)
+    for _,wall in ipairs(folder:GetChildren()) do
+        if wall:IsA("Model") then
+            local cf=wall:GetAttribute("WallCFrame")
+            local length=wall:GetAttribute("WallLength")
+            local guid=wall:GetAttribute("GUID")
+            if typeof(cf)=="CFrame" and type(length)=="number" and length>=13
+                and guid~=nil then
+                local lv=wall:GetAttribute("Storey")
+                if type(lv)~="number" then
+                    lv=math.floor((cf.Position.Y-origin.Position.Y)/h+.1)
+                end
+                lv=math.floor(lv)
+                if lv>=0 and lv<=4 then
+                    local height=wall:GetAttribute("WallHeight")
+                    if type(height)~="number" or height<6 then height=h end
+                    local center=Vector3.new(cf.Position.X,
+                        origin.Position.Y+lv*h+math.min(height*.52,h*.56),
+                        cf.Position.Z)
+                    local pivot=CFrame.new(center)*cf.Rotation
+                    result[#result+1]={
+                        model=wall,cf=pivot,wallCF=cf,length=length,
+                        guid=tostring(guid),lv=lv
+                    }
+                end
+            end
+        end
+    end
+    table.sort(result,function(a,b)
+        if a.lv~=b.lv then return a.lv>b.lv end
+        return a.length>b.length
+    end)
+    return result
+end
+local function windowAlreadyAt(plot,position)
+    for _,m in ipairs(nativeWindowModels(plot)) do
+        local ok,cf=pcall(function() return m:GetPivot() end)
+        if ok and (cf.Position-position).Magnitude<6 then return true end
+    end
+    return false
+end
+local function confirmedNewWindow(plot,before,position,windowId)
+    for _,m in ipairs(nativeWindowModels(plot)) do
+        if not before[m] then
+            local id=m:GetAttribute("ItemId")
+            local ok,cf=pcall(function() return m:GetPivot() end)
+            if (id==nil or tostring(id)==tostring(windowId)) and
+                ok and (cf.Position-position).Magnitude<10 then
+                return true
+            end
+        end
+    end
+    return false
+end
+local function testNativeWindow()
+    if build.busy then notify("Finish the current construction job first");return end
+    if not ensureCatalog() or not nativeWindow.id then
+        notify("No native Windows item discovered. Rescan the Build Catalog.")
+        return
+    end
+    local remote=eventFor("Window")
+    if not remote then notify("PlaceWindow event is unavailable");return end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin then notify("No owned plot found");return end
+    local target
+    for _,candidate in ipairs(nativeWindowTargets(plot,origin)) do
+        if not windowAlreadyAt(plot,candidate.cf.Position) then
+            target=candidate;break
+        end
+    end
+    if not target then
+        notify("No free, server-confirmed wall for a native window. Build masonry first.")
+        return
+    end
+    local before={}
+    for _,m in ipairs(nativeWindowModels(plot)) do before[m]=true end
+    local itemId=nativeWindow.id
+    build.busy=true;build.cancel=false
+    build.status="Testing one native "..tostring(nativeWindow.name).." window..."
+    refreshBuildStatus()
+    task.spawn(function()
+        local ok,err=pcall(function()
+            remote:FireServer(itemId,"Windows",target.cf,target.guid,
+                nil,nil,target.lv)
+        end)
+        local passed=false
+        if ok then
+            for i=1,24 do
+                if build.cancel or not alive then break end
+                if confirmedNewWindow(plot,before,target.cf.Position,itemId) then
+                    passed=true;break
+                end
+                task.wait(.2)
+            end
+        end
+        nativeWindow.passed=passed
+        nativeWindow.signature=passed and
+            (plot.Name.."|"..tostring(itemId)) or nil
+        nativeWindow.status=passed and
+            ("VERIFIED native window: "..tostring(nativeWindow.name)) or
+            ("Native window not confirmed; no bulk windows allowed")
+        build.busy=false
+        build.status=nativeWindow.status
+        refreshBuildStatus()
+        notify(nativeWindow.status..
+            (not ok and (" / "..tostring(err):sub(1,90)) or ""))
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+local function addNativeWindows()
+    if build.busy then notify("Another build job is running");return end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin or not nativeWindow.passed or
+        nativeWindow.signature~=(plot.Name.."|"..tostring(nativeWindow.id)) then
+        notify("TEST ONE NATIVE WINDOW must succeed before adding more.")
+        return
+    end
+    local remote=eventFor("Window")
+    if not remote then notify("PlaceWindow unavailable");return end
+    local targets=nativeWindowTargets(plot,origin)
+    if #targets==0 then notify("No confirmed structural walls found");return end
+    build.busy=true;build.cancel=false
+    build.status="Installing native windows on existing walls..."
+    refreshBuildStatus()
+    task.spawn(function()
+        local placed,skipped,rejected=0,0,0
+        for _,target in ipairs(targets) do
+            if not alive or build.cancel or placed>=28 or rejected>=2 then break end
+            if windowAlreadyAt(plot,target.cf.Position) then
+                skipped=skipped+1
+            else
+                local before={}
+                for _,m in ipairs(nativeWindowModels(plot)) do before[m]=true end
+                local ok,err=pcall(function()
+                    remote:FireServer(nativeWindow.id,"Windows",target.cf,
+                        target.guid,nil,nil,target.lv)
+                end)
+                local confirmed=false
+                if ok then
+                    for i=1,18 do
+                        if build.cancel or not alive then break end
+                        if confirmedNewWindow(plot,before,target.cf.Position,
+                            nativeWindow.id) then
+                            confirmed=true;break
+                        end
+                        task.wait(.2)
+                    end
+                end
+                if confirmed then
+                    placed=placed+1
+                    rejected=0
+                else
+                    rejected=rejected+1
+                    if not ok then
+                        notify("Native window request failed: "..
+                            tostring(err):sub(1,75))
+                    end
+                end
+                build.status="Native windows: "..placed..
+                    " confirmed / "..skipped.." occupied / "..rejected..
+                    " consecutive unconfirmed"
+                refreshBuildStatus()
+                task.wait(.18)
+            end
+        end
+        build.busy=false
+        build.status=build.cancel and "Native window installation stopped" or
+            ("Native windows: "..placed.." confirmed / "..skipped..
+            " already occupied / stopped after "..rejected..
+            " consecutive failures")
+        refreshBuildStatus()
+        notify(build.status)
         if alive and state.page=="Builder" then switchPage("Builder") end
     end)
 end
