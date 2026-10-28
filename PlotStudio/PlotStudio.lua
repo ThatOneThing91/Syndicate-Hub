@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.4: multi-pass auto shell repair, measured floor-gap scanning and copyable per-placement diagnostics
+    Standalone Plot Studio v2.4.1: multi-pass auto shell repair, measured floor-gap scanning and copyable per-placement diagnostics
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -3504,7 +3504,7 @@ local function shellRepairCandidates(plot,origin,physical)
         end
     end
     table.sort(requests,function(a,b)
-        if a.kind~=b.kind then return a.kind=="Floor" end
+        if a.kind~=b.kind then return a.kind=="Wall" end
         if a.lv~=b.lv then
             -- Floors above ground first: these are fall-through hazards.
             if a.kind=="Floor" then
@@ -3586,6 +3586,9 @@ local function startBuild()
     local maxRequests=120
     local maxPerTarget=3
     local maxNoProgress=15
+    -- A confirmed placement is not useful if the blueprint-wide gap count
+    -- barely changes. Pause rather than filling the plot with strips.
+    local progressCheckEvery=12
     build.busy=true;build.cancel=false
     build.sent=0;build.total=maxRequests
     build.lastAudit="AUTO REPAIR IN PROGRESS\nPlot: "..plot.Name..
@@ -3602,6 +3605,9 @@ local function startBuild()
         local samples,initialMissing=initialStats.missingCells,#initial
         local lastStats=initialStats
         local stoppedReason=""
+        local floorRequestsAtCheckpoint=0
+        local floorMissingAtCheckpoint=initialStats.missingCells
+        local floorMismatch=false
         local function record(u,tries,result,reason,before,after)
             entries[#entries+1]=shellLabel(u)..
                 " | tries="..tries.." | "..result..
@@ -3609,7 +3615,8 @@ local function startBuild()
                 math.floor(after*100+.5).."% | "..reason
         end
         for pass=1,maxRounds do
-            if build.cancel or not alive or totalSent>=maxRequests or
+            if build.cancel or not alive or floorMismatch or
+                totalSent>=maxRequests or
                 withoutProgress>=maxNoProgress then break end
             passes=pass
             local physical=occupiedFromPlot(plot,origin)
@@ -3621,7 +3628,8 @@ local function startBuild()
             end
             local passProgress=0
             for _,u in ipairs(queue) do
-                if not alive or build.cancel or totalSent>=maxRequests or
+                if not alive or build.cancel or floorMismatch or
+                    totalSent>=maxRequests or
                     withoutProgress>=maxNoProgress then break end
                 local key=shellKey(u)
                 if (targetAttempts[key] or 0)>=maxPerTarget then
@@ -3654,6 +3662,9 @@ local function startBuild()
                             localTries=localTries+1
                             if localTries>1 then retried=retried+1 end
                             totalSent=totalSent+1
+                            if u.kind=="Floor" then
+                                floorRequestsAtCheckpoint=floorRequestsAtCheckpoint+1
+                            end
                             build.sent=totalSent
                             local ok,err=pcall(function() fireUnit(u) end)
                             local seen=false
@@ -3711,6 +3722,24 @@ local function startBuild()
                             end
                             record(u,localTries,result,reason,
                                 before,finalCoverage)
+                            if u.kind=="Floor" and
+                                floorRequestsAtCheckpoint>=progressCheckEvery then
+                                local _,_,missingNow=missingFloorGapUnits(
+                                    plot,origin,occupiedFromPlot(plot,origin),1)
+                                local reduced=floorMissingAtCheckpoint-missingNow
+                                if reduced<math.max(3,math.floor(
+                                    floorRequestsAtCheckpoint*.5)) then
+                                    floorMismatch=true
+                                    stoppedReason="Floor geometry/blueprint mismatch: "..
+                                        floorRequestsAtCheckpoint.." floor requests "..
+                                        "reduced missing samples by only "..reduced..
+                                        ". Paused to prevent duplicate slabs."
+                                    build.lastAudit="AUTO REPAIR SAFETY PAUSE\n"..
+                                        stoppedReason
+                                end
+                                floorMissingAtCheckpoint=missingNow
+                                floorRequestsAtCheckpoint=0
+                            end
                             build.status="AUTO SHELL: "..confirmed..
                                 " confirmed / "..partial.." partial / "..
                                 failed.." unresolved / "..totalSent..
@@ -3729,6 +3758,7 @@ local function startBuild()
             task.wait(1.2)
         end
         if build.cancel then stoppedReason="Stopped by user."
+        elseif floorMismatch then -- preserve the measured safety-pause reason
         elseif withoutProgress>=maxNoProgress then
             stoppedReason="Safety pause: "..maxNoProgress..
                 " unresolved targets without progress; no blind spam."
