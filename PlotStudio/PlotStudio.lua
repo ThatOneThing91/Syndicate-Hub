@@ -483,6 +483,29 @@ local function capture(plot)
         end
     end
     if #bp.parts==0 then return nil,"No supported structures visible; plot may not have streamed in" end
+    local byCategory={}
+    local colored=0
+    for _,piece in ipairs(bp.parts) do
+        byCategory[piece.category]=(byCategory[piece.category] or 0)+1
+        if piece.color then colored=colored+1 end
+    end
+    local summary={}
+    for category,count in pairs(byCategory) do
+        summary[#summary+1]=tostring(category)..":"..count
+    end
+    table.sort(summary)
+    log("Source categories: "..table.concat(summary,", "))
+    log("Appearance recorded for "..colored.."/"..#bp.parts.." objects.")
+    for _,child in ipairs(plot:GetChildren()) do
+        local lower=child.Name:lower()
+        if lower:find("sale",1,true) or
+            lower:find("sell",1,true) or
+            lower:find("display",1,true) or
+            lower:find("shelf",1,true) then
+            log("Possible additional sale/display folder: "..
+                child.Name.." ("..#child:GetChildren().." children)")
+        end
+    end
     return bp,ignored
 end
 local function canPlace(part)
