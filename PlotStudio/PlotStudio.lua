@@ -2871,7 +2871,8 @@ task.spawn(function()
     task.wait(.15)
     if alive and not stairCatalog.scanned and not stairCatalog.scanning then
         scanStairs()
-        if alive and (state.page=="Catalog" or state.page=="Builder") then
+        if alive and (state.page=="Catalog" or state.page=="Builder" or
+            state.page=="Overview") then
             switchPage(state.page)
         end
     end
