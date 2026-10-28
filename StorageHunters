@@ -12759,6 +12759,9 @@ return function(cfg)
         -- Keep the console diagnostics readable and bounded.
         print("[Auto Shop Offers] "..record:sub(1,1700))
     end
+    -- This function is defined below the event listener. Forward declare it
+    -- so ShowOffer doesn't accidentally call a nil global at runtime.
+    local offerPanelPercent
     local function readEvent(sourceName,...)
         if not active then return end
         eventCount=eventCount+1
@@ -12771,26 +12774,65 @@ return function(cfg)
         -- with the GUID from this exact event, never a saved sample GUID.
         if sourceName=="ShowOffer" then
             local guid,npc,itemName,offerPrice,itemValue=...
-            local offer=tonumber(offerPrice)
-            local value=tonumber(itemValue)
-            if uuid(guid) and offer and value and value>0 and offer>=0 then
-                local pct=(offer/value-1)*100
-                pendingIds[guid]=os.clock()
-                lastIncomingOfferAt=os.clock()
-                -- A displayed percentage is preferable when it is explicitly
-                -- tied to this offer. Otherwise the two server-sent prices
-                -- provide the same comparison without guessing bubble text.
-                local bubblePct,bubbleGuid=offerPanelPercent()
-                if bubblePct~=nil and bubbleGuid==guid then pct=bubblePct end
-                statusText.Text="ShowOffer "..tostring(math.floor(pct*10+.5)/10)..
-                    "% · threshold "..tostring(percent).."%"
-                task.spawn(function()
-                    task.wait(.15)
-                    if active and not closed then handleOffer(guid,pct) end
-                end)
-            else
-                statusText.Text="ShowOffer received; missing valid GUID/prices"
+            if not uuid(guid) then
+                statusText.Text="ShowOffer missing valid live GUID"
+                return
             end
+            pendingIds[guid]=os.clock()
+            lastIncomingOfferAt=os.clock()
+            -- Read the percentage in the shopper's speech bubble first.
+            -- If Roblox renders the bubble only in CoreGui, compare the
+            -- exact offered price and item value from this same event.
+            local function bubblePercent()
+                if typeof(npc)=="Instance" then
+                    for _,node in ipairs(npc:GetDescendants()) do
+                        if node:IsA("TextLabel") or node:IsA("TextButton") then
+                            local raw=node.Text:gsub("−","-"):gsub("＋","+")
+                            local value=raw:match("([+-]%s*%d+%.?%d*)%s*%%")
+                            if value then
+                                local n=tonumber(value:gsub("%s+",""))
+                                if n then return n,"customer bubble" end
+                            end
+                        end
+                    end
+                end
+                if offerPanelPercent then
+                    local value,guiGuid=offerPanelPercent()
+                    if value~=nil and guiGuid==guid then
+                        return value,"offer GUI"
+                    end
+                end
+                return nil,nil
+            end
+            local function decide()
+                if closed or not active or decided[guid] then return end
+                local pct,source=bubblePercent()
+                if pct==nil then
+                    local offer=tonumber(offerPrice)
+                    local value=tonumber(itemValue)
+                    if offer and value and value>0 and offer>=0 then
+                        pct=(offer/value-1)*100
+                        source="ShowOffer prices"
+                    end
+                end
+                if pct==nil then
+                    statusText.Text="Offer received; percent unavailable"
+                    return
+                end
+                statusText.Text="Offer "..tostring(math.floor(pct*10+.5)/10)..
+                    "% ("..source..")"
+                handleOffer(guid,pct)
+            end
+            -- The game needs a moment to populate the bubble and server
+            -- offer state before a response is sent.
+            task.spawn(function()
+                task.wait(.3)
+                local ok,err=pcall(decide)
+                if not ok then
+                    statusText.Text="Offer handler error (console)"
+                    warn("[Auto Shop Offers] "..tostring(err))
+                end
+            end)
             return
         end
         if sourceName=="HideOffer" then
@@ -13036,7 +13078,7 @@ return function(cfg)
     -- Yes/No controls (e.g., staff offer notifications). Read the comparison
     -- automatically when ShowOffer/OfferPresented arrives and correlate only
     -- with a single recent offer UUID.
-    local function offerPanelPercent()
+    offerPanelPercent=function()
         local pg=player and player:FindFirstChild("PlayerGui")
         if not pg then return nil end
         local found={}
