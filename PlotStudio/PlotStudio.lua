@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.7: captured placement signatures, audited results, and accurate construction status
+    Standalone Plot Studio v2.8: unified version display and incremental release numbering
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -18,6 +18,11 @@ pcall(function()
 end)
 local KEY = "__StorageHunters_PlotStudio"
 local NAME = "StorageHunters_PlotStudio"
+
+-- Single release version. Bump this value once per published update:
+-- 2.8 -> 2.9 -> 3.0 -> 3.1 (never 2.10).
+-- All visible version labels use this constant.
+local VERSION = "2.8"
 
 if type(env[KEY]) == "function" then pcall(env[KEY]) end
 for _, parent in ipairs({CoreGui, player:WaitForChild("PlayerGui")}) do
@@ -165,7 +170,7 @@ local emblem = corner(ui("Frame", {
     BackgroundColor3 = C.purple, BorderSizePixel = 0,
 }, header), 10)
 text(emblem, "P", 0, 0, 38, 38, 22, C.bg, true, {TextXAlignment = Enum.TextXAlignment.Center})
-text(header, "PLOT STUDIO  V2.3", 65, 12, 285, 25, 19, C.white, true)
+text(header, "PLOT STUDIO  V"..VERSION, 65, 12, 285, 25, 19, C.white, true)
 text(header, "STORAGE HUNTERS  /  BLUEPRINT LAB", 65, 36, 280, 17, 10, C.dim, false)
 local headerStatus = corner(ui("Frame", {
     AnchorPoint = Vector2.new(1, 0.5),
@@ -173,7 +178,7 @@ local headerStatus = corner(ui("Frame", {
     Size = UDim2.fromOffset(102, 25),
     BackgroundColor3 = C.purpleDark, BorderSizePixel = 0,
 }, header), 12)
-text(headerStatus, "●  V2.3 BETA", 8, 0, 92, 25, 10, C.white, true)
+text(headerStatus, "●  V"..VERSION.." BETA", 8, 0, 92, 25, 10, C.white, true)
 
 local minus = button(header, "—", 0, 0, 32, 30, false, nil)
 minus.AnchorPoint = Vector2.new(1, 0.5)
@@ -216,7 +221,7 @@ for i, data in ipairs(navSpecs) do
     navButtons[data[1]] = {button=b, label=lbl}
     on(b.MouseButton1Click, function() if switchPage then switchPage(data[1]) end end)
 end
-local sidebarBottom = text(sidebar, "V2.3  •  PLOT STUDIO", 15, 0, 164, 18, 10, C.muted, true)
+local sidebarBottom = text(sidebar, "V"..VERSION.."  •  PLOT STUDIO", 15, 0, 164, 18, 10, C.muted, true)
 sidebarBottom.AnchorPoint = Vector2.new(0,1)
 sidebarBottom.Position = UDim2.new(0,15,1,-16)
 
@@ -5447,7 +5452,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 2.4",
+        sectionNote(about,"PLOT STUDIO  •  VERSION "..VERSION,
             "Independent of Syndicate Hub. Local previews are conceptual; build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -5545,4 +5550,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v2.7 captured placement signatures and truthful shell completion checks. Independent of Syndicate Hub.")
+print("[Plot Studio] v"..VERSION.." active. Independent of Syndicate Hub.")
