@@ -1617,6 +1617,9 @@ end
 local function sameStairUnit(a,b)
     return a and b and a.id==b.id and (a.cf.Position-b.cf.Position).Magnitude<.45
 end
+-- The game may store Shapes under Furniture, Structures or a Shapes
+-- folder and sometimes marks the category without an ItemId on the
+-- outer model. Scan plausible roots, never arbitrary loose plot parts.
 local function shapeModels(plot)
     local result={}
     local seen={}
@@ -1624,42 +1627,66 @@ local function shapeModels(plot)
         local folder=plot:FindFirstChild(name)
         if folder then
             for _,model in ipairs(folder:GetDescendants()) do
-                if model:IsA("Model") and model:GetAttribute("ItemId")~=nil
-                    and not seen[model] then
-                    seen[model]=true
-                    result[#result+1]=model
+                if (model:IsA("Model") or model:IsA("BasePart")) and
+                    not seen[model] then
+                    local itemId=model:GetAttribute("ItemId")
+                    local cat=model:GetAttribute("Category") or
+                        model:GetAttribute("ItemCategory")
+                    if itemId~=nil or cat=="Shapes" then
+                        seen[model]=true
+                        result[#result+1]=model
+                    end
                 end
             end
         end
     end
     return result
 end
+local function shapeIdentityMatches(model,request)
+    local id=model:GetAttribute("ItemId")
+    if id~=nil then return tostring(id)==tostring(request.id) end
+    local cat=model:GetAttribute("Category") or
+        model:GetAttribute("ItemCategory")
+    return cat=="Shapes"
+end
+local function shapeBounds(model)
+    if model:IsA("BasePart") then
+        return model.CFrame,model.Size
+    end
+    local ok,cf,size=pcall(function() return model:GetBoundingBox() end)
+    if ok then return cf,size end
+    return nil,nil
+end
+local function shapeIsVisibleAndSolid(model,needsWalkable)
+    local parts={}
+    if model:IsA("BasePart") then parts={model}
+    else parts=model:GetDescendants() end
+    local visible,solid=false,false
+    for _,piece in ipairs(parts) do
+        if piece:IsA("BasePart") and piece.Transparency<.88 then
+            visible=true
+            if piece.CanCollide and piece.CFrame.UpVector.Y>.7 then
+                solid=true
+            end
+        end
+    end
+    return visible and (not needsWalkable or solid)
+end
+local function shapeSizeFits(size,wanted,loose)
+    if not size or not wanted then return false end
+    local ratio=loose and .4 or .27
+    return math.abs(size.X-wanted.X)<math.max(loose and 2 or .85,wanted.X*ratio)
+        and math.abs(size.Y-wanted.Y)<math.max(loose and 1 or .55,wanted.Y*(loose and .75 or .42))
+        and math.abs(size.Z-wanted.Z)<math.max(loose and 2 or .85,wanted.Z*ratio)
+end
 local function verifyPlacedStair(plot,request,before)
     for _,model in ipairs(shapeModels(plot)) do
-        if model:IsA("Model") and not before[model] and
-            tostring(model:GetAttribute("ItemId") or "")==tostring(request.id) then
-            if (model:GetPivot().Position-request.cf.Position).Magnitude<4 then
-                local ok,box,actual=pcall(function() return model:GetBoundingBox() end)
-                if ok and typeof(actual)=="Vector3" then
-                    local intended=request.size
-                    -- Refuse to extrapolate a whole staircase from a block
-                    -- that ignored its requested size.
-                    if math.abs(actual.X-intended.X)<math.max(2,intended.X*.4)
-                        and math.abs(actual.Y-intended.Y)<math.max(1,intended.Y*.75)
-                        and math.abs(actual.Z-intended.Z)<math.max(2,intended.Z*.4) then
-                        local solidSurface=false
-                        for _,piece in ipairs(model:GetDescendants()) do
-                            if piece:IsA("BasePart") and piece.CanCollide
-                                and piece.CFrame.UpVector.Y>.7 then
-                                solidSurface=true
-                                break
-                            end
-                        end
-                        -- A correctly sized but non-collidable Shape is
-                        -- decoration, not a climbable staircase.
-                        if solidSurface then return true end
-                    end
-                end
+        if not before[model] and shapeIdentityMatches(model,request) then
+            local cf,size=shapeBounds(model)
+            if cf and (cf.Position-request.cf.Position).Magnitude<3.2 and
+                shapeSizeFits(size,request.size,true) and
+                shapeIsVisibleAndSolid(model,request.kind=="StairShape") then
+                return true
             end
         end
     end
@@ -1667,36 +1694,17 @@ local function verifyPlacedStair(plot,request,before)
 end
 local function stairsAlreadyPresent(plot,u)
     for _,model in ipairs(shapeModels(plot)) do
-        if model:IsA("Model") and
-            tostring(model:GetAttribute("ItemId") or "")==tostring(u.id) then
-            local ok,box,size=pcall(function() return model:GetBoundingBox() end)
-            if ok and (model:GetPivot().Position-u.cf.Position).Magnitude<1.35 then
-                -- Same item ID + approximate position is NOT enough. A
-                -- different-size Shape previously caused false "all filled".
-                local intended=u.size
-                local fits=math.abs(size.X-intended.X)<math.max(.85,intended.X*.25)
-                    and math.abs(size.Y-intended.Y)<math.max(.55,intended.Y*.40)
-                    and math.abs(size.Z-intended.Z)<math.max(.85,intended.Z*.25)
-                if fits then
-                    local visible,walkable=false,false
-                    for _,piece in ipairs(model:GetDescendants()) do
-                        if piece:IsA("BasePart") and piece.Transparency<.88 then
-                            visible=true
-                            if piece.CanCollide and piece.CFrame.UpVector.Y>.7 then
-                                walkable=true
-                            end
-                        end
-                    end
-                    if visible and (u.kind~="StairShape" or walkable) then
-                        return true
-                    end
-                end
+        if shapeIdentityMatches(model,u) then
+            local cf,size=shapeBounds(model)
+            if cf and (cf.Position-u.cf.Position).Magnitude<1.45 and
+                shapeSizeFits(size,u.size,false) and
+                shapeIsVisibleAndSolid(model,u.kind=="StairShape") then
+                return true
             end
         end
     end
     return false
 end
-
 
 -- Non-destructive access/design audit. This checks preview geometry, not
 -- whether the server accepted actual PlaceItem/PlaceFloor requests.
@@ -1803,8 +1811,10 @@ local function fireUnit(u)
     local r=eventFor(eventName)
     if not r then error("Missing Place"..eventName) end
     if u.kind=="StairShape" or u.kind=="DetailShape" then
-        local shapeMaterial=Enum.Material[tostring(u.material or "")] or Enum.Material.Slate
-        r:FireServer(u.id,"Shapes",u.cf,u.color,shapeMaterial,.25,u.size,u.lv)
+        -- The editor sends optional color and material overrides.
+        -- Avoid forcing a material enum before a basic block placement
+        -- has succeeded; the game can reject unsupported overrides.
+        r:FireServer(u.id,"Shapes",u.cf,nil,nil,.25,u.size,u.lv)
     elseif u.kind=="Wall" then
         local diff=u.b-u.a
         local profile=DESIGN_STYLES[state.design] or DESIGN_STYLES[1]
@@ -1949,6 +1959,25 @@ local function testStairShape()
             end
         end
         build.busy=false
+        local modelsAfter=shapeModels(plot)
+        local newCount=0
+        for _,m in ipairs(modelsAfter) do
+            if not snapshot[m] then newCount=newCount+1 end
+        end
+        local p=target.cf.Position
+        build.lastAudit="SHAPE PLACEMENT DIAGNOSTIC\n"..
+            "Shape: "..tostring(stairCatalog.shape and stairCatalog.shape.name)..
+            " (ID "..tostring(target.id)..")\n"..
+            "Position: ("..math.floor(p.X+.5)..","..
+                math.floor(p.Y+.5)..","..math.floor(p.Z+.5)..")\n"..
+            "Requested dimensions: "..tostring(target.size)..
+            "\nStorey: "..tostring(target.lv)..
+            "\nShapes before: "..tostring(#modelsAfter-newCount)..
+            "\nNew shape-like models: "..newCount..
+            "\nConfirmed matching walkable Shape: "..tostring(accepted)..
+            "\nRequest call succeeded: "..tostring(fired)..
+            "\nCall error (if any): "..tostring(err or "none")..
+            "\nA sent event does not mean the server accepted the Shape."
         if accepted then
             stairTest.passed=true
             stairTest.signature=buildSignature(plot,origin)
