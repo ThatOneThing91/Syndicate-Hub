@@ -12773,18 +12773,23 @@ return function(cfg)
             local guid,npc,itemName,offerPrice,itemValue=...
             local offer=tonumber(offerPrice)
             local value=tonumber(itemValue)
-            if uuid(guid) and offer and value and value>0 and
-                offer>=0 and offer==offer and value==value then
-                lastIncomingOfferAt=os.clock()
-                pendingIds[guid]=os.clock()
+            if uuid(guid) and offer and value and value>0 and offer>=0 then
                 local pct=(offer/value-1)*100
-                if pct>=-100 and pct<=1000 then
-                    handleOffer(guid,pct)
-                else
-                    statusText.Text="Offer percentage outside supported range"
-                end
+                pendingIds[guid]=os.clock()
+                lastIncomingOfferAt=os.clock()
+                -- A displayed percentage is preferable when it is explicitly
+                -- tied to this offer. Otherwise the two server-sent prices
+                -- provide the same comparison without guessing bubble text.
+                local bubblePct,bubbleGuid=offerPanelPercent()
+                if bubblePct~=nil and bubbleGuid==guid then pct=bubblePct end
+                statusText.Text="ShowOffer "..tostring(math.floor(pct*10+.5)/10)..
+                    "% · threshold "..tostring(percent).."%"
+                task.spawn(function()
+                    task.wait(.15)
+                    if active and not closed then handleOffer(guid,pct) end
+                end)
             else
-                statusText.Text="ShowOffer received with incomplete price data"
+                statusText.Text="ShowOffer received; missing valid GUID/prices"
             end
             return
         end
@@ -13416,8 +13421,7 @@ return function(cfg)
         local hidden=shopper:FindFirstChild("HideOffer")
         -- ShowOffer OnClientEvent is the confirmed source of complete
         -- offer details. No executor namecall hook is required to decide.
-        refreshShopStock()
-        statusText.Text="Listening for ShowOffer (GUID + offer/value)"
+        statusText.Text="Listening for ShowOffer (live offers)"
         task.spawn(function()
             while not closed and active do
                 local ok,problem=pcall(pollOfferGui)
