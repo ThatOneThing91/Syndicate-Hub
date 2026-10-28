@@ -1999,8 +1999,11 @@ local function nativeWindowModels(plot)
         local folder=plot:FindFirstChild(folderName)
         if folder then
             for _,m in ipairs(folder:GetChildren()) do
+                local itemId=m:GetAttribute("ItemId")
+                local known=itemId and
+                    buildCatalog.byId["Windows|"..tostring(itemId)]
                 if m:IsA("Model") and (m:GetAttribute("Category")=="Windows" or
-                    m:GetAttribute("ItemCategory")=="Windows") then
+                    m:GetAttribute("ItemCategory")=="Windows" or known~=nil) then
                     result[#result+1]=m
                 end
             end
@@ -2032,21 +2035,29 @@ local function nativeWindowTargets(plot,origin)
                 lv=math.floor(lv)
                 if lv>=0 and lv<=4 then
                     local height=wall:GetAttribute("WallHeight")
-                    if type(height)~="number" or height<6 then height=h end
-                    local center=Vector3.new(cf.Position.X,
-                        origin.Position.Y+lv*h+math.min(height*.52,h*.56),
-                        cf.Position.Z)
-                    local pivot=CFrame.new(center)*cf.Rotation
-                    result[#result+1]={
-                        model=wall,cf=pivot,wallCF=cf,length=length,
-                        guid=tostring(guid),lv=lv
-                    }
+                    if type(height)~="number" then height=h end
+                    -- Doorway lintels and half-height walls cannot host
+                    -- a full structural window. Do not try them.
+                    if height>=h*.75 then
+                        local center=Vector3.new(cf.Position.X,
+                            origin.Position.Y+lv*h+math.min(height*.52,h*.56),
+                            cf.Position.Z)
+                        local pivot=CFrame.new(center)*cf.Rotation
+                        result[#result+1]={
+                            model=wall,cf=pivot,wallCF=cf,length=length,
+                            guid=tostring(guid),lv=lv
+                        }
+                    end
                 end
             end
         end
     end
     table.sort(result,function(a,b)
-        if a.lv~=b.lv then return a.lv>b.lv end
+        -- Prefer a first-floor wall for the single-window test; the top
+        -- storeys may be locked even when they appear in the preview.
+        local pa=math.abs(a.lv-1)
+        local pb=math.abs(b.lv-1)
+        if pa~=pb then return pa<pb end
         return a.length>b.length
     end)
     return result
@@ -2055,6 +2066,17 @@ local function windowAlreadyAt(plot,position)
     for _,m in ipairs(nativeWindowModels(plot)) do
         local ok,cf=pcall(function() return m:GetPivot() end)
         if ok and (cf.Position-position).Magnitude<6 then return true end
+    end
+    -- Never put a new window through an existing native doorway.
+    local structures=plot:FindFirstChild("Structures")
+    if structures then
+        for _,m in ipairs(structures:GetChildren()) do
+            if m:IsA("Model") and (m:GetAttribute("Category")=="Doors" or
+                m:GetAttribute("ItemCategory")=="Doors") then
+                local ok,cf=pcall(function() return m:GetPivot() end)
+                if ok and (cf.Position-position).Magnitude<6 then return true end
+            end
+        end
     end
     return false
 end
