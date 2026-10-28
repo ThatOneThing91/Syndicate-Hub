@@ -115,8 +115,8 @@ local materials = {
     "Fabric", "SmoothPlastic", "Neon", "Ice", "Glass"
 }
 local designs = {
-    {name = "Grand Citadel", category = "CASTLES", floors = 5, subtitle = "Four towers  /  open marketplace ground floor", tag = "FEATURED"},
-    {name = "Blackstone Fortress", category = "CASTLES", floors = 4, subtitle = "Basalt stronghold  /  crenellated walls", tag = "CONCEPT"},
+    {name = "Grand Citadel", category = "CASTLES", floors = 5, subtitle = "Open courtyard / curved arcades / rear palace", tag = "FEATURED"},
+    {name = "Blackstone Fortress", category = "CASTLES", floors = 4, subtitle = "Open court / crescent stone wings / rear bastion", tag = "CONCEPT"},
     {name = "Royal Courtyard", category = "CASTLES", floors = 3, subtitle = "Symmetrical wings  /  central garden", tag = "CONCEPT"},
     {name = "Glass Showroom", category = "MODERN", floors = 2, subtitle = "Bright storefront  /  display-ready interiors", tag = "CONCEPT"},
     {name = "Watchtower Outpost", category = "UTILITY", floors = 2, subtitle = "Compact tower  /  rooftop lookout", tag = "CONCEPT"},
@@ -481,7 +481,12 @@ local function beginPreview()
         p.Color=shade
         p:SetAttribute("PlotStudioMaterial",chosen)
         p:SetAttribute("PlotStudioColor",shade)
-        p.Transparency=kind=="Glass" and .25 or (kind=="Decor" and .32 or .63)
+        p.Transparency=kind=="Glass" and .40 or (kind=="Decor" and .28 or .14)
+        if name=="Stair tread" or name=="Stair landing" then
+            local function snap(v) return math.floor(v*4+.5)/4 end
+            x=snap(x);y=snap(y);z=snap(z)
+            sx=math.max(.25,snap(sx));sy=math.max(.25,snap(sy));sz=math.max(.25,snap(sz))
+        end
         p.Size=Vector3.new(sx,sy,sz)
         p.CFrame=origin*CFrame.new(x,y,z)*CFrame.Angles(0,rot or 0,0)
         p:SetAttribute("PlotStudioKind",kind)
@@ -688,8 +693,8 @@ local function beginPreview()
         local south=cz-wellD*.5+2.3
         local north=cz+wellD*.5-2.3
         local run=north-south
-        local steps=math.max(10,math.ceil(run/2.8))
-        local treadDepth=run/steps+.16
+        local steps=math.clamp(math.floor(run/3.4+.5),7,9)
+        local treadDepth=run/steps+.24
         local stairThickness=.72
         local leftLane=cx+wellX-spread
         local rightLane=cx+wellX+spread
@@ -748,88 +753,105 @@ local function beginPreview()
     end
 
     if state.design==1 or state.design==2 then
-        local majestic=state.design==1
-        local ox,oz=w*.42,d*.42
-        local r=math.clamp(math.min(w,d)*.083,6.5,13)
-        -- Huge outside walls follow the property instead of the old 56-stud box.
-        wall("Northern rampart",0,h*.68,oz,ox*2,h*1.36,0,dark)
-        wall("Western rampart",-ox,h*.68,0,oz*2,h*1.36,math.pi/2,dark)
-        wall("Eastern rampart",ox,h*.68,0,oz*2,h*1.36,math.pi/2,dark)
-        local door=math.min(20,w*.16)
-        local side=(ox*2-door)/2
-        wall("West gate wall",-(door+side)/2,h*.68,-oz,side,h*1.36,0,dark)
-        wall("East gate wall",(door+side)/2,h*.68,-oz,side,h*1.36,0,dark)
-        wall("Vaulted gateway",0,h*1.2,-oz,door,h*.3,0,light)
-        for _,x in ipairs({-ox,ox}) do
-            for _,z in ipairs({-oz,oz}) do
-                tower(x,z,r,floors+1,majestic,z<0 and "N" or "S")
+        -- Curved courtyard estate. The open front is for selling and events;
+        -- the rear hall holds all of the actual upper floors and staircase.
+        local royal=state.design==1
+        local courtyardZ=-d*.16
+        local rx,rz=w*.405,d*.31
+        local function curve(cx,cz,rx0,rz0,first,last,lev,col,name)
+            local pieces=math.max(3,math.ceil((last-first)*math.max(rx0,rz0)/10))
+            for i=1,pieces do
+                local a=first+(i-1)*(last-first)/pieces
+                local b=first+i*(last-first)/pieces
+                local x1,z1=cx+rx0*math.cos(a),cz+rz0*math.sin(a)
+                local x2,z2=cx+rx0*math.cos(b),cz+rz0*math.sin(b)
+                local dx,dz=x2-x1,z2-z1
+                local len=math.sqrt(dx*dx+dz*dz)
+                if len>=1.8 then
+                    local angle=math.atan2(-dz,dx)
+                    wall(name,(x1+x2)/2,lev*h+h/2,(z1+z2)/2,len,h,angle,col)
+                    deco("Curved stone coping",(x1+x2)/2,(lev+1)*h+.45,
+                        (z1+z2)/2,len,.85,1.4,light,angle)
+                end
             end
         end
-        crenels(0,oz,ox*2,h*1.36,0)
-        crenels(-ox,0,oz*2,h*1.36,math.pi/2)
-        crenels(ox,0,oz*2,h*1.36,math.pi/2)
-        -- Rear keep allows a sprawling ceremonial courtyard and usable ground floor.
-        local kw,kd=w*.52,d*.39
-        local kz=d*.12
+        -- The side wings are faceted curves, not a surrounding rectangular fort.
+        curve(0,courtyardZ,rx,rz,-.93,.60,0,dark,"East crescent")
+        curve(0,courtyardZ,rx,rz,math.pi-.60,math.pi+.93,0,dark,"West crescent")
+        local kw,kd=w*.59,d*.40
+        local kz=d*.245
         for lv=0,floors-1 do
-            walls(0,kz,kw,kd,lv,majestic and stone or dark,true)
+            walls(0,kz,kw,kd,lv,royal and stone or dark,true)
             galleryWithWell(0,kz,kw-2,kd-2,lv)
-            deco("Carved floor cornice",0,(lv+1)*h-.35,kz,kw+1,1.2,kd+1,light)
+            deco("Gallery carved frieze",0,(lv+1)*h-.36,kz,
+                kw+1.2,1.15,kd+1.2,light)
+            for _,sign in ipairs({-1,1}) do
+                for _,f in ipairs({-.29,.29}) do
+                    deco("Corinthian pilaster",sign*(kw*.5-.35),
+                        lv*h+h*.49,kz+f*kd,1.2,h*.87,1.5,light)
+                end
+            end
         end
         grandStaircase(0,kz,kw-2,kd-2,floors)
-        -- Continuous upper-level circulation. The keep's southern entrance
-        -- reaches the front towers; perimeter galleries connect the rear
-        -- towers. The ground floor remains open for selling plots.
-        if floors>1 then
-            local crossZ=-oz+r*.77
-            local frontKeepZ=kz-kd*.5
-            local northZ=oz-r*.77
-            local sideX=ox-r*.77
-            for lv=1,floors-1 do
-                local y=lv*h-.28
-                local pathCenter=(frontKeepZ+crossZ)*.5
-                local pathLength=math.abs(frontKeepZ-crossZ)+8
-                deck("Castle approach skybridge",0,y,pathCenter,9,pathLength,stone)
-                deck("Front tower connecting gallery",0,y,crossZ,
-                    2*sideX+8,9,stone)
-                deck("Rear tower connecting gallery",0,y,northZ,
-                    2*sideX+8,9,stone)
-                for _,sx in ipairs({-1,1}) do
-                    deck("Rampart skywalk",sx*sideX,y,0,9,2*northZ+8,stone)
-                    -- Fine decorative rails beyond the walkable 9-stud deck.
-                    deco("Gallery stone balustrade",sx*(sideX+5.1),
-                        lv*h+1.3,0,.7,2.7,2*northZ+8,light)
-                end
-                for _,sx in ipairs({-1,1}) do
-                    deco("Approach bronze balustrade",sx*5.05,
-                        lv*h+1.3,pathCenter,.5,2.7,pathLength,light)
-                end
-                deco("Front gallery parapet",0,lv*h+1.3,crossZ-5.2,
-                    2*sideX+8,2.7,.7,light)
-                deco("Rear gallery parapet",0,lv*h+1.3,northZ+5.2,
-                    2*sideX+8,2.7,.7,light)
+        -- Thin upper connections, leaving the entire central court open below.
+        for lv=1,floors-1 do
+            local y=lv*h-.27
+            for _,sign in ipairs({-1,1}) do
+                local reach=math.max(5,rx-kw*.5-4)
+                deck("Side gallery connection",sign*(kw*.5+reach*.5),
+                    y,kz-kd*.18,reach+5,8.5,stone)
+                deco("Curved balcony railing",sign*(kw*.5+reach*.5),
+                    lv*h+1.25,kz-kd*.18-4.8,reach+4,.7,2.5,light)
             end
         end
-        deco("Crowned keep roof",0,floors*h-.3,kz,kw+1,.8,kd+1,roof)
-        for _,z in ipairs({kz-kd/2,kz+kd/2}) do crenels(0,z,kw,floors*h+1,0) end
-        for _,x in ipairs({-kw/2,kw/2}) do crenels(x,kz,kd,floors*h+1,math.pi/2) end
-        if majestic then
-            tower(0,kz,math.min(kw*.17,12),floors+2,true)
-            tower(-kw*.31,kz+kd*.25,math.min(kw*.11,8),floors+1,true)
-            tower(kw*.31,kz+kd*.25,math.min(kw*.11,8),floors+1,true)
-        else
-            tower(-kw*.31,kz,math.min(kw*.13,10),floors+1,false)
-            tower(kw*.31,kz,math.min(kw*.13,10),floors+1,false)
+        local frontZ=kz-kd*.5
+        local entry=math.min(18,kw*.25)
+        for i=-4,4 do
+            local t=i/5
+            deco("Rounded entrance cornice",i*entry*.28,h*.95,
+                frontZ-2-math.sqrt(math.max(0,1-t*t))*2.3,
+                entry*.31,1.2,1.2,light)
         end
-        -- Twin entrance towers and stone columns across the whole forecourt.
-        for _,x in ipairs({-door*1.12,door*1.12}) do tower(x,-oz,r*.77,3,majestic) end
-        for _,x in ipairs({-w*.23,w*.23}) do columns(x,-d*.11,d*.27,"Z") end
-        for _,x in ipairs({-w*.31,w*.31}) do lantern(x,-d*.28) end
-        deco("Grand courtyard promenade",0,.17,-d*.23,w*.24,.3,d*.26,light)
-        for _,x in ipairs({-ox,ox}) do
-            for _,z in ipairs({-oz,oz}) do
-                deco("Royal banner staff",x,(floors+1)*h+8,z,.7,10,.7,gold)
-                deco("Purple royal banner",x+1.9,(floors+1)*h+8,z,3.7,6,.3,primary)
+        for _,sign in ipairs({-1,1}) do
+            local x=sign*(entry*.72)
+            deco("Column plinth",x,.65,frontZ-3,3.2,1.3,3.2,light)
+            deco("Corinthian column",x,h*.43,frontZ-3,1.7,h*.82,1.7,light)
+            deco("Gilded column capital",x,h*.88,frontZ-3,3.4,1.15,3.4,gold)
+        end
+        local promenadeZ=-d*.30
+        for i=1,9 do
+            local angle=math.pi*.14+(i-.5)/9*math.pi*.72
+            local x=math.cos(angle)*w*.27
+            local z=promenadeZ+math.sin(angle)*d*.075
+            deco("Open court paving",x,.18,z,math.max(4,w*.061),.36,6.5,
+                i%2==0 and stone or light,angle-math.pi*.5)
+        end
+        -- Just two low pavilions (no tower ring, no blocked center).
+        for _,sign in ipairs({-1,1}) do
+            local x,z=sign*w*.33,-d*.355
+            deco("Arcade pavilion plinth",x,.5,z,12,1,12,dark)
+            for _,side in ipairs({-1,1}) do
+                deco("Arcade pavilion column",x+side*4,h*.30,z,
+                    1.2,h*.59,1.2,light)
+            end
+            deco("Low pavilion canopy",x,h*.63,z,14,1,13,roof)
+            lantern(x,z-7.5)
+        end
+        deco("Sweeping palace pediment",0,floors*h+.85,kz,
+            kw*.46,2.2,kd*.22,roof)
+        for _,sign in ipairs({-1,1}) do
+            deco("Gilded roof finial",sign*kw*.27,floors*h+3.1,
+                kz,1.15,5.6,1.15,gold)
+        end
+        if royal then
+            for i=-2,2 do
+                deco("Royal balcony crest",i*kw*.14,(floors-1)*h+h*.9,
+                    frontZ-1,2.8,2.6,1.1,gold)
+            end
+        else
+            for _,sign in ipairs({-1,1}) do
+                deco("Rear basalt buttress",sign*kw*.48,h*1.1,
+                    kz+kd*.47,3.8,h*2.2,3.8,dark)
             end
         end
     elseif state.design==3 then
@@ -1599,7 +1621,7 @@ local function fireUnit(u)
     local r=eventFor(eventName)
     if not r then error("Missing Place"..eventName) end
     if u.kind=="StairShape" or u.kind=="DetailShape" then
-        r:FireServer(u.id,"Shapes",u.cf,u.color,u.material,1,u.size,u.lv)
+        r:FireServer(u.id,"Shapes",u.cf,u.color,u.material,.25,u.size,u.lv)
     elseif u.kind=="Wall" then
         local diff=u.b-u.a
         local profile=DESIGN_STYLES[state.design] or DESIGN_STYLES[1]
