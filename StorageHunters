@@ -12467,8 +12467,8 @@ task.spawn(function()
         local source = [==[
 -- Auto Shop Offers, integrated directly inside StorageHunters.
 -- RespondOffer(offerGuid, bool) is known; incoming offer schema is not confirmed.
--- V6: ShowOffer OnClientEvent supplies (GUID, shopper, itemName,
--- offeredPrice, itemValue). Respond directly to that authoritative event.
+-- V7: Use ShowOffer prices directly; GUI text is only a fallback.
+-- Cancel queued responses when the offer closes or the toggle is disabled.
 -- No hard-coded GUIDs and no scan button required.
 return function(cfg)
     assert(type(cfg)=="table" and typeof(cfg.parent)=="Instance","Shop page required")
@@ -12488,6 +12488,7 @@ return function(cfg)
     local percent=0
     local decided={}
     local pendingIds={}
+    local offerTickets={}
     local guiHandled={}
     local lastGui={}
     local eventCount=0
@@ -12541,7 +12542,7 @@ return function(cfg)
     local adjust=frame(69)
     local info=create("TextLabel",{
         Position=UDim2.fromOffset(12,3),Size=UDim2.new(1,-24,0,18),
-        BackgroundTransparency=1,Text="Accept at or above selected % of item value",
+        BackgroundTransparency=1,Text="Accept at or above selected % above/below item value",
         TextColor3=muted,TextSize=10,Font=Enum.Font.Gotham,
         TextXAlignment=Enum.TextXAlignment.Left
     },adjust)
@@ -12580,7 +12581,7 @@ return function(cfg)
     corner(diagnose,5)
     local hint=create("TextLabel",{
         Position=UDim2.fromOffset(12,25),Size=UDim2.new(1,-140,0,22),
-        BackgroundTransparency=1,Text="Scanning shopper signs for visible +/- %",
+        BackgroundTransparency=1,Text="0% = item value; +10% = 10% above value",
         TextColor3=muted,TextSize=10,Font=Enum.Font.Gotham,
         TextXAlignment=Enum.TextXAlignment.Left,
         TextTruncate=Enum.TextTruncate.AtEnd
@@ -12646,6 +12647,7 @@ return function(cfg)
         end
         listeners={}
         pendingIds={}
+        offerTickets={}
         guiHandled={}
         lastIncomingOfferAt=0
         if outboundRegistry and outboundRegistry.owner==outboundOwner then
@@ -12666,7 +12668,7 @@ return function(cfg)
         -- The earlier Cobalt GUIDs are never used as constants.
         decided[id]=true
         pendingIds[id]=nil
-        local accept=pct>=percent
+        local accept=pct>=percent-1e-7
         local ok,err=pcall(function() remote:FireServer(id,accept) end)
         if ok then
             statusText.Text=(accept and "Sent ACCEPT · " or "Sent DECLINE · ")..
@@ -12778,11 +12780,21 @@ return function(cfg)
                 statusText.Text="ShowOffer missing valid live GUID"
                 return
             end
+            -- A unique ticket prevents a delayed handler from responding
+            -- after HideOffer, OFF/ON, or a newer event for this same GUID.
+            local ticket={}
             pendingIds[guid]=os.clock()
+            offerTickets[guid]=ticket
             lastIncomingOfferAt=os.clock()
-            -- Read the percentage in the shopper's speech bubble first.
-            -- If Roblox renders the bubble only in CoreGui, compare the
-            -- exact offered price and item value from this same event.
+            local price,worth=num(offerPrice),num(itemValue)
+            local eventPercent=nil
+            if price and worth and price==price and worth==worth
+                and price<math.huge and worth<math.huge
+                and price>=0 and worth>0 then
+                eventPercent=(price/worth-1)*100
+            end
+            -- Some client versions omit prices. In that case only, read
+            -- the percentage attached to this customer or exact offer ID.
             local function bubblePercent()
                 if typeof(npc)=="Instance" then
                     for _,node in ipairs(npc:GetDescendants()) do
@@ -12805,13 +12817,15 @@ return function(cfg)
                 return nil,nil
             end
             local function decide()
-                if closed or not active or decided[guid] then return end
-                local pct,source=bubblePercent()
+                if closed or not active or decided[guid]
+                    or offerTickets[guid]~=ticket then return end
+                local pct,source=eventPercent,"ShowOffer price / item value"
+                if pct==nil then pct,source=bubblePercent() end
+                if pct==nil and percent<=-100 then
+                    pct,source=-100,"accept all threshold"
+                end
                 if pct==nil then
-                    -- Do not guess/calibrate prices. The world-sign polling
-                    -- path reads the percentage printed above each shopper,
-                    -- and acts on the actual Accept/Decline controls.
-                    statusText.Text="ShowOffer received · watching shopper sign"
+                    statusText.Text="ShowOffer received · price/value unavailable; watching sign"
                     return
                 end
                 statusText.Text="Offer "..tostring(math.floor(pct*10+.5)/10)..
@@ -12832,6 +12846,7 @@ return function(cfg)
         end
         if sourceName=="HideOffer" then
             pendingIds={}
+            offerTickets={}
             guiHandled={}
             statusText.Text="Offer closed; waiting for next customer"
             return
