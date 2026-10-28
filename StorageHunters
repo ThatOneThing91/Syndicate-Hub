@@ -12467,8 +12467,9 @@ task.spawn(function()
         local source = [==[
 -- Auto Shop Offers, integrated directly inside StorageHunters.
 -- RespondOffer(offerGuid, bool) is known; incoming offer schema is not confirmed.
--- V4: fix signed-percentage parser and automatically combine live offer
--- event payloads with visible NPC shopper prompts. No hard-coded GUIDs.
+-- V5: OfferPresented is a client -> server FireServer call, so
+-- OnClientEvent cannot detect it. Monitor each outgoing call's live UUID,
+-- numeric offered percentage and shopper (never store sample GUIDs).
 return function(cfg)
     assert(type(cfg)=="table" and typeof(cfg.parent)=="Instance","Shop page required")
     local ReplicatedStorage=game:GetService("ReplicatedStorage")
@@ -12497,6 +12498,11 @@ return function(cfg)
     local lastOfferSignal=nil
     local lastIncomingOfferAt=0
     local lastSeenOfferKey=nil
+    local outboundRegistry=nil
+    local outboundOwner={}
+    local outgoingStatus="not initialized"
+    local outgoingCount=0
+    local recentOutgoing=nil
     local function create(class,properties,parentObject)
         local item=Instance.new(class)
         for key,value in pairs(properties) do item[key]=value end
@@ -12642,6 +12648,10 @@ return function(cfg)
         pendingIds={}
         guiHandled={}
         lastIncomingOfferAt=0
+        if outboundRegistry and outboundRegistry.owner==outboundOwner then
+            outboundRegistry.callback=nil
+            outboundRegistry.owner=nil
+        end
     end
     local function handleOffer(id,pct)
         if not active or closed or not uuid(id) then return end
@@ -13121,6 +13131,11 @@ return function(cfg)
                 ", ShowOffer seen: "..tostring(eventCounts.ShowOffer or 0)..
                 ", HideOffer seen: "..tostring(eventCounts.HideOffer or 0),
             "Offer-related remotes: "..table.concat(watchedNames,", "),
+            "Outgoing capture: "..outgoingStatus..
+                ", calls seen: "..tostring(outgoingCount),
+            "Latest outgoing: "..(recentOutgoing and
+                (tostring(recentOutgoing.id).." / "..tostring(recentOutgoing.value)..
+                " / "..tostring(recentOutgoing.shopper)) or "none"),
             "Visible offer dialogs: "..tostring(#dialogs),
             "Pending remote IDs: "..tostring((function()
                 local n=0 for _ in pairs(pendingIds) do n=n+1 end return n end)())
@@ -13174,6 +13189,108 @@ return function(cfg)
             statusText.Text="Diagnostic printed to executor console."
         end
     end)
+    -- OfferPresented:FireServer(offerGuid, offeredPercent, npcInstance)
+    -- This is an OUTGOING call made by the game's client scripts.
+    -- Installing OnClientEvent on that remote alone cannot observe it.
+    -- An executor's optional namecall hook can observe this exact call.
+    local function onOutgoingPresented(id,offeredPercent,npc)
+        if closed or not active or not uuid(id) then return end
+        local n=tonumber(offeredPercent)
+        if not n or n~=n or n<0 or n>400 then
+            statusText.Text="Offer ID found; numeric value unavailable"
+            return
+        end
+        pendingIds[id]=os.clock()
+        lastIncomingOfferAt=os.clock()
+        outgoingCount=outgoingCount+1
+        recentOutgoing={id=id,value=n,shopper=typeof(npc)=="Instance" and
+            npc.Name or tostring(npc),at=os.clock()}
+        local record="OUTGOING OfferPresented id="..id..
+            " number="..tostring(n).." shopper="..recentOutgoing.shopper
+        offerEventTraces[#offerEventTraces+1]=record
+        if #offerEventTraces>16 then table.remove(offerEventTraces,1) end
+        print("[Auto Shop Offers] "..record)
+        -- Let the game's original FireServer finish before responding.
+        -- Calling RespondOffer synchronously inside __namecall may race
+        -- the server's creation of the offer.
+        task.spawn(function()
+            task.wait(.22)
+            if closed or not active or decided[id] then return end
+            local guiPct,guiGuid=offerPanelPercent()
+            local finalPct,source=nil,nil
+            if guiPct~=nil and (not guiGuid or guiGuid==id) then
+                finalPct=guiPct
+                source="visible offer GUI"
+            elseif percent<=-100 then
+                finalPct=-100
+                source="unconditional minimum threshold"
+            else
+                -- Cobalt's second argument is a number such as 114.34.
+                -- Interpret it as percentage OF item value: 114.34 => +14.34%.
+                -- This interpretation needs confirmation against the actual
+                -- game's offer display; do not treat it as a currency amount.
+                finalPct=n-100
+                source="OfferPresented percentage-of-value (provisional)"
+            end
+            if finalPct>=-100 and finalPct<=300 then
+                statusText.Text="Offer "..tostring(math.floor(finalPct*10+.5)/10)..
+                    "% ("..source..")"
+                handleOffer(id,finalPct)
+            else
+                statusText.Text="Offer numeric value out of expected range"
+            end
+        end)
+    end
+    local function enableOutgoingCapture()
+        if type(hookmetamethod)~="function" or
+            type(getnamecallmethod)~="function" then
+            outgoingStatus="executor has no namecall hook"
+            return false
+        end
+        local events=ReplicatedStorage:FindFirstChild("Events")
+        local shopper=events and events:FindFirstChild("NPCShopper")
+        local presented=shopper and shopper:FindFirstChild("OfferPresented")
+        if not presented or not presented:IsA("RemoteEvent") then
+            outgoingStatus="OfferPresented remote unavailable"
+            return false
+        end
+        local env=_G
+        if type(getgenv)=="function" then
+            local ok,value=pcall(getgenv)
+            if ok and type(value)=="table" then env=value end
+        end
+        local key="__SyndicateShopOffersOutgoingV5"
+        local entry=env[key]
+        if type(entry)~="table" or not entry.installed then
+            entry={installed=false,callback=nil,owner=nil}
+            local original
+            local function intercept(self,...)
+                if self==presented and getnamecallmethod()=="FireServer" then
+                    local callback=entry.callback
+                    if callback then pcall(callback,...) end
+                end
+                return original(self,...)
+            end
+            local wrapper=intercept
+            if type(newcclosure)=="function" then
+                local ok,wrapped=pcall(newcclosure,intercept)
+                if ok then wrapper=wrapped end
+            end
+            local ok,previous=pcall(hookmetamethod,game,"__namecall",wrapper)
+            if not ok or type(previous)~="function" then
+                outgoingStatus="outbound hook rejected"
+                return false
+            end
+            original=previous
+            entry.installed=true
+            env[key]=entry
+        end
+        entry.owner=outboundOwner
+        entry.callback=onOutgoingPresented
+        outboundRegistry=entry
+        outgoingStatus="observing outgoing OfferPresented"
+        return true
+    end
     local function subscribe()
         local events=ReplicatedStorage:FindFirstChild("Events")
         local shopper=events and events:FindFirstChild("NPCShopper")
@@ -13218,9 +13335,10 @@ return function(cfg)
         local presented=shopper:FindFirstChild("OfferPresented")
         local shown=shopper:FindFirstChild("ShowOffer")
         local hidden=shopper:FindFirstChild("HideOffer")
-        statusText.Text=(presented and shown and hidden)
-            and "Listening to ShowOffer / OfferPresented / HideOffer"
-            or "Some shopper lifecycle remotes are missing"
+        local hookActive=enableOutgoingCapture()
+        statusText.Text=hookActive
+            and "Watching live OfferPresented calls and customer GUI"
+            or ("GUI/event fallback; "..outgoingStatus)
         task.spawn(function()
             while not closed and active do
                 local ok,problem=pcall(pollOfferGui)
