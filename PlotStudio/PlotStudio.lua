@@ -746,7 +746,8 @@ local function beginPreview()
         end
         crenels(0,-size/2,size,floors*h+1,0)
     end
-    notify("DESIGN PREVIEW: "..count.." curated pieces / "..profile.name.." / "..lastFootprint)
+    notify("DESIGN PREVIEW: "..count.." curated pieces / "..profile.name..
+        " / stairways shown for planning (not yet buildable)")
     if state.page=="Builder" and switchPage then switchPage("Builder") end
 end
 
@@ -933,7 +934,9 @@ local function buildPlan()
                 for ix=1,nx do for iz=1,nz do
                     local sx,sz=p.Size.X/nx,p.Size.Z/nz
                     local cf=p.CFrame*CFrame.new((ix-.5)*sx-p.Size.X/2,0,(iz-.5)*sz-p.Size.Z/2)
-                    units[#units+1]={kind="Floor",cf=cf,sx=sx,sz=sz,lv=lv}
+                    units[#units+1]={kind="Floor",cf=cf,sx=sx,sz=sz,lv=lv,
+                        color=p:GetAttribute("PlotStudioColor"),
+                        material=p:GetAttribute("PlotStudioMaterial")}
                 end end
             elseif kind=="Roof" then
                 local lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y+.4)/h+.1)-1,0,4)
@@ -981,7 +984,7 @@ local function fireUnit(u)
         r:FireServer("5","Walls",u.a,u.b,Vector3.new(diff.X,0,diff.Z).Magnitude,
             math.atan2(-diff.Z,diff.X),u.a.Y,nil,nil,nil,u.lv)
     elseif u.kind=="Floor" then
-        r:FireServer("32","Floors",u.cf,u.sx,u.sz,nil,nil,u.lv)
+        r:FireServer("32","Floors",u.cf,u.sx,u.sz,u.color,u.material,u.lv)
     elseif u.kind=="Roof" then
         r:FireServer("Flat",u.x,u.z,u.sx,u.sz,0,0,0,state.color,state.material,nil,u.lv)
     end
@@ -1001,6 +1004,11 @@ local function testWall()
     if build.busy then notify("Builder already running");return end
     if not ownedPlot() then
         modal("Plot not recognized","Outlines can appear on a nearby plot, but permanent placement needs verified ownership. Make sure you're building on your own plot.")
+        return
+    end
+    if state.floors>1 then
+        modal("Stair access not verified",
+            "This design currently has "..tostring(state.floors).." storeys. The stairs and entrances in the preview are visual only. Permanent placement is paused until we capture the actual stair/door item IDs so the upper floors will be reachable. Select one storey if you want to test the structural shell.")
         return
     end
     local units,plot,origin=buildPlan()
@@ -1045,6 +1053,13 @@ local function startBuild()
     if not build.passed or build.signature~=buildSignature(plot,origin) then
         build.passed=false
         notify("TEST ONE WALL first for this design and storey count")
+        return
+    end
+    -- No staircase/door item IDs have been captured, so do not produce a
+    -- permanently inaccessible upper floor and call it a finished base.
+    if state.floors>1 then
+        modal("Multi-storey build requires stairs",
+            "The preview has entrances, balconies and staircase paths, but the game's real stair and door item IDs are not verified yet. To avoid trapping you inside an inaccessible base, permanent multi-storey building is disabled. You can preview the full castle or select 1 storey for a basic placement test.")
         return
     end
     if #units>900 then notify("Blueprint shell exceeds placement limit");return end
@@ -1375,10 +1390,19 @@ renderPage = function(page)
             Size=UDim2.new(1,-32,0,29),TextWrapped=true
         })
 
-        local choice=block(scroll,111)
-        sectionNote(choice,"BUILD FINISH",
-            "Material: "..state.material.."     /     Accent: "..state.colorName,10)
-        button(choice,"CHOOSE MATERIAL",16,76,165,28,false,function() switchPage("Materials") end)
+        local styleName=DESIGN_STYLES[state.design] and DESIGN_STYLES[state.design].name or "Auto"
+        local choice=block(scroll,138)
+        sectionNote(choice,"AUTOMATIC DESIGN MATERIALS",
+            state.autoStyle and ("ACTIVE: "..styleName.." / matching stone, timber, slate, glass and metal.")
+                or ("MANUAL OVERRIDE: "..state.material.." / "..state.colorName),10)
+        button(choice,state.autoStyle and "AUTO STYLE: ON" or "AUTO STYLE: OFF",16,83,162,31,state.autoStyle,function()
+            state.autoStyle=not state.autoStyle
+            if previewFolder then beginPreview() end
+            switchPage("Builder")
+        end)
+        button(choice,"PALETTE DETAILS",185,83,145,31,false,function() switchPage("Materials") end)
+        text(choice,"The studio chooses materials by architectural role, not one material for the whole castle.",
+            16,116,442,18,10,C.dim,false,{Size=UDim2.new(1,-32,0,18)})
 
         local action=block(scroll,174,C.raised)
         text(action,"ORNATE BLUEPRINT PREVIEW",16,10,380,24,15,C.mint,true)
@@ -1394,7 +1418,7 @@ renderPage = function(page)
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"The build test supports only basic walls and floors. Decorative spires, arches and windows are visual concepts for now.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"PREVIEW: complete styled castle with staircase paths. REAL BUILD: basic structural shell only, and one storey until stair placement is verified.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
@@ -1413,17 +1437,18 @@ renderPage = function(page)
         sectionNote(note,"TESTING STAGE / NOT A FINISHED CASTLE",
             "The preview is local; actual build placement depends on the game's server rules. STOP prevents further sends, but will not undo what was placed.",7)
     elseif page=="Materials" then
-        pageHead(scroll,"Material palette","31 materials captured from the Storage Hunters editor.")
+        pageHead(scroll,"Material director","The studio automatically picks a different finish for each architectural feature.")
         local current=block(scroll,102,C.raised)
-        text(current,"CURRENT FINISH",14,9,220,19,10,C.dim,true)
-        text(current,state.material,14,30,350,28,19,C.white,true,{Size=UDim2.new(1,-82,0,28)})
+        local chosenStyle=DESIGN_STYLES[state.design] or DESIGN_STYLES[1]
+        text(current,state.autoStyle and "AUTO CURATED STYLE" or "MANUAL MATERIAL OVERRIDE",14,9,310,19,10,C.dim,true)
+        text(current,state.autoStyle and chosenStyle.name or state.material,14,30,350,28,19,C.white,true,{Size=UDim2.new(1,-82,0,28)})
         local chip=corner(ui("Frame",{
             AnchorPoint=Vector2.new(1,0),
             Position=UDim2.new(1,-17,0,17),Size=UDim2.fromOffset(48,48),
-            BackgroundColor3=state.color,BorderSizePixel=0
+            BackgroundColor3=state.autoStyle and chosenStyle.wallColor or state.color,BorderSizePixel=0
         },current),11)
         border(chip,C.line,1,0.15)
-        text(current,"Accent: "..state.colorName,14,67,340,19,11,C.dim,false,{
+        text(current,state.autoStyle and ("Walls "..chosenStyle.wall.." / Roof "..chosenStyle.roof.." / Floor "..chosenStyle.floor) or ("Accent: "..state.colorName),14,67,410,19,11,C.dim,false,{
             Size=UDim2.new(1,-25,0,19)
         })
 
@@ -1443,6 +1468,7 @@ renderPage = function(page)
             on(b.MouseButton1Click,function()
                 state.color=entry[1]
                 state.colorName=entry[2]
+                state.autoStyle=false
                 if previewFolder then beginPreview() end
                 switchPage("Materials")
             end)
@@ -1489,6 +1515,7 @@ renderPage = function(page)
                     }) end
                     on(row.MouseButton1Click,function()
                         state.material=name
+                        state.autoStyle=false
                         if previewFolder then beginPreview() end
                         notify(name.." selected")
                         switchPage("Materials")
@@ -1512,12 +1539,13 @@ renderPage = function(page)
             t.AnchorPoint=Vector2.new(1,0)
             t.Position=UDim2.new(1,-15,0,18)
         end
+        settingsRow("Automatic design materials","Mix stone, roof, floor, metal and glass by design","autoStyle")
         settingsRow("Confirm before building","Safety confirmation for future builds","confirm")
         settingsRow("Grid and placement outlines","Future layout preview preference","grid")
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 0.6",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 0.7",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -1605,4 +1633,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v0.6 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v0.7 loaded. Preview is local; confirmed builder actions may place permanent structures.")
