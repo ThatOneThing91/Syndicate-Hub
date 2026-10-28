@@ -290,6 +290,10 @@ local function capture(plot)
                         end)
                         if ok and typeof(cf)=="CFrame" and typeof(size)=="Vector3" then
                             local effectiveCf=kind=="Wall" and wallCf or cf
+                            if kind=="Item" and object:IsA("Model") then
+                                local pivotOk,pivot=pcall(function() return object:GetPivot() end)
+                                if pivotOk then effectiveCf=pivot end
+                            end
                             local lv=type(level)=="number" and level or
                                 math.floor((effectiveCf.Position.Y-origin.Position.Y)/bp.storeyHeight+.1)
                             lv=math.clamp(math.floor(lv),0,4)
@@ -623,12 +627,12 @@ local function paste()
                 if p.kind==kind then ordered[#ordered+1]=p end
             end
         end
-        local consecutive=0
+        local categoryFailures={}
         local maxAttempts=math.min(#ordered,1600)
         for i,p in ipairs(ordered) do
             if not alive or cancel or attempted>=maxAttempts then break end
             if not canPlace(p) then skipped=skipped+1
-            elseif consecutive>=6 then
+            elseif (categoryFailures[p.kind] or 0)>=6 then
                 skipped=skipped+1
             else
                 local before=readModels(own)
@@ -645,9 +649,11 @@ local function paste()
                     end
                 end
                 if accepted then
-                    confirmed=confirmed+1;consecutive=0
+                    confirmed=confirmed+1
+                    categoryFailures[p.kind]=0
                 else
-                    failed=failed+1;consecutive=consecutive+1
+                    failed=failed+1
+                    categoryFailures[p.kind]=(categoryFailures[p.kind] or 0)+1
                     if #firstErrors<12 then
                         firstErrors[#firstErrors+1]=tostring(p.kind).." #"..i..
                             " ID="..tostring(p.id).." : "..
@@ -667,6 +673,9 @@ local function paste()
             skipped.." skipped. "..attempted.." requests."
         inform(result,failed>0)
         log("Supported items are experimental; a sent remote is NOT proof of acceptance.")
+        for kind,failures in pairs(categoryFailures) do
+            if failures>=6 then log(kind.." stage paused after six consecutive unconfirmed requests") end
+        end
         for _,e in ipairs(firstErrors) do log(e) end
     end)
 end
@@ -703,7 +712,6 @@ local logBtn=btn(win,"COPY LOG",W-109,extraY+1,93,20,function()
     print(payload)
     inform("Diagnostic log copied or printed")
 end)
-function _unused() end
 loadLocal()
 refresh()
 inform("Plot Copier V"..VERSION.." ready. Select a visible plot and press COPY PLOT.")
