@@ -216,7 +216,7 @@ for i, data in ipairs(navSpecs) do
     navButtons[data[1]] = {button=b, label=lbl}
     on(b.MouseButton1Click, function() if switchPage then switchPage(data[1]) end end)
 end
-local sidebarBottom = text(sidebar, "VERSION 0.3  •  PREVIEW", 15, 0, 164, 18, 10, C.muted, true)
+local sidebarBottom = text(sidebar, "V2.2  •  PLOT STUDIO", 15, 0, 164, 18, 10, C.muted, true)
 sidebarBottom.AnchorPoint = Vector2.new(0,1)
 sidebarBottom.Position = UDim2.new(0,15,1,-16)
 
