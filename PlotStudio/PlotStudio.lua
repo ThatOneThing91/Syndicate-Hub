@@ -3782,6 +3782,11 @@ renderPage = function(page)
                 if alive then switchPage("Builder") end
             end)
         end)
+        button(stairsBox,"TEST WALL",350,118,102,32,false,function()
+            modal("Test one solid wall?",
+                "Only needed if your plot has no existing opaque walls. Tests ONE wall; does not erase the plot.",
+                "TEST WALL",testWall)
+        end)
         button(stairsBox,"TEST STAIR TREAD",161,118,182,32,stairTest.passed,function()
             modal("Test one actual staircase tread?",
                 "Optional diagnostic: tests ONE custom-sized Shape tread and checks server replication. This is NOT required to continue the structural build or other repairs.",
@@ -3926,19 +3931,12 @@ renderPage = function(page)
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"BUILD STRUCTURE places only missing walls and floors. Stair tests cannot block it. Roofs, doors, windows and Shapes use separate checks; the concept preview is not a placement guarantee.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"Build only missing walls and floors, even when the stair test fails. Roofs, doors, windows and Shapes use separate operations. The concept preview is NOT a guaranteed result.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
-        if state.advancedBuilder then
-        button(builderPanel,"TEST ONE WALL",16,115,154,34,false,function()
-            modal("Verify one solid wall?",
-                "Please do NOT bulldoze the plot for another prototype test. This places only ONE wall in a free spot and verifies that it is not transparent. The full castle will not run if the wall material is still glass. This may spend in-game currency.",
-                "TEST SOLID WALL",testWall)
-        end)
-        end
         button(builderPanel,"BUILD / REPAIR SHELL",16,115,229,34,false,function()
             modal("Build the missing structural shell?",
-                "ACTUAL BUILD VIEW displays the remaining wall and floor placement requests after the current plot is checked. Stair confirmation is NOT required. This action does not build roof, windows, doors, or decorative Shapes. Your existing plot will NOT be erased. Some requests may still fail collision or server checks.",
+                "REAL SHELL VIEW displays the remaining wall and floor placement requests after the current plot is checked. Stair confirmation is NOT required. This action does not build roof, windows, doors, or decorative Shapes. Your existing plot will NOT be erased. Some requests may still fail collision or server checks.",
                 "BUILD STRUCTURE",startBuild)
         end)
         button(builderPanel,"STOP",252,115,84,34,false,stopBuild)
