@@ -1607,7 +1607,7 @@ renderPage = function(page)
 
         local action=block(scroll,174,C.raised)
         text(action,"ORNATE BLUEPRINT PREVIEW",16,10,380,24,15,C.mint,true)
-        text(action,"Giant plot-scale architecture: spires, turrets, stained glass, battlements and gatehouses. Nothing is purchased.",16,38,430,36,12,C.dim,false,{
+        text(action,"Castle-scale structure with curated materials, stairwells and custom steps. Show Castle creates a safe local preview.",16,38,430,36,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,36),TextWrapped=true
         })
         button(action,"SHOW CASTLE",16,88,147,32,true,beginPreview)
@@ -1616,10 +1616,40 @@ renderPage = function(page)
             Size=UDim2.new(1,-32,0,23)
         })
 
+
+        local stairsBox=block(scroll,191,C.raised)
+        text(stairsBox,"AUTO STAIRCASE SYSTEM",16,11,420,24,15,C.white,true)
+        text(stairsBox,"The studio designs a staircase to fit the floor openings, then uses its Shapes catalog to build stone treads and landings.",16,37,420,48,11,C.dim,false,{
+            Size=UDim2.new(1,-32,0,45),TextWrapped=true
+        })
+        local status=stairTest.passed and ("VERIFIED / "..tostring(stairCatalog.shape and stairCatalog.shape.name or "Shape")) or stairStatus
+        text(stairsBox,status,16,84,425,22,11,stairTest.passed and C.mint or C.orange,true,{
+            Size=UDim2.new(1,-32,0,22)
+        })
+        button(stairsBox,"SCAN STAIRS",16,118,139,32,false,function()
+            task.spawn(function()
+                scanStairs()
+                if alive then switchPage("Builder") end
+            end)
+        end)
+        button(stairsBox,"TEST STAIR TREAD",161,118,182,32,stairTest.passed,function()
+            modal("Test one actual staircase tread?",
+                "This uses the game's Shapes placement to put ONE real, custom-sized tread inside the planned stairwell. It may cost game currency and might be rejected. Only a confirmed tread will unlock the remaining stairs in the full build.",
+                "PLACE 1 TREAD",testStairShape)
+        end)
+        local stairList={}
+        for i,item in ipairs(stairCatalog.models) do
+            if i>5 then break end
+            stairList[#stairList+1]=item.name
+        end
+        text(stairsBox,#stairList>0 and ("Available stair models: "..table.concat(stairList,", ")) or
+            "Built-in stair sets: scan the game catalog to identify them.",
+            16,157,427,24,10,C.dim,false,{Size=UDim2.new(1,-32,0,27),TextTruncate=Enum.TextTruncate.AtEnd})
+
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"MULTI-STOREY SHELL ENABLED. Staircases, doors, windows and ornate features remain preview-only; upper floors may be unreachable.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"Multi-storey shell enabled. When TEST STAIR TREAD passes, custom stairs are queued too. Doors/windows remain preview-only.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
@@ -1629,14 +1659,14 @@ renderPage = function(page)
         end)
         button(builderPanel,"2. START BUILD",176,115,160,34,build.passed,function()
             if not build.passed then modal("Test required","Press TEST ONE WALL and wait for a successful confirmation before starting the shell build.");return end
-            modal("Build without finished stair access?",
-                "This places the multi-storey structural shell. Stairs, doors, windows and ornate details are PREVIEW ONLY. Upper floors may be unreachable until those pieces are built.\n\nExisting items are skipped where detected; game currency may be spent. No automatic bulldozing.",
-                "BUILD SHELL",startBuild)
+            modal("Build the selected castle?",
+                "Permanent walls and floors will be submitted. A verified Shapes stair test enables additional real staircase treads; otherwise stairs remain a preview.\n\nDoors, windows and exterior ornamentation still need placement validation. Existing occupied items are skipped where detected. Game currency may be spent.",
+                "BUILD CASTLE",startBuild)
         end)
         button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
         local note=block(scroll,80)
-        sectionNote(note,"BUILD SHELL FIRST / FINISH ACCESS LATER",
-            "All selected storeys can be submitted. Staircases aren't placed yet; upper floors may be inaccessible. STOP halts requests but won't undo placed pieces.",7)
+        sectionNote(note,"STAIRS VIA CURATED SHAPES",
+            "Scan the five stair sets and available blocks, then verify one custom tread. Unverified stair layouts are never batch-placed. STOP does not undo built pieces.",7)
     elseif page=="Materials" then
         pageHead(scroll,"Material director","The studio automatically picks a different finish for each architectural feature.")
         local current=block(scroll,102,C.raised)
@@ -1746,7 +1776,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 0.8",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 0.9",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -1834,4 +1864,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v0.8 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v0.9 loaded. Preview is local; confirmed builder actions may place permanent structures.")
