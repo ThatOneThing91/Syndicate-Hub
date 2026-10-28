@@ -2718,6 +2718,120 @@ local function testNativeDoor()
     end)
 end
 
+-- Add narrow, confirmed Shape trim ONLY around an actual placed door.
+-- Never put a solid panel across the middle of the entrance.
+local function repairDoorGaps()
+    if build.busy then notify("Finish the active build first");return end
+    if not ensureCatalog() or not stairCatalog.shape then
+        notify("Shape style not available. Cannot attempt doorway trim.")
+        return
+    end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin then notify("Owned plot not detected");return end
+    beginPreview()
+    local entrance,markerSize=entrancePosition(plot,origin)
+    if not entrance then notify("Current design has no entrance marker");return end
+    local selected,doorCF,doorSize
+    for _,model in ipairs(realDoors(plot)) do
+        local ok,cf,size=pcall(function() return model:GetBoundingBox() end)
+        if ok and
+            Vector2.new(cf.Position.X-entrance.Position.X,
+                cf.Position.Z-entrance.Position.Z).Magnitude<10 then
+            selected=model;doorCF=cf;doorSize=size
+            break
+        end
+    end
+    if not selected then
+        notify("No real ground-floor Door model near the blueprint entrance.")
+        return
+    end
+    -- BoundingBox width is world-axis aligned. When the door is rotated,
+    -- do not infer side gaps from it: avoid covering a functional doorway.
+    if math.abs(doorCF.RightVector:Dot(entrance.RightVector))<.88 then
+        notify("Door and entrance orientation differ; refusing unsafe trim.")
+        return
+    end
+    local localDoor=entrance:PointToObjectSpace(doorCF.Position)
+    local width=markerSize.X
+    local doorW=doorSize.X
+    local leftGap=(localDoor.X-doorW*.5)-(-width*.5)
+    local rightGap=width*.5-(localDoor.X+doorW*.5)
+    local units={}
+    local h=math.min(9,markerSize.Y-1)
+    local function side(gap,edge,left)
+        if gap<.75 or gap>8 then return end
+        local x=left and (-width*.5+gap*.5) or
+            (width*.5-gap*.5)
+        units[#units+1]={
+            kind="DetailShape",id=stairCatalog.shape.id,
+            cf=entrance*CFrame.new(x,0,0),
+            size=Vector3.new(math.max(.5,gap-.25),h,.7),
+            lv=0,label=left and "Door left jamb" or "Door right jamb",
+            color=nil,material=nil
+        }
+    end
+    side(leftGap,1,true)
+    side(rightGap,1,false)
+    if #units==0 then
+        notify("Door opening already fits or the measured gap is unsupported.")
+        return
+    end
+    build.busy=true
+    build.cancel=false
+    build.status="Trying real doorway Shape trim..."
+    refreshBuildStatus()
+    task.spawn(function()
+        local accepted,missing=0,0
+        local notes={}
+        for _,u in ipairs(units) do
+            if not alive or build.cancel or missing>0 then break end
+            if stairsAlreadyPresent(plot,u) then
+                accepted=accepted+1
+            else
+                local before={}
+                for _,m in ipairs(shapeModels(plot)) do before[m]=true end
+                local ok,err=pcall(function() fireUnit(u) end)
+                local confirmed=false
+                if ok then
+                    for step=1,18 do
+                        if not alive or build.cancel then break end
+                        if verifyPlacedStair(plot,u,before) then
+                            confirmed=true;break
+                        end
+                        task.wait(.2)
+                    end
+                end
+                if confirmed then accepted=accepted+1
+                else
+                    missing=missing+1
+                    notes[#notes+1]=u.label.." not confirmed"..
+                        (not ok and (" / "..tostring(err):sub(1,70)) or "")
+                end
+            end
+            build.status="Door trim: "..accepted.." confirmed / "..
+                missing.." unconfirmed"
+            refreshBuildStatus()
+        end
+        build.busy=false
+        build.lastAudit="DOOR OPENING REPAIR\n"..
+            "Door width: "..math.floor(doorW*100+.5)/100..
+            "\nOpening width: "..math.floor(width*100+.5)/100..
+            "\nLeft/right measured gaps: "..
+                math.floor(leftGap*100+.5)/100.."/"..
+                math.floor(rightGap*100+.5)/100..
+            "\nSide trim confirmed: "..accepted..
+            "\nUnconfirmed: "..missing..
+            "\n"..table.concat(notes,"\n")..
+            "\nNo parts of the real door were modified."
+        build.status="Door trim: "..accepted.." confirmed / "..
+            missing.." unconfirmed"
+        refreshBuildStatus()
+        notify(build.status)
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+
 -- Native pitched roofs are a separate, verified stage. Never send a
 -- 70-request speculative roof batch: test ONE, confirm a new plot roof,
 -- then add a few more with per-roof replication checks.
