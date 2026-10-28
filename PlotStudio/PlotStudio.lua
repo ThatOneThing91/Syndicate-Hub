@@ -2940,6 +2940,20 @@ local function addFlatRoofCap()
     end)
 end
 
+local function adoptExistingNativeRoofs(plot,origin)
+    local count=0
+    for _,u in ipairs(plannedRoofs(plot,origin)) do
+        if roofAt(plot,origin,u) then count=count+1 end
+    end
+    if count>0 then
+        roofTest.passed=true
+        roofTest.signature=buildSignature(plot,origin)
+        roofTest.status="Existing native roof models found: "..count
+        return true
+    end
+    return false
+end
+
 local function testNativeRoof()
     if build.busy then notify("A build is already running");return end
     if not eventFor("Roof") then notify("PlaceRoof remote is missing");return end
@@ -2947,6 +2961,11 @@ local function testNativeRoof()
     local origin=plot and plotFrame(plot)
     if not origin then notify("Owned plot required for roof test");return end
     beginPreview()
+    if adoptExistingNativeRoofs(plot,origin) then
+        notify("Existing roof confirmed; use ADD REAL ROOFS for missing sections.")
+        if alive and state.page=="Builder" then switchPage("Builder") end
+        return
+    end
     local chosen
     for _,u in ipairs(plannedRoofs(plot,origin)) do
         if roofSupported(plot,origin,u) and not roofAt(plot,origin,u) then
@@ -2954,7 +2973,11 @@ local function testNativeRoof()
         end
     end
     if not chosen then
-        notify("No unroofed structure with confirmed supporting walls. Build the walls first.")
+        build.lastAudit="NATIVE ROOF DIAGNOSTIC\n"..
+            "No unroofed planned area has at least two detectable supporting wall models.\n"..
+            "The actual roof remote signature has not been verified.\n"..
+            "Use the FLAT ROOF FALLBACK only if you accept a flat cap."
+        notify("No verified roof supports identified. Open VIEW BUILD AUDIT.")
         return
     end
     local before={}
@@ -2974,6 +2997,20 @@ local function testNativeRoof()
                 task.wait(.25)
             end
         end
+        local roofCount=0
+        for _,model in ipairs(realRoofs(plot)) do roofCount=roofCount+1 end
+        build.lastAudit="NATIVE ROOF DIAGNOSTIC\n"..
+            "Style: "..chosen.style..
+            "\nFloor index: "..tostring(chosen.lv)..
+            "\nX/Z: "..math.floor(chosen.x+.5).."/"..math.floor(chosen.z+.5)..
+            "\nWidth/depth: "..math.floor(chosen.sx+.5)..
+                "/"..math.floor(chosen.sz+.5)..
+            "\nFireServer executed: "..tostring(ok)..
+            "\nNew real roof confirmed: "..tostring(confirmed)..
+            "\nReal roof objects now detected: "..roofCount..
+            "\nLocal call error: "..tostring(err or "none")..
+            "\nA successful FireServer is not server acceptance."..
+            "\nIf still unconfirmed, preserve your plot and share this audit."
         roofTest.passed=confirmed
         roofTest.signature=confirmed and buildSignature(plot,origin) or nil
         roofTest.status=confirmed and "Native pitched roof CONFIRMED" or
@@ -2990,10 +3027,12 @@ local function addVerifiedRoofs()
     if build.busy then notify("A build is already running");return end
     local plot=ownedPlot()
     local origin=plot and plotFrame(plot)
-    if not origin or not roofTest.passed or
-        roofTest.signature~=buildSignature(plot,origin) then
-        notify("TEST ONE ROOF must succeed for this exact design first.")
-        return
+    if not origin then notify("Owned plot required");return end
+    if not roofTest.passed or roofTest.signature~=buildSignature(plot,origin) then
+        if not adoptExistingNativeRoofs(plot,origin) then
+            notify("TEST ONE ROOF must succeed before adding native pitched roofs.")
+            return
+        end
     end
     local roofs=plannedRoofs(plot,origin)
     build.busy=true;build.cancel=false
