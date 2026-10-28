@@ -226,6 +226,230 @@ return function(cfg)
             handleOffer(possibleId,delta)
         end
     end
+    -- Other NPCShopper scripts sometimes show the offer only through
+    -- the customer's GUI, not an NPCShopper OnClientEvent. Observe visible
+    -- Accept / Decline controls and their offer comparison.
+    local player=game:GetService("Players").LocalPlayer
+    local guiCache={}
+    local function visible(item)
+        local node=item
+        while node do
+            if node:IsA("GuiObject") and not node.Visible then return false end
+            if node:IsA("LayerCollector") and not node.Enabled then return false end
+            node=node.Parent
+        end
+        return true
+    end
+    local function parseMoney(value)
+        if type(value)~="string" then return nil end
+        local raw=value:match("%$%s*([%d,%.]+%s*[kKmMbBtT]?)")
+        if not raw then return nil end
+        local amount,suffix=raw:match("([%d,%.]+)%s*([kKmMbBtT]?)")
+        if not amount then return nil end
+        local v=tonumber(amount:gsub(",",""))
+        if not v then return nil end
+        local mult={k=1e3,m=1e6,b=1e9,t=1e12}
+        return v*(mult[suffix:lower()] or 1)
+    end
+    local function signedPercent(value)
+        if type(value)~="string" then return nil end
+        local s=value:gsub("−","-"):gsub("＋","+")
+        local raw=s:match("([+-]%s*%d+%.?%d*)%s*%%")
+        return raw and tonumber(raw:gsub("%s+","")) or nil
+    end
+    local function readGuiOffer(container)
+        local labels,acceptButton,declineButton,guiId={},{},nil,nil
+        for _,node in ipairs(container:GetDescendants()) do
+            if node:IsA("GuiObject") and visible(node) then
+                if node:IsA("TextLabel") or node:IsA("TextButton") or
+                    node:IsA("TextBox") then
+                    if node.Text~="" then labels[#labels+1]=node.Text end
+                end
+                if node:IsA("GuiButton") then
+                    local value=(node:IsA("TextButton") and node.Text or node.Name):lower()
+                    if (value:find("accept",1,true) or value:find("yes",1,true)) and
+                        not acceptButton then acceptButton=node end
+                    if (value:find("decline",1,true) or
+                        value:find("reject",1,true) or value=="no") and
+                        not declineButton then declineButton=node end
+                end
+            end
+            -- Offer GUIDs can live on a frame, a button, or a StringValue.
+            if not guiId then
+                if node:IsA("StringValue") and uuid(node.Value) then
+                    guiId=node.Value
+                else
+                    for key,val in pairs(node:GetAttributes()) do
+                        local k=key:lower()
+                        if uuid(val) and (k:find("offer",1,true) or
+                            k:find("shopper",1,true) or k=="guid") then
+                            guiId=val
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        if not (acceptButton and declineButton) then return nil end
+        for key,val in pairs(container:GetAttributes()) do
+            if uuid(val) and (key:lower():find("offer",1,true) or
+                key:lower():find("shopper",1,true)) then
+                guiId=val; break
+            end
+        end
+        local pct,offered,worth=nil,nil,nil
+        for _,str in ipairs(labels) do
+            pct=pct or signedPercent(str)
+            local lower=str:lower()
+            if (lower:find("offer",1,true) or
+                lower:find("bid",1,true)) then
+                offered=offered or parseMoney(str)
+            end
+            if (lower:find("worth",1,true) or
+                lower:find("value",1,true) or
+                lower:find("estimated",1,true)) then
+                worth=worth or parseMoney(str)
+            end
+        end
+        if pct==nil and offered and worth and worth>0 then
+            pct=(offered/worth-1)*100
+        end
+        local count=#labels
+        return {container=container,accept=acceptButton,
+            decline=declineButton,id=guiId,pct=pct,labels=labels,
+            count=count,offered=offered,worth=worth}
+    end
+    local function guiOffers()
+        local pg=player and player:FindFirstChild("PlayerGui")
+        if not pg then return {} end
+        local output,seen={},{}
+        for _,node in ipairs(pg:GetDescendants()) do
+            if node:IsA("TextButton") and visible(node) and
+                node.Text:lower():find("accept",1,true) then
+                local p=node.Parent
+                for k=1,5 do
+                    if not p or p==pg then break end
+                    if p:IsA("GuiObject") and not seen[p] then
+                        local data=readGuiOffer(p)
+                        if data then
+                            output[#output+1]=data
+                            seen[p]=true
+                            break
+                        end
+                    end
+                    p=p.Parent
+                end
+            end
+        end
+        -- A shopper GUI may have nested copies of the same dialog.
+        local unique={}
+        local result={}
+        for _,candidate in ipairs(output) do
+            if not unique[candidate.accept] then
+                unique[candidate.accept]=true
+                result[#result+1]=candidate
+            end
+        end
+        return result
+    end
+    local function pendingSingleId()
+        local id,count=nil,0
+        local now=os.clock()
+        for guid,receivedAt in pairs(pendingIds) do
+            if decided[guid] or now-receivedAt>15 then
+                pendingIds[guid]=nil
+            else
+                count=count+1
+                id=guid
+            end
+        end
+        return count==1 and id or nil
+    end
+    local function clickNative(button)
+        -- Executor-safe non-pointer dispatch: don't click unrelated screen
+        -- coordinates, move the cursor, or interfere with controller input.
+        if type(firesignal)=="function" then
+            local success=pcall(function() firesignal(button.Activated) end)
+            if success then return true,"firesignal" end
+        end
+        if type(getconnections)=="function" then
+            local success,items=pcall(getconnections,button.Activated)
+            if success and type(items)=="table" and #items>0 then
+                local fired=0
+                for _,item in ipairs(items) do
+                    if type(item.Fire)=="function" then
+                        local okay=pcall(function() item:Fire() end)
+                        if okay then fired=fired+1 end
+                    end
+                end
+                if fired>0 then return true,"getconnections" end
+            end
+        end
+        return false,"Native button dispatch unavailable; need incoming offer ID"
+    end
+    local lastGuiSeen=0
+    local function pollOfferGui()
+        local dialogs=guiOffers()
+        lastGui=dialogs
+        if #dialogs~=1 then return end
+        local d=dialogs[1]
+        if not d.pct then
+            statusText.Text="Offer popup found; missing % / item value"
+            return
+        end
+        if d.pct~=d.pct or d.pct < -100 or d.pct>1000 then return end
+        local id=d.id or pendingSingleId()
+        if id then
+            handleOffer(id,d.pct)
+            return
+        end
+        -- No remotely visible offer UUID: use the game's own Accept/Decline
+        -- UI handlers rather than inventing a UUID or guessing remote args.
+        local choice=d.pct>=percent
+        local target=choice and d.accept or d.decline
+        local key=tostring(target)..":"..
+            tostring(math.floor(d.pct*10+.5)/10)..":"..
+            table.concat(d.labels,"|")
+        if guiHandled[key] and os.clock()-guiHandled[key]<25 then return end
+        local ok,how=clickNative(target)
+        if ok then
+            guiHandled[key]=os.clock()
+            statusText.Text=(choice and "GUI ACCEPT " or "GUI DECLINE ")..
+                tostring(math.floor(d.pct+.5)).."% ("..how..")"
+        else
+            statusText.Text="Offer visible; "..how
+        end
+    end
+    watch(connections,diagnose.Activated,function()
+        if closed then return end
+        local dialogs=guiOffers()
+        local lines={
+            "[Auto Shop Offers] Diagnostics",
+            "Toggle: "..tostring(active).." / target: "..tostring(percent).."%",
+            "Events seen: "..tostring(eventCount)..
+                " / last event: "..lastEventName,
+            "Offer-related remotes: "..table.concat(watchedNames,", "),
+            "Visible offer dialogs: "..tostring(#dialogs),
+            "Pending remote IDs: "..tostring((function()
+                local n=0 for _ in pairs(pendingIds) do n=n+1 end return n end)())
+        }
+        for i,d in ipairs(dialogs) do
+            lines[#lines+1]="Dialog "..i.." ["..d.container:GetFullName()..
+                "], guid="..tostring(d.id)..", percent="..tostring(d.pct)
+            for j=1,math.min(#d.labels,20) do
+                lines[#lines+1]="   "..tostring(d.labels[j]):sub(1,120)
+            end
+        end
+        local output=table.concat(lines,"\n")
+        print(output)
+        local clip=setclipboard or toclipboard
+        if type(clip)=="function" then
+            pcall(clip,output)
+            statusText.Text="Diagnostic copied. Send its output."
+        else
+            statusText.Text="Diagnostic printed to executor console."
+        end
+    end)
     local function subscribe()
         local events=ReplicatedStorage:FindFirstChild("Events")
         local shopper=events and events:FindFirstChild("NPCShopper")
@@ -238,14 +462,38 @@ return function(cfg)
             statusText.Text="RespondOffer remote unavailable"
             return false
         end
+        watchedNames={}
+        eventCount=0
+        local watched={}
         local function attach(remote)
-            if remote:IsA("RemoteEvent") and remote~=reply then
-                watch(listeners,remote.OnClientEvent,readEvent)
-            end
+            if not remote:IsA("RemoteEvent") or
+                remote==reply or watched[remote] then return end
+            local lower=remote.Name:lower()
+            -- Watch every NPCShopper event and related seller/customer events
+            -- elsewhere under ReplicatedStorage.Events.
+            if not remote:IsDescendantOf(shopper) and
+                not (lower:find("offer",1,true) or
+                     lower:find("shopper",1,true) or
+                     lower:find("customer",1,true)) then return end
+            watched[remote]=true
+            watchedNames[#watchedNames+1]=remote:GetFullName()
+            watch(listeners,remote.OnClientEvent,function(...)
+                readEvent(remote.Name,...)
+            end)
         end
-        for _,remote in ipairs(shopper:GetDescendants()) do attach(remote) end
-        watch(listeners,shopper.DescendantAdded,attach)
-        statusText.Text="ON · Watching incoming offers with known values"
+        for _,remote in ipairs(events:GetDescendants()) do attach(remote) end
+        watch(listeners,events.DescendantAdded,attach)
+        statusText.Text="Watching incoming events and customer offer GUI"
+        task.spawn(function()
+            while not closed and active do
+                local ok,problem=pcall(pollOfferGui)
+                if not ok and os.clock()-lastGuiSeen>5 then
+                    lastGuiSeen=os.clock()
+                    warn("[Auto Shop Offers] GUI detection: "..tostring(problem))
+                end
+                task.wait(.35)
+            end
+        end)
         return true
     end
     watch(connections,toggle.Activated,function()
