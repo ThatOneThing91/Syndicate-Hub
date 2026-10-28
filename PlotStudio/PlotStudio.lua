@@ -2460,6 +2460,24 @@ local function testNativeDoor()
     if not origin then notify("Owned plot not detected");return end
     local cf=entrancePosition(plot,origin)
     if not cf then notify("No first-floor entrance marked in this design");return end
+    -- A previous version could place a full-height PlaceWall lintel
+    -- across the entrance. Do not hide it with a door prop.
+    for _,wall in ipairs(occupiedFromPlot(plot,origin)) do
+        if wall.kind=="Wall" and wall.lv==0 then
+            local ab=wall.b-wall.a
+            local length2=ab.X*ab.X+ab.Z*ab.Z
+            if length2>0 then
+                local ap=cf.Position-wall.a
+                local t=math.clamp((ap.X*ab.X+ap.Z*ab.Z)/length2,0,1)
+                local closest=wall.a+ab*t
+                local dx,dz=cf.Position.X-closest.X,cf.Position.Z-closest.Z
+                if math.sqrt(dx*dx+dz*dz)<1.6 then
+                    notify("Old masonry blocks the front entrance. Remove only that doorway wall segment in the game before testing a door; do not bulldoze.")
+                    return
+                end
+            end
+        end
+    end
     for _,m in ipairs(realDoors(plot)) do
         local ok,p=pcall(function() return m:GetPivot() end)
         if ok and (p.Position-cf.Position).Magnitude<8 then
@@ -2551,6 +2569,34 @@ end
 local function roofCenter(origin,u)
     return origin:PointToWorldSpace(Vector3.new(u.x,0,u.z))
 end
+local function roofSupported(plot,origin,u)
+    local structures=plot:FindFirstChild("Structures")
+    if not structures then return false end
+    local count=0
+    local h=15
+    pcall(function()
+        local cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig)
+        if type(cfg.StoreyHeight)=="number" then h=cfg.StoreyHeight end
+    end)
+    h=math.clamp(h,6,30)
+    for _,m in ipairs(structures:GetChildren()) do
+        if m:IsA("Model") then
+            local cf=m:GetAttribute("WallCFrame")
+            if typeof(cf)=="CFrame" then
+                local p=origin:PointToObjectSpace(cf.Position)
+                local lv=m:GetAttribute("Storey")
+                if type(lv)~="number" then lv=math.floor(p.Y/h) end
+                if math.floor(lv)==u.lv and
+                    math.abs(p.X-u.x)<u.sx*.62 and
+                    math.abs(p.Z-u.z)<u.sz*.62 then
+                    count=count+1
+                    if count>=2 then return true end
+                end
+            end
+        end
+    end
+    return false
+end
 local function roofAt(plot,origin,u)
     local point=roofCenter(origin,u)
     for _,m in ipairs(realRoofs(plot)) do
@@ -2589,9 +2635,14 @@ local function testNativeRoof()
     if not origin then notify("Owned plot required for roof test");return end
     local chosen
     for _,u in ipairs(plannedRoofs(plot,origin)) do
-        if not roofAt(plot,origin,u) then chosen=u;break end
+        if roofSupported(plot,origin,u) and not roofAt(plot,origin,u) then
+            chosen=u;break
+        end
     end
-    if not chosen then notify("All planned roofs already have roof models, or none are planned");return end
+    if not chosen then
+        notify("No unroofed structure with confirmed supporting walls. Build the walls first.")
+        return
+    end
     local before={}
     for _,m in ipairs(realRoofs(plot)) do before[m]=true end
     build.busy=true;build.cancel=false
@@ -2638,7 +2689,7 @@ local function addVerifiedRoofs()
             if not alive or build.cancel or added>=6 or missing>=2 then break end
             if roofAt(plot,origin,u) then
                 occupied=occupied+1
-            else
+            elseif roofSupported(plot,origin,u) then
                 local before={}
                 for _,m in ipairs(realRoofs(plot)) do before[m]=true end
                 local ok,err=pcall(function() fireUnit(u) end)
@@ -2907,6 +2958,109 @@ local function startBuild()
     end)
 end
 
+
+-- Add low side wings to an EXISTING castle. This uses the exact same
+-- occupancy-filtered masonry plan and does not remove any old buildings.
+local function extendSideWings()
+    if build.busy then notify("A build is already running");return end
+    if state.design~=1 and state.design~=2 then
+        notify("Side wings are currently available for the two castle designs.")
+        return
+    end
+    if not ensureCatalog() or not stairCatalog.wall then
+        notify("No solid-wall catalog item available");return
+    end
+    local units,plot,origin=buildPlan()
+    if not units or not plot then notify("Owned plot required");return end
+    local wingUnits={}
+    for _,u in ipairs(units) do
+        if u.zone=="Wing" and (u.kind=="Wall" or u.kind=="Floor") then
+            wingUnits[#wingUnits+1]=u
+        end
+    end
+    if #wingUnits==0 then
+        notify("No missing side-wing walls or floors in the current plan.")
+        return
+    end
+    if not eventFor("Wall") or not eventFor("Floor") then
+        notify("PlaceWall/PlaceFloor events missing");return
+    end
+    local existingSolid=false
+    local structures=plot:FindFirstChild("Structures")
+    if structures then
+        for _,m in ipairs(structures:GetChildren()) do
+            if m:IsA("Model") and
+                tostring(m:GetAttribute("ItemId") or "")==
+                    tostring(stairCatalog.wall.id) and
+                not isGlassModel(m) then
+                existingSolid=true;break
+            end
+        end
+    end
+    if not existingSolid and (not build.passed or
+        build.signature~=buildSignature(plot,origin)) then
+        notify("TEST ONE WALL before adding the new wings.")
+        return
+    end
+    build.busy=true;build.cancel=false
+    build.total=#wingUnits;build.sent=0
+    build.status="Expanding low side wings..."
+    refreshBuildStatus()
+    task.spawn(function()
+        local confirmed,missing,skipped,consecutive=0,0,0,0
+        for i,u in ipairs(wingUnits) do
+            if not alive or build.cancel or consecutive>=3 then break end
+            local function present()
+                local fresh=occupiedFromPlot(plot,origin)
+                if u.kind=="Wall" then
+                    return #openWallSegments(u,fresh)==0
+                end
+                for _,other in ipairs(fresh) do
+                    if surfaceOverlaps(u,other) then return true end
+                end
+                return false
+            end
+            if present() then
+                skipped=skipped+1
+            else
+                local ok,err=pcall(function() fireUnit(u) end)
+                if not ok then
+                    build.status="Wing request error: "..tostring(err):sub(1,75)
+                    missing=missing+1
+                    break
+                end
+                build.sent=build.sent+1
+                local placed=false
+                for attempt=1,10 do
+                    if not alive or build.cancel then break end
+                    task.wait(.2)
+                    if present() then placed=true;break end
+                end
+                if placed then
+                    confirmed=confirmed+1
+                    consecutive=0
+                else
+                    missing=missing+1
+                    consecutive=consecutive+1
+                end
+                build.status="Wings: "..confirmed.." confirmed / "..
+                    missing.." unconfirmed / "..skipped.." already placed"
+                refreshBuildStatus()
+            end
+        end
+        build.busy=false
+        build.lastAudit="SIDE WING AUDIT\nConfirmed: "..confirmed..
+            "\nUnconfirmed: "..missing.."\nAlready present: "..skipped..
+            "\nEligible before start: "..#wingUnits..
+            "\nStopped after three consecutive unconfirmed placements."
+        build.status=build.cancel and "Wing extension stopped" or
+            ("Wing extension: "..confirmed.." confirmed / "..missing..
+            " unconfirmed / "..skipped.." already present")
+        refreshBuildStatus()
+        notify(build.status)
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
 
 -- A truthful, request-derived preview. Concept-only embellishments fade away;
 -- walls/floors and VERIFIED Stair/Detail Shapes appear where their placement
