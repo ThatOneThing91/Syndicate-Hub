@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v1.7: open courtyard, crescent wings, aligned Shapes, and truthful construction previews
+    Standalone Plot Studio v2.0: native structural windows, wall-first finishing, and catalog-selected window tests
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -2930,14 +2930,50 @@ renderPage = function(page)
             16,157,427,24,10,C.dim,false,{Size=UDim2.new(1,-32,0,27),TextTruncate=Enum.TextTruncate.AtEnd})
 
 
+        local windowPanel=block(scroll,167,C.raised)
+        text(windowPanel,"REAL STRUCTURAL WINDOWS",16,10,440,25,15,C.white,true)
+        text(windowPanel,"Windows come from the game's Windows catalog and must attach to a real wall GUID. No fake glass, Shape frames, or blind 63-piece retries.",
+            16,36,430,43,11,C.dim,false,{
+                Size=UDim2.new(1,-32,0,43),TextWrapped=true
+            })
+        text(windowPanel,nativeWindow.status,16,81,432,23,11,
+            nativeWindow.passed and C.mint or C.orange,true,{
+                Size=UDim2.new(1,-32,0,23),
+                TextTruncate=Enum.TextTruncate.AtEnd
+            })
+        button(windowPanel,"1. TEST 1 WINDOW",16,111,159,32,false,function()
+            modal("Test one REAL structural window?",
+                "Requires an existing wall created by the game. Uses the selected Windows catalog item and the actual wall GUID via PlaceWindow. Places only ONE window and checks whether a new Windows model appears. If rejected, bulk windows stay disabled. May cost game currency.",
+                "TEST NATIVE WINDOW",testNativeWindow)
+        end)
+        button(windowPanel,"2. ADD VERIFIED",181,111,159,32,
+            nativeWindow.passed,function()
+            if not nativeWindow.passed then
+                modal("Native window test required",
+                    "The single-window test must confirm an actual Windows model before any additional windows are sent.")
+                return
+            end
+            modal("Add native windows after the walls?",
+                "Uses only verified Windows items on server-created wall GUIDs. Skips occupied positions, confirms each window, stops after two consecutive failures and caps the run at 28 windows. No speculative retry loop.",
+                "ADD REAL WINDOWS",addNativeWindows)
+        end)
+        button(windowPanel,"SELECT STYLE",347,111,111,32,false,function()
+            buildCatalog.filter="Windows"
+            switchPage("Catalog")
+        end)
+        text(windowPanel,"Build the structure first, then install windows, then decorative Shapes.",
+            16,146,430,16,10,C.dim,false,{
+                Size=UDim2.new(1,-32,0,16)
+            })
+
         local finishPanel=block(scroll,164,C.raised)
         text(finishPanel,"FINISH OR REPAIR EXISTING CASTLE",16,11,440,26,15,C.white,true)
-        text(finishPanel,"Build real Shape-based stairs and ornate details on your current castle, or test a stone finish on one existing glass wall.",16,39,430,43,11,C.dim,false,{
+        text(finishPanel,"Finish the real masonry FIRST, then add verified stairs and ornament Shapes. Window installation is separate and uses native Windows.",16,39,430,43,11,C.dim,false,{
             Size=UDim2.new(1,-32,0,43),TextWrapped=true
         })
         button(finishPanel,"ADD STAIRS + DECOR",16,90,178,31,stairTest.passed,function()
             modal("Finish the existing castle?",
-                "Requires one verified Shape tread. Adds custom stair treads and up to 260 real decorative Shapes to the existing plot, without rebuilding the walls. These may cost game currency. The server can reject placements.",
+                "Requires existing structural walls and one verified Shape tread. Adds custom stair treads and up to 260 decorative Shapes, without rebuilding the walls. These may cost game currency. The server can reject placements.",
                 "ADD FINISHES",finishCastle)
         end)
         button(finishPanel,"TEST GLASS FIX",201,90,155,31,false,function()
@@ -2957,7 +2993,7 @@ renderPage = function(page)
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"Only the ornate preview is guaranteed. A verified Shape test unlocks real stairs and decorative pieces; walls must first pass a non-glass test.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"Structural floors and walls go first. Use real Windows after the walls exist, then verified staircase and ornament Shapes. Inspect ACTUAL BUILD VIEW.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
@@ -2968,7 +3004,7 @@ renderPage = function(page)
         button(builderPanel,"2. START BUILD",176,115,160,34,build.passed,function()
             if not build.passed then modal("Test required","Press TEST ONE WALL and wait for a successful confirmation before starting the shell build.");return end
             modal("Build only after inspecting the route",
-                "Review HIGHLIGHT ACCESS and CHECK DESIGN first. The builder will attempt real masonry, galleries and the verified staircase/ornaments. Some parts may still be rejected by the game; this has not been verified end-to-end.\n\nDo NOT bulldoze to retest. You can add stairs and detail to the existing build using FINISH & REPAIR. Permanent changes may cost currency.",
+                "Review ACTUAL BUILD VIEW, HIGHLIGHT ACCESS and CHECK DESIGN first. The builder will attempt real masonry, galleries and the verified staircase/ornaments. Native Windows are a separate step after walls exist. Some parts may still be rejected by the game.\n\nDo NOT bulldoze to retest. You can add verified windows and finishing details to existing masonry. Permanent changes may cost currency.",
                 "BUILD STRUCTURE",startBuild)
         end)
         button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
@@ -3285,7 +3321,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 1.9",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 2.0",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -3383,4 +3419,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v1.9 strict wall endpoints and no speculative wall retries; auction inventory excluded.")
+print("[Plot Studio] v2.0 native Windows: no fake glass overlays, wall GUID tests, structural-first finishing; auction inventory excluded.")
