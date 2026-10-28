@@ -968,11 +968,17 @@ local function paste()
                 if not alive or cancel then break end
                 scan()
                 local targets={}
-                -- Preserve stable construction order so supports arrive first.
-                for _,kind in ipairs({"Floor","Wall","Item","Roof"}) do
-                    for i,p in ipairs(bp.parts) do
-                        if p.kind==kind and not verified[i] and canPlace(p) then
-                            targets[#targets+1]=i
+                -- Rebuild from ground level upward. Placing all five
+                -- floors before the walls can trigger unsupported levels.
+                -- Within each storey place slabs, then walls, then objects.
+                for lv=0,4 do
+                    for _,kind in ipairs({"Floor","Wall","Item","Roof"}) do
+                        for i,p in ipairs(bp.parts) do
+                            if p.kind==kind and
+                                math.clamp(math.floor(tonumber(p.lv) or 0),0,4)==lv and
+                                not verified[i] and canPlace(p) then
+                                targets[#targets+1]=i
+                            end
                         end
                     end
                 end
