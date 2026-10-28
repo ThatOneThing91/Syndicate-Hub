@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.0: native structural windows, wall-first finishing, and catalog-selected window tests
+    Standalone Plot Studio v2.1: non-destructive roof/door/stair repairs and full-plot side wings
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -1584,6 +1584,7 @@ local function rawStairUnits(plot,origin)
             result[#result+1]={
                 kind="StairShape",
                 id=stairCatalog.shape.id,
+                label=p.Name,
                 cf=p.CFrame,
                 size=p.Size,
                 color=p:GetAttribute("PlotStudioColor"),
@@ -2063,6 +2064,78 @@ local function staircaseAndDetails(plot,origin)
     end
     return result,nil,#stairs,#details,skipped
 end
+-- Repairs missing START, U-turn and EXIT landings independently of
+-- decorative ornaments. Existing verified treads are never re-sent.
+local function repairStairGaps()
+    if build.busy then notify("A build is already running");return end
+    if not ensureCatalog() or not stairCatalog.shape then
+        notify("No Shapes catalog item available");return
+    end
+    local plot=ownedPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin then notify("Owned plot required");return end
+    local all,err=staircaseAndDetails(plot,origin)
+    if not all then notify(err);return end
+    local missing={}
+    for _,u in ipairs(all) do
+        if u.kind=="StairShape" then missing[#missing+1]=u end
+    end
+    if #missing==0 then
+        notify("No missing SIZE-VERIFIED stair units in the blueprint. Check the physical landings before changing anything.")
+        return
+    end
+    table.sort(missing,function(a,b)
+        local aLanding=a.label=="Stair landing"
+        local bLanding=b.label=="Stair landing"
+        if aLanding~=bLanding then return aLanding end
+        if a.lv~=b.lv then return a.lv<b.lv end
+        return a.cf.Position.Y<b.cf.Position.Y
+    end)
+    build.busy=true;build.cancel=false
+    build.total=#missing;build.sent=0
+    build.status="Repairing missing staircase connections..."
+    refreshBuildStatus()
+    task.spawn(function()
+        local confirmed,failed,consecutive=0,0,0
+        for i=1,math.min(#missing,45) do
+            local u=missing[i]
+            if not alive or build.cancel or consecutive>=3 then break end
+            if not stairsAlreadyPresent(plot,u) then
+                local ok,errText=pcall(function() fireUnit(u) end)
+                if not ok then
+                    build.status="Stair repair error: "..tostring(errText):sub(1,75)
+                    failed=failed+1
+                    break
+                end
+                build.sent=build.sent+1
+                local found=false
+                for attempt=1,12 do
+                    if not alive or build.cancel then break end
+                    if stairsAlreadyPresent(plot,u) then found=true;break end
+                    task.wait(.18)
+                end
+                if found then confirmed=confirmed+1;consecutive=0
+                else failed=failed+1;consecutive=consecutive+1 end
+            end
+            build.status="Stair connections: "..confirmed..
+                " confirmed / "..failed.." unconfirmed"
+            refreshBuildStatus()
+        end
+        build.busy=false
+        build.lastAudit="STAIR GAP AUDIT\n"..
+            "Missing before repair: "..#missing..
+            "\nNewly confirmed: "..confirmed..
+            "\nUnconfirmed: "..failed..
+            "\nNo duplicate placement retries. Check the physical path."
+        build.status=build.cancel and "Stair gap repair stopped" or
+            ("Stair repair: "..confirmed.." confirmed / "..failed..
+            " unconfirmed / "..#missing.." originally missing")
+        refreshBuildStatus()
+        notify(build.status)
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+
 local function finishCastle()
     if build.busy then notify("Construction already running");return end
     local plot=ownedPlot()
@@ -3656,6 +3729,60 @@ renderPage = function(page)
                 Size=UDim2.new(1,-32,0,16)
             })
 
+        local completion=block(scroll,275,C.raised)
+        text(completion,"ENTRANCE • ROOF • COURTYARD",16,10,440,25,15,C.white,true)
+        text(completion,"Non-destructive repairs for the castle already on your plot. Each new placement type starts with a one-piece test.",
+            16,37,435,38,11,C.dim,false,{
+                Size=UDim2.new(1,-32,0,38),TextWrapped=true
+            })
+        text(completion,nativeDoor.status,16,78,432,20,10,
+            nativeDoor.passed and C.mint or C.orange,false,{
+                Size=UDim2.new(1,-32,0,20),TextTruncate=Enum.TextTruncate.AtEnd
+            })
+        button(completion,"TEST ENTRY DOOR",16,103,168,30,false,function()
+            modal("Install one real first-floor door?",
+                "Select a Doors catalog style first if desired. The script checks for old masonry blocking the opening, then tests ONE PlaceItem door. If the game requires WallSnap, it will stop rather than try random alternatives. No plot reset.",
+                "TEST ONE DOOR",testNativeDoor)
+        end)
+        button(completion,"SELECT DOOR",192,103,138,30,false,function()
+            buildCatalog.filter="Doors"
+            switchPage("Catalog")
+        end)
+        text(completion,roofTest.status,16,140,430,20,10,
+            roofTest.passed and C.mint or C.orange,false,{
+                Size=UDim2.new(1,-32,0,20),TextTruncate=Enum.TextTruncate.AtEnd
+            })
+        button(completion,"TEST ONE ROOF",16,164,153,30,false,function()
+            modal("Test one genuine pitched roof?",
+                "Uses the game's PlaceRoof event with a supported Hip/Gable/Pyramid style, over existing structural walls. ONE request only; further roofs remain locked until a new real roof is confirmed. May cost currency.",
+                "TEST ROOF",testNativeRoof)
+        end)
+        button(completion,"ADD REAL ROOFS",175,164,158,30,
+            roofTest.passed,function()
+            if not roofTest.passed then
+                modal("Roof test required",
+                    "The one-roof test must confirm a real server-placed roof first.")
+                return
+            end
+            modal("Complete verified roofs?",
+                "Adds only missing roofs with supporting walls, confirming each one and stopping after two consecutive failures. No decorative fake roofs.",
+                "ADD ROOFS",addVerifiedRoofs)
+        end)
+        button(completion,"REPAIR STAIR GAPS",16,203,178,30,false,function()
+            modal("Repair missing stair transitions?",
+                "Checks the actual plot for matching-size, walkable stair treads and landings. Repairs the missing entry, U-turn and upper exits first. Stops after three unconfirmed requests; no duplicates.",
+                "REPAIR STAIRS",repairStairGaps)
+        end)
+        button(completion,"ADD LOW SIDE WINGS",202,203,175,30,false,function()
+            modal("Expand the castle across the plot?",
+                "For the two castle designs, add real two-storey side-wing walls and floors around the existing tall hall. Uses the unlocked plot size, skips occupied pieces, confirms each request and stops after repeated failures. No bulldozing.",
+                "BUILD WINGS",extendSideWings)
+        end)
+        text(completion,"Suggested order: open entrance → repair stairs → add wings → test roof → add ornaments.",
+            16,243,430,25,10,C.dim,false,{
+                Size=UDim2.new(1,-32,0,25),TextWrapped=true
+            })
+
         local finishPanel=block(scroll,164,C.raised)
         text(finishPanel,"FINISH OR REPAIR EXISTING CASTLE",16,11,440,26,15,C.white,true)
         text(finishPanel,"Finish the real masonry FIRST, then add verified stairs and ornament Shapes. Window installation is separate and uses native Windows.",16,39,430,43,11,C.dim,false,{
@@ -4026,7 +4153,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 2.0",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 2.1",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -4124,4 +4251,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v2.0 native Windows: no fake glass overlays, wall GUID tests, structural-first finishing; auction inventory excluded.")
+print("[Plot Studio] v2.1 roof and entrance tests, stair gap repair, low wings, and confirmed decoration audits; main hub untouched.")
