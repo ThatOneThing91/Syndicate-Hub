@@ -12467,9 +12467,9 @@ task.spawn(function()
         local source = [==[
 -- Auto Shop Offers, integrated directly inside StorageHunters.
 -- RespondOffer(offerGuid, bool) is known; incoming offer schema is not confirmed.
--- V5: OfferPresented is a client -> server FireServer call, so
--- OnClientEvent cannot detect it. Monitor each outgoing call's live UUID,
--- numeric offered percentage and shopper (never store sample GUIDs).
+-- V6: ShowOffer OnClientEvent supplies (GUID, shopper, itemName,
+-- offeredPrice, itemValue). Respond directly to that authoritative event.
+-- No hard-coded GUIDs and no scan button required.
 return function(cfg)
     assert(type(cfg)=="table" and typeof(cfg.parent)=="Instance","Shop page required")
     local ReplicatedStorage=game:GetService("ReplicatedStorage")
@@ -12765,6 +12765,29 @@ return function(cfg)
         lastEventName=tostring(sourceName)
         eventCounts[sourceName]=(eventCounts[sourceName] or 0)+1
         traceEvent(sourceName,...)
+        -- Confirmed Cobalt ShowOffer schema:
+        -- (offerGUID, NPC instance, itemName, offeredPrice, itemValue).
+        -- Calculate the change against the item's actual value, then reply
+        -- with the GUID from this exact event, never a saved sample GUID.
+        if sourceName=="ShowOffer" then
+            local guid,npc,itemName,offerPrice,itemValue=...
+            local offer=tonumber(offerPrice)
+            local value=tonumber(itemValue)
+            if uuid(guid) and offer and value and value>0 and
+                offer>=0 and offer==offer and value==value then
+                lastIncomingOfferAt=os.clock()
+                pendingIds[guid]=os.clock()
+                local pct=(offer/value-1)*100
+                if pct>=-100 and pct<=1000 then
+                    handleOffer(guid,pct)
+                else
+                    statusText.Text="Offer percentage outside supported range"
+                end
+            else
+                statusText.Text="ShowOffer received with incomplete price data"
+            end
+            return
+        end
         if sourceName=="HideOffer" then
             pendingIds={}
             guiHandled={}
@@ -13391,11 +13414,10 @@ return function(cfg)
         local presented=shopper:FindFirstChild("OfferPresented")
         local shown=shopper:FindFirstChild("ShowOffer")
         local hidden=shopper:FindFirstChild("HideOffer")
-        local hookActive=enableOutgoingCapture()
+        -- ShowOffer OnClientEvent is the confirmed source of complete
+        -- offer details. No executor namecall hook is required to decide.
         refreshShopStock()
-        statusText.Text=hookActive
-            and "Watching live OfferPresented calls and customer GUI"
-            or ("GUI/event fallback; "..outgoingStatus)
+        statusText.Text="Listening for ShowOffer (GUID + offer/value)"
         task.spawn(function()
             while not closed and active do
                 local ok,problem=pcall(pollOfferGui)
