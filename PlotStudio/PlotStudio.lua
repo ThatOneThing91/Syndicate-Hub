@@ -4184,8 +4184,21 @@ renderPage = function(page)
         end)
         button(builderPanel,"STOP",252,115,84,34,false,stopBuild)
         button(builderPanel,"SCAN PLOT",16,156,135,26,false,inspectCurrentPlot)
-        button(builderPanel,"VIEW BUILD AUDIT",160,156,178,26,false,function()
+        button(builderPanel,"VIEW AUDIT",159,156,131,26,false,function()
             modal("Last construction audit",build.lastAudit)
+        end)
+        button(builderPanel,"COPY LOG",297,156,117,26,false,function()
+            local copy=type(setclipboard)=="function" and setclipboard or
+                (type(toclipboard)=="function" and toclipboard or nil)
+            if not copy then
+                notify("Clipboard unavailable. Read VIEW AUDIT or executor log.")
+                print("[Plot Studio Build Audit]\n"..tostring(build.lastAudit))
+                return
+            end
+            local ok=pcall(copy,tostring(build.lastAudit))
+            notify(ok and "Copied last construction audit." or
+                "Clipboard copy failed; check executor log.")
+            if not ok then print("[Plot Studio Build Audit]\n"..tostring(build.lastAudit)) end
         end)
         local note=block(scroll,80)
         sectionNote(note,"KEEP YOUR EXISTING PLOT",
