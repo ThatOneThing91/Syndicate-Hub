@@ -375,6 +375,40 @@ local function classify(rootName,category,id,name,wallCf,wallLength,roofStyle)
     end
     return nil
 end
+local function extractFinish(object)
+    local representative,topScore=nil,-1
+    local pieces=object:IsA("BasePart") and {object} or object:GetDescendants()
+    local sample={}
+    for _,part in ipairs(pieces) do
+        if part:IsA("BasePart") and part.Transparency<.96 then
+            local colored=math.max(part.Color.R,part.Color.G,part.Color.B)-
+                math.min(part.Color.R,part.Color.G,part.Color.B)
+            local area=part.Size.X*part.Size.Z+
+                part.Size.X*part.Size.Y+part.Size.Y*part.Size.Z
+            local score=math.log(math.max(1,area))+
+                (colored>.10 and 1 or 0)
+            if score>topScore then representative=part;topScore=score end
+            if #sample<80 then
+                sample[#sample+1]={name=part.Name,
+                    color={part.Color.R,part.Color.G,part.Color.B},
+                    material=part.Material.Name,
+                    transparency=part.Transparency}
+            end
+        end
+    end
+    local source=representative
+    local color=source and source.Color or nil
+    local material=source and source.Material.Name or nil
+    local attrColor=object:GetAttribute("Color")
+        or object:GetAttribute("PaintColor")
+        or object:GetAttribute("CustomColor")
+    local attrMaterial=object:GetAttribute("Material")
+        or object:GetAttribute("CustomMaterial")
+    if typeof(attrColor)=="Color3" then color=attrColor end
+    if typeof(attrMaterial)=="EnumItem" then material=attrMaterial.Name
+    elseif type(attrMaterial)=="string" then material=attrMaterial end
+    return color and {color.R,color.G,color.B} or nil,material,sample
+end
 local function capture(plot)
     local origin=plotFrame(plot)
     if not origin then return nil,"Could not read this plot's origin" end
@@ -425,14 +459,20 @@ local function capture(plot)
                                 category=cat,lv=lv,name=object.Name,
                                 cf=packCf(origin:ToObjectSpace(effectiveCf)),
                                 size={size.X,size.Y,size.Z}}
+                            row.color,row.material,row.finishParts=extractFinish(object)
+                            row.finishGuid=object:GetAttribute("GUID")
                             if kind=="Wall" then row.length=wallLen end
                             if kind=="Roof" then
-                                row.style=object:GetAttribute("RoofStyle") or "Hip"
-                                local part=object:IsA("BasePart") and object or
-                                    object:FindFirstChildWhichIsA("BasePart",true)
-                                if part then
-                                    row.color={part.Color.R,part.Color.G,part.Color.B}
-                                    row.material=tostring(part.Material.Name)
+                                row.style=object:GetAttribute("RoofStyle") or
+                                    (type(id)=="string" and id:match("^Roof_(.+)")) or "Hip"
+                                row.roofSettings={}
+                                for _,key in ipairs({"RoofPitch","RoofHeight","RoofSlope",
+                                    "RoofWidth","RoofDepth","RoofLength","RoofX","RoofZ",
+                                    "RoofRotation","RoofOverhang","RoofThickness"}) do
+                                    local value=object:GetAttribute(key)
+                                    if type(value)=="number" then
+                                        row.roofSettings[key]=value
+                                    end
                                 end
                             end
                             bp.parts[#bp.parts+1]=row
@@ -706,7 +746,8 @@ local function scene(plot)
                             end
                             result[#result+1]={object=m,kind=kind,
                                 id=id~=nil and tostring(id) or nil,
-                                category=cat,cf=cf,size=size,length=wallLen}
+                                category=cat,cf=cf,boundsCf=box,
+                                size=size,length=wallLen}
                         end
                     end
                 end
@@ -755,10 +796,12 @@ local function matches(part,expected,found)
             return false
         end
     end
-    local distance=(expected.Position-found.cf.Position).Magnitude
+    local observed=part.legacyBounds and found.boundsCf or found.cf
+    if not observed then return false end
+    local distance=(expected.Position-observed.Position).Magnitude
     local radius=part.kind=="Item" and 2.0 or part.kind=="Roof" and 3.0 or 1.5
     if distance>radius then return false end
-    local alignment=math.abs(expected.RightVector:Dot(found.cf.RightVector))
+    local alignment=math.abs(expected.RightVector:Dot(observed.RightVector))
     if alignment<.94 then return false end
     if part.kind=="Wall" then return true end
     return closeSize(part.size,found.size,part.kind)
@@ -797,7 +840,8 @@ local function reconcile(bp,origin,physical)
                     for _,j in ipairs(list) do
                         local real=physical[j]
                         if not used[j] and matches(p,desired,real) then
-                            local distance=(desired.Position-real.cf.Position).Magnitude
+                            local observed=p.legacyBounds and real.boundsCf or real.cf
+                            local distance=(desired.Position-observed.Position).Magnitude
                             if distance<bestDistance then
                                 best,bestDistance=j,distance
                             end
@@ -955,7 +999,16 @@ local function paste()
                 end
             end
             local function scan()
-                physical=scene(own)
+                local snapshot=scene(own)
+                -- A plot occasionally streams out almost entirely for a frame.
+                -- Keep the last reliable count instead of claiming hundreds
+                -- of already confirmed pieces have vanished.
+                if #physical>25 and #snapshot < #physical*.65 then
+                    log("Temporary incomplete plot scan ignored ("..
+                        #snapshot.."/"..#physical.." objects)")
+                    return
+                end
+                physical=snapshot
                 verified=select(1,reconcile(bp,origin,physical))
             end
             local function missing()
