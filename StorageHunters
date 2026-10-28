@@ -12627,7 +12627,8 @@ do
     local function asNumber(value)
         if type(value) == "number" then return value end
         if type(value) == "string" then
-            return tonumber(value:gsub("[%$, ]", ""))
+            local cleaned = value:gsub("[$, ]", "")
+            return tonumber(cleaned)
         end
     end
     local function signedPercent(str)
