@@ -2472,6 +2472,195 @@ renderPage = function(page)
         local note=block(scroll,80)
         sectionNote(note,"NO MORE PLOT RESETS FOR TESTING",
             "Inspect the U-shaped stair route first, test one solid wall and one walkable Shape. Finish the existing castle instead of rebuilding its shell.",7)
+    elseif page=="Catalog" then
+        pageHead(scroll,"Build Catalog","Live building items discovered in Storage Hunters.")
+        local summary=block(scroll,132,C.raised)
+        text(summary,"AUTOMATIC BUILD LIBRARY",16,9,440,24,15,C.white,true)
+        local statusText=buildCatalog.scanning and buildCatalog.status or
+            (buildCatalog.scanned and (tostring(buildCatalog.total).." placeable-item definitions found")
+                or ("SCAN STATUS: "..buildCatalog.status))
+        text(summary,statusText,16,36,460,23,12,
+            buildCatalog.scanned and C.mint or C.orange,true,{
+                Size=UDim2.new(1,-32,0,23)
+            })
+        text(summary,"Only Furniture build categories are scanned. Auction loot, Stock displays and player inventory are excluded.",
+            16,60,460,29,11,C.dim,false,{
+                Size=UDim2.new(1,-32,0,29),TextWrapped=true
+            })
+        button(summary,buildCatalog.scanning and "SCANNING..." or "RESCAN BUILD ITEMS",
+            16,96,186,28,true,function()
+                if stairCatalog.scanning then
+                    notify("Scan is already in progress")
+                    return
+                end
+                task.spawn(function()
+                    scanStairs()
+                    if alive and state.page=="Catalog" then switchPage("Catalog") end
+                end)
+            end)
+        local sources=0
+        for _ in pairs(buildCatalog.sources) do sources=sources+1 end
+        text(summary,buildCatalog.scanned and
+            ("Sources: "..sources.." methods / "..buildCatalog.skipped.." without usable IDs") or
+            "Reads the game's replicated build definitions",
+            210,97,240,28,10,C.muted,false,{
+                Size=UDim2.new(1,-224,0,28),TextTruncate=Enum.TextTruncate.AtEnd
+            })
+
+        local features=block(scroll,102)
+        text(features,"BUILDING OPTIONS",15,8,410,25,14,C.white,true)
+        button(features,"12 ROOF STYLES",15,43,151,30,false,function()
+            modal("Roof styles discovered in build modules",
+                table.concat(BUILD_ROOF_STYLES,", ")..
+                "\n\nRoof styles are an option list, not furniture IDs. The current builder only has verified example data for Flat roofs.")
+        end)
+        button(features,tostring(#materials).." MATERIALS",174,43,158,30,false,function()
+            switchPage("Materials")
+        end)
+        text(features,"Colors are customizable; they aren't separate purchasable furniture items.",
+            15,76,440,20,10,C.dim,false,{
+                Size=UDim2.new(1,-30,0,20)
+            })
+
+        local cats=block(scroll,212)
+        text(cats,"BUILD CATEGORIES",14,7,440,24,14,C.white,true)
+        local catsList={"All"}
+        for _,cat in ipairs(BUILD_CATEGORIES) do catsList[#catsList+1]=cat end
+        for i,cat in ipairs(catsList) do
+            local count=cat=="All" and #buildCatalog.entries or
+                #(buildCatalog.byCategory[cat] or {})
+            local chosen=buildCatalog.filter==cat
+            local label=cat.."  ("..count..")"
+            local buttonCat=button(cats,label,0,0,100,27,chosen,function()
+                buildCatalog.filter=cat
+                switchPage("Catalog")
+            end)
+            local c=(i-1)%3
+            local r=math.floor((i-1)/3)
+            buttonCat.Position=UDim2.new(c/3,6,0,35+r*33)
+            buttonCat.Size=UDim2.new(1/3,-12,0,28)
+            buttonCat.TextSize=10
+        end
+
+        local queryCard=block(scroll,57)
+        local searchBox=corner(ui("TextBox",{
+            BackgroundColor3=C.raised,BorderSizePixel=0,
+            Position=UDim2.fromOffset(10,9),
+            Size=UDim2.new(1,-20,0,36),
+            Text=buildCatalog.query,
+            PlaceholderText="Search by building name or item ID...",
+            TextColor3=C.white,PlaceholderColor3=C.muted,
+            Font=Enum.Font.Gotham,TextSize=12,
+            ClearTextOnFocus=false,TextXAlignment=Enum.TextXAlignment.Left
+        },queryCard),8)
+        ui("UIPadding",{
+            PaddingLeft=UDim.new(0,11),PaddingRight=UDim.new(0,10)
+        },searchBox)
+        local resultPanel=ui("Frame",{
+            BackgroundTransparency=1,BorderSizePixel=0,
+            Size=UDim2.new(1,0,0,46),
+        },scroll)
+        local resultMax=75
+        local function drawResults()
+            for _,child in ipairs(resultPanel:GetChildren()) do child:Destroy() end
+            local term=buildCatalog.query:lower()
+            local found={}
+            local rows=buildCatalog.filter=="All" and buildCatalog.entries or
+                (buildCatalog.byCategory[buildCatalog.filter] or {})
+            local matchTotal=0
+            for _,row in ipairs(rows) do
+                if term=="" or row.name:lower():find(term,1,true)
+                    or row.id:lower():find(term,1,true) then
+                    matchTotal=matchTotal+1
+                    if #found<resultMax then found[#found+1]=row end
+                end
+            end
+            local head=corner(ui("Frame",{
+                BackgroundColor3=C.panel,BorderSizePixel=0,
+                Position=UDim2.fromOffset(0,0),
+                Size=UDim2.new(1,0,0,33)
+            },resultPanel),8)
+            text(head,
+                tostring(matchTotal).." matching build items"..
+                (matchTotal>resultMax and (" / first "..resultMax.." shown") or ""),
+                12,0,470,33,11,C.mint,true,{
+                    Size=UDim2.new(1,-22,0,33)
+                })
+            local rowHeight=39
+            resultPanel.Size=UDim2.new(1,0,0,39+#found*rowHeight)
+            if matchTotal==0 then
+                text(resultPanel,buildCatalog.scanned and
+                    "No matching items found. Try Rescan or another category." or
+                    "Catalog has not finished scanning.",
+                    7,38,400,32,11,C.dim,false,{
+                        Size=UDim2.new(1,-14,0,32)
+                    })
+                resultPanel.Size=UDim2.new(1,0,0,78)
+            end
+            for idx,item in ipairs(found) do
+                local row=corner(ui("TextButton",{
+                    BackgroundColor3=idx%2==0 and C.panel or C.raised,
+                    BorderSizePixel=0,
+                    Position=UDim2.fromOffset(0,35+(idx-1)*rowHeight),
+                    Size=UDim2.new(1,0,0,35),
+                    Text="",AutoButtonColor=true
+                },resultPanel),7)
+                text(row,item.name,11,2,330,19,12,C.white,true,{
+                    Size=UDim2.new(1,-85,0,19)
+                })
+                text(row,item.category.."  ·  ID "..item.id,11,20,365,13,10,C.dim,false,{
+                    Size=UDim2.new(1,-85,0,13)
+                })
+                local cell=text(row,"DETAILS",0,0,64,35,10,C.purple,true,{
+                    Position=UDim2.new(1,-70,0,0)
+                })
+                on(row.MouseButton1Click,function()
+                    local message="Category: "..item.category.."\nItem ID: "..item.id..
+                        "\nSource: "..item.source..
+                        "\n\nFound in the game's plot building catalog, not your auction inventory."
+                    local label="CLOSE"
+                    local action
+                    if item.category=="Walls" and scoreWall(item.name)>=0 then
+                        message=message..
+                            "\n\nSet as the wall candidate for this blueprint? The wall must still pass a one-wall material/opacity test."
+                        label="USE AS WALL"
+                        action=function()
+                            stairCatalog.wall={
+                                id=item.id,name=item.name,category="Walls",
+                                score=scoreWall(item.name)
+                            }
+                            build.passed=false
+                            notify("Wall candidate: "..item.name..". Retest one wall first.")
+                        end
+                    elseif item.category=="Shapes" then
+                        local lo=item.name:lower()
+                        if lo:find("block",1,true) or lo:find("cube",1,true)
+                            or lo:find("box",1,true) then
+                            message=message..
+                                "\n\nSet as the custom staircase/decor Shape? Test one tread before any bulk build."
+                            label="USE AS SHAPE"
+                            action=function()
+                                stairCatalog.shape={
+                                    id=item.id,name=item.name,category="Shapes"
+                                }
+                                stairTest.passed=false
+                                notify("Shape candidate: "..item.name..". Retest stair tread.")
+                            end
+                        end
+                    else
+                        message=message..
+                            "\n\nDiscovered and indexed. Automatic placement is not yet implemented for every category; it needs tested placement geometry."
+                    end
+                    modal(item.name,message,label,action)
+                end)
+            end
+        end
+        on(searchBox:GetPropertyChangedSignal("Text"),function()
+            buildCatalog.query=searchBox.Text
+            drawResults()
+        end)
+        drawResults()
+
     elseif page=="Materials" then
         pageHead(scroll,"Material director","The studio automatically picks a different finish for each architectural feature.")
         local current=block(scroll,102,C.raised)
@@ -2581,7 +2770,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 1.4",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 1.5",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
