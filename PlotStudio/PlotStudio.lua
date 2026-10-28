@@ -1134,6 +1134,110 @@ local function occupiedFromPlot(plot,origin)
     end
     return result
 end
+-- Floor coverage must be checked by AREA, not by whether a different
+-- floor merely touches the request. That old test silently left holes.
+local function floorCoveredAt(point,lv,physical,margin)
+    local inset=margin or .18
+    for _,v in ipairs(physical) do
+        if v.kind=="Floor" and v.cf and v.lv==lv and
+            math.abs(v.cf.Position.Y-point.Y)<2.4 then
+            local localPoint=v.cf:PointToObjectSpace(point)
+            if math.abs(localPoint.X)<=v.sx*.5-inset and
+                math.abs(localPoint.Z)<=v.sz*.5-inset then
+                return true
+            end
+        end
+    end
+    return false
+end
+local function floorCoverage(u,physical)
+    if not u.cf or not u.sx or not u.sz then return 0,0,0 end
+    local nx=math.clamp(math.ceil(u.sx/3.5),2,14)
+    local nz=math.clamp(math.ceil(u.sz/3.5),2,14)
+    local hit,total=0,nx*nz
+    for ix=1,nx do
+        for iz=1,nz do
+            local point=u.cf:PointToWorldSpace(Vector3.new(
+                (ix-.5)*u.sx/nx-u.sx*.5,0,
+                (iz-.5)*u.sz/nz-u.sz*.5))
+            if floorCoveredAt(point,u.lv,physical,.12) then
+                hit=hit+1
+            end
+        end
+    end
+    return hit/total,hit,total
+end
+-- Walk only the blueprint's ACTUAL Floor shapes. Every missing cell is
+-- inside an intended floor; intentional stairwells stay open. Combine
+-- adjacent uncovered cells into manageable server-sized floor strips.
+local function missingFloorGapUnits(plot,origin,physical,limit)
+    local out,scanned,uncovered,skipped= {},0,0,0
+    local h=15
+    pcall(function()
+        local cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig)
+        if type(cfg.StoreyHeight)=="number" then h=cfg.StoreyHeight end
+    end)
+    h=math.clamp(h,6,30)
+    local maxUnits=limit or 160
+    local maxSamples=11000
+    if not previewFolder then beginPreview() end
+    if not previewFolder then return out,scanned,uncovered,skipped end
+    for _,p in ipairs(previewFolder:GetChildren()) do
+        if #out>=maxUnits or scanned>=maxSamples then break end
+        if p:IsA("BasePart") and
+            p:GetAttribute("PlotStudioKind")=="Floor" then
+            local lv=math.clamp(math.floor(
+                (p.Position.Y-origin.Position.Y+.55)/h+.1),0,4)
+            local nx=math.max(1,math.ceil(p.Size.X/4))
+            local nz=math.max(1,math.ceil(p.Size.Z/4))
+            local dx,dz=p.Size.X/nx,p.Size.Z/nz
+            local runs={}
+            for iz=1,nz do
+                if #out+#runs>=maxUnits or scanned>=maxSamples then break end
+                local first=nil
+                local function finishRun(last)
+                    if first then
+                        local n=last-first+1
+                        local sx=n*dx
+                        if sx>=2.25 and dz>=2.25 then
+                            local localX=((first+last)*.5-.5)*dx-p.Size.X*.5
+                            local localZ=(iz-.5)*dz-p.Size.Z*.5
+                            runs[#runs+1]={
+                                kind="Floor",
+                                cf=p.CFrame*CFrame.new(localX,0,localZ),
+                                sx=sx,sz=dz,lv=lv,
+                                color=p:GetAttribute("PlotStudioColor"),
+                                material=p:GetAttribute("PlotStudioMaterial"),
+                                gapRepair=true
+                            }
+                        end
+                        first=nil
+                    end
+                end
+                for ix=1,nx do
+                    if scanned>=maxSamples then break end
+                    scanned=scanned+1
+                    local point=p.CFrame:PointToWorldSpace(Vector3.new(
+                        (ix-.5)*dx-p.Size.X*.5,0,
+                        (iz-.5)*dz-p.Size.Z*.5))
+                    local missing=not floorCoveredAt(point,lv,physical,.12)
+                    if missing then
+                        uncovered=uncovered+1
+                        if not first then first=ix end
+                    elseif first then
+                        finishRun(ix-1)
+                    end
+                end
+                finishRun(nx)
+            end
+            for _,u in ipairs(runs) do
+                if #out>=maxUnits then skipped=skipped+1
+                else out[#out+1]=u end
+            end
+        end
+    end
+    return out,scanned,uncovered,skipped
+end
 local function filterBuildUnits(units,plot,origin,extra)
     local occupied=occupiedFromPlot(plot,origin)
     if extra then occupied[#occupied+1]=extra end
@@ -1152,8 +1256,13 @@ local function filterBuildUnits(units,plot,origin,extra)
             end
         else
             local blocked=false
-            for _,other in ipairs(occupied) do
-                if surfaceOverlaps(unit,other) then blocked=true;break end
+            if unit.kind=="Floor" then
+                local coverage=floorCoverage(unit,occupied)
+                blocked=coverage>=.96
+            else
+                for _,other in ipairs(occupied) do
+                    if surfaceOverlaps(unit,other) then blocked=true;break end
+                end
             end
             if blocked then skipped=skipped+1
             else result[#result+1]=unit;occupied[#occupied+1]=unit end
@@ -3248,9 +3357,8 @@ local function shellConfirmed(u,physical)
         return requested>0 and still/requested<.12
     end
     if u.kind=="Floor" then
-        for _,v in ipairs(physical) do
-            if surfaceOverlaps(u,v) then return true end
-        end
+        local coverage=floorCoverage(u,physical)
+        return coverage>=.94
     end
     return false
 end
