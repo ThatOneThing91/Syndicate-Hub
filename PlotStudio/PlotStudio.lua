@@ -1006,11 +1006,6 @@ local function testWall()
         modal("Plot not recognized","Outlines can appear on a nearby plot, but permanent placement needs verified ownership. Make sure you're building on your own plot.")
         return
     end
-    if state.floors>1 then
-        modal("Stair access not verified",
-            "This design currently has "..tostring(state.floors).." storeys. The stairs and entrances in the preview are visual only. Permanent placement is paused until we capture the actual stair/door item IDs so the upper floors will be reachable. Select one storey if you want to test the structural shell.")
-        return
-    end
     local units,plot,origin=buildPlan()
     if not units then notify("Could not generate a build plan");return end
     local index
@@ -1055,13 +1050,9 @@ local function startBuild()
         notify("TEST ONE WALL first for this design and storey count")
         return
     end
-    -- No staircase/door item IDs have been captured, so do not produce a
-    -- permanently inaccessible upper floor and call it a finished base.
-    if state.floors>1 then
-        modal("Multi-storey build requires stairs",
-            "The preview has entrances, balconies and staircase paths, but the game's real stair and door item IDs are not verified yet. To avoid trapping you inside an inaccessible base, permanent multi-storey building is disabled. You can preview the full castle or select 1 storey for a basic placement test.")
-        return
-    end
+    -- Multi-storey shells are now allowed at the user's explicit request.
+    -- Staircase and door props remain visual-only until real item IDs are verified.
+    -- The confirmation dialog warns that upper floors may not be accessible.
     if #units>900 then notify("Blueprint shell exceeds placement limit");return end
     notify("Occupancy scan: "..(stats and stats.skipped or 0)..
         " occupied skipped; "..(stats and stats.trimmed or 0).." walls trimmed.")
@@ -1418,24 +1409,24 @@ renderPage = function(page)
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"PREVIEW: complete styled castle with staircase paths. REAL BUILD: basic structural shell only, and one storey until stair placement is verified.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"MULTI-STOREY SHELL ENABLED. Staircases, doors, windows and ornate features remain preview-only; upper floors may be unreachable.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
-            modal("Prepare your plot",
-                "RECOMMENDED: If you want a clean castle, consider manually bulldozing your plot first AFTER backing up anything you want to keep. This is optional and Plot Studio will not bulldoze for you.\n\nIf you keep existing structures, the builder attempts to avoid their occupied positions. The wall test may cost game currency.",
+            modal("Test one wall on your plot?",
+                "You can build up to five storeys. Stairs and doors shown in previews aren't placed yet.\n\nFor a clean plot, back up existing work and bulldoze manually if desired. This may spend game currency.",
                 "TEST ONE WALL",testWall)
         end)
         button(builderPanel,"2. START BUILD",176,115,160,34,build.passed,function()
             if not build.passed then modal("Test required","Press TEST ONE WALL and wait for a successful confirmation before starting the shell build.");return end
-            modal("Build with existing items?",
-                "OPTIONAL: Back up and manually bulldoze if you want a completely clean plot. Bulldozing permanently deletes placed builds. Plot Studio never bulldozes automatically.\n\nOtherwise, occupied segments are skipped and overlapping wall runs are trimmed. The current real builder handles only basic walls/floors. Preview decorations are not permanent.",
-                "START BUILD",startBuild)
+            modal("Build without finished stair access?",
+                "This places the multi-storey structural shell. Stairs, doors, windows and ornate details are PREVIEW ONLY. Upper floors may be unreachable until those pieces are built.\n\nExisting items are skipped where detected; game currency may be spent. No automatic bulldozing.",
+                "BUILD SHELL",startBuild)
         end)
         button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
         local note=block(scroll,80)
-        sectionNote(note,"TESTING STAGE / NOT A FINISHED CASTLE",
-            "The preview is local; actual build placement depends on the game's server rules. STOP prevents further sends, but will not undo what was placed.",7)
+        sectionNote(note,"BUILD SHELL FIRST / FINISH ACCESS LATER",
+            "All selected storeys can be submitted. Staircases aren't placed yet; upper floors may be inaccessible. STOP halts requests but won't undo placed pieces.",7)
     elseif page=="Materials" then
         pageHead(scroll,"Material director","The studio automatically picks a different finish for each architectural feature.")
         local current=block(scroll,102,C.raised)
@@ -1545,7 +1536,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 0.7",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 0.8",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -1633,4 +1624,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v0.7 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v0.8 loaded. Preview is local; confirmed builder actions may place permanent structures.")
