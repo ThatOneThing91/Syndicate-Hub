@@ -12812,9 +12812,14 @@ return function(cfg)
                 if signed~=nil then handleOffer(possibleId,signed) end
             end
         end
-        if (sourceName=="ShowOffer" or sourceName=="OfferPresented")
-            and not possibleId then
-            statusText.Text=sourceName.." received; checking offer details..."
+        if offerSignal then
+            if possibleId and decided[possibleId] then
+                -- The response was already sent in this event handler.
+            elseif possibleId then
+                statusText.Text="Customer offer detected; reading value..."
+            else
+                statusText.Text=sourceName.." detected; locating offer GUID..."
+            end
         end
         -- Without known field names, raw numbers could mean prices,
         -- customer stats or percentages. Don't guess argument order.
