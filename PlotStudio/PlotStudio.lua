@@ -642,6 +642,150 @@ end
 local function buildSignature(plot,origin)
     return plot.Name.."|"..tostring(state.design).."|"..tostring(state.floors).."|"..tostring(origin.Position)
 end
+
+-- Respect occupied structures. A wall can only collide with a wall on its
+-- own storey when both run along nearly the same line; intersecting corners
+-- are allowed. Removed intervals are NOT sent again.
+local function overlapLength(u,v)
+    if u.lv~=v.lv then return nil end
+    local axis=u.b-u.a
+    local dir=Vector3.new(axis.X,0,axis.Z)
+    local l=dir.Magnitude
+    if l<1 then return nil end
+    dir=dir/l
+    local diff=v.b-v.a
+    local dir2=Vector3.new(diff.X,0,diff.Z)
+    if dir2.Magnitude<1 or math.abs(dir:Dot(dir2.Unit))<.992 then return nil end
+    local pa,pb=v.a-u.a,v.b-u.a
+    if math.max(math.abs(pa.X*dir.Z-pa.Z*dir.X),
+        math.abs(pb.X*dir.Z-pb.Z*dir.X))>1.1 then return nil end
+    local t1=pa.X*dir.X+pa.Z*dir.Z
+    local t2=pb.X*dir.X+pb.Z*dir.Z
+    local lo,hi=math.max(0,math.min(t1,t2)),math.min(l,math.max(t1,t2))
+    if hi-lo<.55 then return nil end
+    return math.max(0,lo-.25),math.min(l,hi+.25)
+end
+local function openWallSegments(unit,occupied)
+    local len=Vector3.new(unit.b.X-unit.a.X,0,unit.b.Z-unit.a.Z).Magnitude
+    if len<1.8 then return {} end
+    local ranges={{0,len}}
+    for _,other in ipairs(occupied) do
+        if other.kind=="Wall" then
+            local lo,hi=overlapLength(unit,other)
+            if lo then
+                local nextRanges={}
+                for _,range in ipairs(ranges) do
+                    if lo>=range[2] or hi<=range[1] then
+                        nextRanges[#nextRanges+1]=range
+                    else
+                        if lo-range[1]>=1.8 then nextRanges[#nextRanges+1]={range[1],lo} end
+                        if range[2]-hi>=1.8 then nextRanges[#nextRanges+1]={hi,range[2]} end
+                    end
+                end
+                ranges=nextRanges
+                if #ranges==0 then break end
+            end
+        end
+    end
+    local result={}
+    for _,range in ipairs(ranges) do
+        result[#result+1]={kind="Wall",lv=unit.lv,
+            a=unit.a:Lerp(unit.b,range[1]/len),
+            b=unit.a:Lerp(unit.b,range[2]/len)}
+    end
+    return result
+end
+local function surfaceOverlaps(a,b)
+    if a.kind~=b.kind or a.lv~=b.lv or not a.cf or not b.cf then return false end
+    if math.abs(a.cf.Position.Y-b.cf.Position.Y)>1.8 then return false end
+    local delta=b.cf.Position-a.cf.Position
+    for _,axis in ipairs({a.cf.RightVector,a.cf.LookVector,b.cf.RightVector,b.cf.LookVector}) do
+        local ra=a.sx/2*math.abs(a.cf.RightVector:Dot(axis))+
+            a.sz/2*math.abs(a.cf.LookVector:Dot(axis))
+        local rb=b.sx/2*math.abs(b.cf.RightVector:Dot(axis))+
+            b.sz/2*math.abs(b.cf.LookVector:Dot(axis))
+        if math.abs(delta:Dot(axis))>=ra+rb-.4 then return false end
+    end
+    return true
+end
+local function occupiedFromPlot(plot,origin)
+    local result={}
+    local h=15
+    pcall(function()
+        local cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig)
+        if type(cfg.StoreyHeight)=="number" then h=cfg.StoreyHeight end
+    end)
+    h=math.clamp(h,6,30)
+    local seen={}
+    for _,name in ipairs({"Structures","Floors","Roofs","Furniture"}) do
+        local folder=plot:FindFirstChild(name)
+        if folder then
+            for _,m in ipairs(folder:GetDescendants()) do
+                if m:IsA("Model") and not seen[m] then
+                    seen[m]=true
+                    local cf,len=m:GetAttribute("WallCFrame"),m:GetAttribute("WallLength")
+                    local level=m:GetAttribute("Storey")
+                    if typeof(cf)=="CFrame" and type(len)=="number" and len>1 then
+                        local lv=type(level)=="number" and level or
+                            math.floor((cf.Position.Y-origin.Position.Y)/h)
+                        result[#result+1]={kind="Wall",
+                            a=cf.Position-cf.RightVector*(len/2),
+                            b=cf.Position+cf.RightVector*(len/2),
+                            lv=math.clamp(math.floor(lv),0,4)}
+                    else
+                        local category=tostring(m:GetAttribute("Category") or
+                            m:GetAttribute("ItemCategory") or "")
+                        local id=tostring(m:GetAttribute("ItemId") or "")
+                        local nameLower=m.Name:lower()
+                        local kind
+                        if category=="Floors" or id=="32" or
+                            nameLower:find("floor",1,true) then kind="Floor"
+                        elseif category=="Roofs" or m:GetAttribute("RoofStyle")~=nil
+                            or nameLower:find("roof",1,true) then kind="Roof" end
+                        if kind then
+                            local ok,box,size=pcall(function() return m:GetBoundingBox() end)
+                            if ok and size.X>=1 and size.Z>=1 and size.X<300 and size.Z<300 then
+                                local lv=type(level)=="number" and level or
+                                    math.floor((box.Position.Y-origin.Position.Y)/h+.15)
+                                result[#result+1]={kind=kind,cf=box,
+                                    sx=size.X,sz=size.Z,lv=math.clamp(math.floor(lv),0,4)}
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return result
+end
+local function filterBuildUnits(units,plot,origin,extra)
+    local occupied=occupiedFromPlot(plot,origin)
+    if extra then occupied[#occupied+1]=extra end
+    local result,skipped,trimmed={},0,0
+    for _,unit in ipairs(units) do
+        if unit.kind=="Wall" then
+            local segments=openWallSegments(unit,occupied)
+            if #segments==0 then skipped=skipped+1
+            else
+                if #segments~=1 or (segments[1].b-segments[1].a).Magnitude<
+                    (unit.b-unit.a).Magnitude-.3 then trimmed=trimmed+1 end
+                for _,seg in ipairs(segments) do
+                    result[#result+1]=seg
+                    occupied[#occupied+1]=seg
+                end
+            end
+        else
+            local blocked=false
+            for _,other in ipairs(occupied) do
+                if surfaceOverlaps(unit,other) then blocked=true;break end
+            end
+            if blocked then skipped=skipped+1
+            else result[#result+1]=unit;occupied[#occupied+1]=unit end
+        end
+    end
+    return result,{skipped=skipped,trimmed=trimmed}
+end
+
 local function buildPlan()
     if not previewFolder then beginPreview() end
     if not previewFolder then return nil end
@@ -692,7 +836,10 @@ local function buildPlan()
         if x.lv~=y.lv then return x.lv<y.lv end
         return priority[x.kind]<priority[y.kind]
     end)
-    return units,plot,origin
+    local extra=build.passed and build.testUnit and
+        build.signature==buildSignature(plot,origin) and build.testUnit or nil
+    local accepted,stats=filterBuildUnits(units,plot,origin,extra)
+    return accepted,plot,origin,stats
 end
 local function eventFor(kind)
     local folder=game:GetService("ReplicatedStorage"):FindFirstChild("Events")
@@ -730,14 +877,13 @@ local function testWall()
         modal("Plot not recognized","Outlines can appear on a nearby plot, but permanent placement needs verified ownership. Make sure you're building on your own plot.")
         return
     end
-    clearPreview(true)
     local units,plot,origin=buildPlan()
     if not units then notify("Could not generate a build plan");return end
     local index
     for i,u in ipairs(units) do if u.kind=="Wall" then index=i;break end end
     if not index or not eventFor("Wall") then notify("Wall event not ready");return end
     build.signature=buildSignature(plot,origin)
-    build.passed=false;build.firstIndex=index;build.cancel=false;build.busy=true
+    build.passed=false;build.testUnit=units[index];build.cancel=false;build.busy=true
     build.status="Testing one wall"
     refreshBuildStatus()
     local before={}
@@ -768,7 +914,7 @@ local function testWall()
 end
 local function startBuild()
     if build.busy then notify("A build is already running");return end
-    local units,plot,origin=buildPlan()
+    local units,plot,origin,stats=buildPlan()
     if not units or not plot then notify("No owned plot detected; build stopped");return end
     if not build.passed or build.signature~=buildSignature(plot,origin) then
         build.passed=false
@@ -776,49 +922,63 @@ local function startBuild()
         return
     end
     if #units>900 then notify("Blueprint shell exceeds placement limit");return end
+    notify("Occupancy scan: "..(stats and stats.skipped or 0)..
+        " occupied skipped; "..(stats and stats.trimmed or 0).." walls trimmed.")
+    if #units==0 then notify("All planned positions occupied; no work needed");return end
     for _,kind in ipairs({"Wall","Floor","Roof"}) do
         if not eventFor(kind) then notify("Place"..kind.." remote missing");return end
     end
     local pace=BUILD_SPEEDS[state.buildSpeed] or BUILD_SPEEDS.Fast
     local selectedSpeed=state.buildSpeed
     build.busy=true;build.cancel=false
-    build.total=math.max(0,#units-1)
+    build.total=#units
     build.sent=0
     build.status="Building ("..selectedSpeed..") 0 / "..build.total
     refreshBuildStatus()
     notify("Build started / "..selectedSpeed.." mode / "..build.total.." requests")
     task.spawn(function()
-        local sent=0
-        local failures=0
+        local sent,failures,extraSkips=0,0,0
+        local fresh=occupiedFromPlot(plot,origin)
         for i,u in ipairs(units) do
-            if build.cancel or not alive then break end
-            if i~=build.firstIndex then
-                local ok,err=pcall(function() fireUnit(u) end)
-                if not ok then
-                    failures=failures+1
-                    notify(tostring(err):sub(1,100))
-                    break
+            if not alive or build.cancel then break end
+            if i%pace.burst==1 then fresh=occupiedFromPlot(plot,origin) end
+            local blocked=false
+            if u.kind=="Wall" then
+                blocked=#openWallSegments(u,fresh)==0
+            else
+                for _,other in ipairs(fresh) do
+                    if surfaceOverlaps(u,other) then blocked=true;break end
                 end
+            end
+            if blocked then
+                extraSkips=extraSkips+1
+            else
+                local ok,err=pcall(function() fireUnit(u) end)
+                if not ok then failures=failures+1;notify(tostring(err):sub(1,100));break end
+                fresh[#fresh+1]=u
                 sent=sent+1
                 build.sent=sent
-                -- Update the status in place without rebuilding the whole GUI.
-                if sent%12==0 or sent==build.total then
-                    build.status="Building ("..selectedSpeed..") "..sent.." / "..build.total
+                if i%12==0 or i==#units then
+                    build.status="Building ("..selectedSpeed..") "..i.." / "..build.total..
+                        " / already occupied "..extraSkips
                     refreshBuildStatus()
                 end
-                -- A short rest after each burst keeps STOP BUILD responsive and
-                -- avoids dumping hundreds of remotes into the server at once.
                 local rest=(sent%pace.burst==0) and pace.cooldown or 0
                 task.wait(pace.interval+rest)
             end
         end
         build.busy=false
         build.passed=false
-        if build.cancel then build.status="Stopped after "..sent.." requests"
-        elseif failures>0 then build.status="Stopped due to a placement error"
-        else build.status="Sent "..sent.." requests; inspect your plot" end
+        build.testUnit=nil
+        if build.cancel then
+            build.status="Stopped after "..sent.." requests"
+        elseif failures>0 then
+            build.status="Stopped due to local placement error"
+        else
+            build.status="Submitted "..sent.." requests; skipped "..extraSkips.." occupied"
+        end
         refreshBuildStatus()
-        notify(build.status..". Already placed pieces remain.")
+        notify(build.status..". The game may still reject some requests; no retry loop.")
         if alive and state.page=="Builder" then switchPage("Builder") end
     end)
 end
@@ -904,6 +1064,15 @@ dialogClose=button(dialog,"GOT IT",22,190,155,34,true,function()
     if fn then fn() end
 end)
 dialogClose.ZIndex=27
+dialogClose.Position=UDim2.new(.05,0,0,190)
+dialogClose.Size=UDim2.new(.42,0,0,34)
+local cancelDialog=button(dialog,"CANCEL",0,190,95,34,false,function()
+    dialogAction=nil
+    overlay.Visible=false
+end)
+cancelDialog.ZIndex=27
+cancelDialog.Position=UDim2.new(.53,0,0,190)
+cancelDialog.Size=UDim2.new(.42,0,0,34)
 modal = function(title,body,confirmText,callback)
     dialogTitle.Text=title
     dialogBody.Text=body
@@ -1103,11 +1272,15 @@ renderPage = function(page)
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
-            modal("Place one real wall?","This sends one real wall placement to your owned plot and may spend in-game money. It does not automatically retry if the server doesn't confirm the wall.","PLACE TEST",testWall)
+            modal("Prepare your plot",
+                "RECOMMENDED: If you want a clean castle, consider manually bulldozing your plot first AFTER backing up anything you want to keep. This is optional and Plot Studio will not bulldoze for you.\n\nIf you keep existing structures, the builder attempts to avoid their occupied positions. The wall test may cost game currency.",
+                "TEST ONE WALL",testWall)
         end)
         button(builderPanel,"2. START BUILD",176,115,160,34,build.passed,function()
             if not build.passed then modal("Test required","Press TEST ONE WALL and wait for a successful confirmation before starting the shell build.");return end
-            modal("Start experimental shell?","This can spend in-game money, placing only the basic walls and floors. Spires, battlements, arches, windows, stairs and furniture are preview-only. You may need to clean up failed or overlapping pieces manually.","START BUILD",startBuild)
+            modal("Build with existing items?",
+                "OPTIONAL: Back up and manually bulldoze if you want a completely clean plot. Bulldozing permanently deletes placed builds. Plot Studio never bulldozes automatically.\n\nOtherwise, occupied segments are skipped and overlapping wall runs are trimmed. The current real builder handles only basic walls/floors. Preview decorations are not permanent.",
+                "START BUILD",startBuild)
         end)
         button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
         local note=block(scroll,80)
@@ -1218,7 +1391,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 0.5",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 0.6",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -1306,4 +1479,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v0.5 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v0.6 loaded. Preview is local; confirmed builder actions may place permanent structures.")
