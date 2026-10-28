@@ -1143,8 +1143,14 @@ local function scanStairs()
         traversedCount=traversedCount+1
         if type(data.Name or data.DisplayName or data.Label or data.Title)=="string"
             and type(data.Category or data.BuildCategory or hint)=="string" then
-            register(data,fallback,source,hint)
-            return
+            local itemId=data.Id or data.ID or data.ItemId or data.ItemID
+                or data.id or fallback
+            if type(itemId)=="number" or type(itemId)=="string" then
+                register(data,fallback,source,hint)
+                return
+            end
+            -- Some catalogs have named category containers; descend to their
+            -- actual item definitions instead of missing the entire folder.
         end
         for key,value in pairs(data) do
             if type(value)=="table" then
@@ -2269,9 +2275,11 @@ renderPage = function(page)
             Size=UDim2.new(1,-34,0,38),TextWrapped=true
         })
         button(hero,"EXPLORE BLUEPRINTS",17,128,192,32,true,function() switchPage("Blueprints") end)
+        button(hero,"BROWSE ITEMS",216,128,137,32,false,function() switchPage("Catalog") end)
 
         local metrics=block(scroll,83)
-        local values={{"31","MATERIALS"},{"5","STOREYS PLANNED"},{"3","PLACE REMOTES"}}
+        local values={{"31","MATERIALS"},{"5","STOREYS PLANNED"},
+            {buildCatalog.scanned and tostring(buildCatalog.total) or "...","BUILD ITEMS"}}
         for i,m in ipairs(values) do
             local x=(i-1)/3
             local cell=ui("Frame",{
@@ -2327,6 +2335,7 @@ renderPage = function(page)
         pill(selected,"CURRENT DESIGN",16,12,130,C.mint)
         text(selected,d.name,16,44,430,30,20,C.white,true,{Size=UDim2.new(1,-34,0,30)})
         button(selected,"CHANGE",16,79,102,23,false,function() switchPage("Blueprints") end)
+        button(selected,"BUILD CATALOG",126,79,150,23,false,function() switchPage("Catalog") end)
 
         local opts=block(scroll,165)
         text(opts,"BUILD SETTINGS",16,13,350,27,15,C.white,true)
@@ -2398,7 +2407,7 @@ renderPage = function(page)
 
 
         local stairsBox=block(scroll,191,C.raised)
-        text(stairsBox,"AUTO STAIRCASE SYSTEM",16,11,420,24,15,C.white,true)
+        text(stairsBox,"BUILD CATALOG + STAIRS",16,11,420,24,15,C.white,true)
         text(stairsBox,"The live catalog now scans automatically. Confirm ONE tread before building custom stairs and ornate details.",16,37,420,48,11,C.dim,false,{
             Size=UDim2.new(1,-32,0,45),TextWrapped=true
         })
@@ -2406,7 +2415,7 @@ renderPage = function(page)
         text(stairsBox,status,16,84,425,22,11,stairTest.passed and C.mint or C.orange,true,{
             Size=UDim2.new(1,-32,0,22)
         })
-        button(stairsBox,"SCAN STAIRS",16,118,139,32,false,function()
+        button(stairsBox,"SCAN ALL ITEMS",16,118,139,32,false,function()
             task.spawn(function()
                 scanStairs()
                 if alive then switchPage("Builder") end
@@ -2867,4 +2876,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v1.5 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v1.5 catalog-ready; building definitions scan automatically. Auction inventory is excluded.")
