@@ -507,8 +507,12 @@ local function beginPreview()
     local function deck(name,x,y,z,sx,sz,col)
         return part(name,"Floor",x,y,z,sx,.55,sz,nil,col)
     end
+    -- Native window models belong to the game's Windows category and must
+    -- snap to a *server-created* wall GUID. A fake glass preview would be
+    -- misleading: it neither creates a real window nor opens the wall.
+    -- Do not synthesize stained-glass panels or window trim here.
     local function glaze(x,y,z,sx,sy,rot)
-        return part("Stained glass","Glass",x,y,z,sx,sy,.22,rot,glass)
+        return nil
     end
     local function crenels(x,z,len,y,rot)
         -- Battlements are decorative Shapes. PlaceWall cannot faithfully
@@ -528,9 +532,9 @@ local function beginPreview()
             local px=x+math.cos(rot)*off
             local pz=z-math.sin(rot)*off
             local y=level*h+h*.57
-            glaze(px,y,pz,3,h*.38,rot)
-            deco("Stone lintel",px,y+h*.22,pz,5,.65,1.25,light,rot)
-            deco("Window sill",px,y-h*.23,pz,4.5,.55,1.15,light,rot)
+            -- Intentionally empty: native Windows are installed only
+            -- after their target structural walls have real GUIDs.
+            -- Window placement is a separate, validated construction stage.
         end
     end
     local function walls(cx,cz,wx,dz,lv,col,entry)
@@ -608,11 +612,8 @@ local function beginPreview()
             end
             deco("Turret cornice",x,(level+1)*h-.35,z,r*2.2,.8,r*2.2,light)
             if level>=1 then
-                if entryFace=="S" then
-                    glaze(x+r+.1,level*h+h*.55,z,2.5,h*.3,math.pi/2)
-                else
-                    glaze(x,level*h+h*.55,z-r-.1,2.5,h*.3,0)
-                end
+                -- Upper turret windows use the native Windows catalog.
+                -- No fake glass or decorative inserts over solid walls.
             end
         end
         local top=levels*h
@@ -1120,6 +1121,10 @@ local buildCatalog={
     skipped=0,total=0,sources={},status="Waiting for initial scan",
     filter="All",query="",scanNumber=0
 }
+local nativeWindow={
+    id=nil,name=nil,passed=false,signature=nil,
+    status="Scan the catalog to identify real structural windows"
+}
 local stairStatus="Build catalog has not been scanned"
 local function scoreWall(name)
     local lower=name:lower()
@@ -1284,6 +1289,7 @@ local function scanStairs()
         return a.id<b.id
     end)
     local stairs,shapes,walls={},{},{}
+    local windows={}
     for _,entry in ipairs(entries) do
         local low=entry.name:lower()
         if low:find("stair",1,true) or low:find("steps",1,true) then
@@ -1297,6 +1303,9 @@ local function scanStairs()
                 or low:find("box",1,true)) then
             shapes[#shapes+1]=entry
         end
+        if entry.category=="Windows" then
+            windows[#windows+1]=entry
+        end
         if entry.category=="Walls" then
             local wall={
                 id=entry.id,name=entry.name,category=entry.category,
@@ -1306,6 +1315,17 @@ local function scanStairs()
         end
     end
     table.sort(stairs,function(a,b)return a.name:lower()<b.name:lower() end)
+    table.sort(windows,function(a,b)
+        local function score(v)
+            local n=v.name:lower()
+            return (n:find("gothic",1,true) and 50 or 0)
+                +(n:find("arched",1,true) and 40 or 0)
+                +(n:find("stone",1,true) and 20 or 0)
+                +(n:find("window",1,true) and 10 or 0)
+        end
+        if score(a)~=score(b) then return score(a)>score(b) end
+        return a.name:lower()<b.name:lower()
+    end)
     table.sort(shapes,function(a,b)
         local function score(row)
             local n=row.name:lower()
@@ -1338,6 +1358,21 @@ local function scanStairs()
     stairCatalog.shape=stairCatalog.shape or shapes[1]
     stairCatalog.models=stairs
     stairCatalog.walls=walls
+    local priorWindow=nativeWindow.id
+    local chosenWindow
+    for _,entry in ipairs(windows) do
+        if entry.id==priorWindow then chosenWindow=entry;break end
+    end
+    chosenWindow=chosenWindow or windows[1]
+    if (chosenWindow and chosenWindow.id or nil)~=priorWindow then
+        nativeWindow.passed=false
+        nativeWindow.signature=nil
+    end
+    nativeWindow.id=chosenWindow and chosenWindow.id or nil
+    nativeWindow.name=chosenWindow and chosenWindow.name or nil
+    nativeWindow.status=chosenWindow and
+        ("Native Windows: "..#windows.." styles / selected "..chosenWindow.name..
+        " / single-window test required") or "No native Windows found in catalog"
     stairCatalog.scanned=true
     stairCatalog.scanning=false
     stairCatalog.error=nil
@@ -1353,7 +1388,7 @@ local function scanStairs()
     buildCatalog.status="Found "..#entries.." building items in "..
         tostring(#BUILD_CATEGORIES).." eligible categories"
     stairStatus=#stairs.." stair models | "..#shapes..
-        " shapes | "..#walls.." walls (auto-detected)"
+        " shapes | "..#walls.." walls | "..#windows.." native windows"
     notify("Build Catalog: "..#entries.." build items / stock & inventory excluded")
     return true
 end
@@ -2895,6 +2930,18 @@ renderPage = function(page)
                                 stairTest.passed=false
                                 notify("Shape candidate: "..item.name..". Retest stair tread.")
                             end
+                        end
+                    elseif item.category=="Windows" then
+                        message=message..
+                            "\n\nUse this real structural window style for the native PlaceWindow stage? Requires a wall GUID and a successful single-window test."
+                        label="SELECT WINDOW"
+                        action=function()
+                            nativeWindow.id=item.id
+                            nativeWindow.name=item.name
+                            nativeWindow.passed=false
+                            nativeWindow.signature=nil
+                            nativeWindow.status="Selected "..item.name.." / TEST ONE WINDOW required"
+                            notify("Native window selected: "..item.name)
                         end
                     else
                         message=message..
