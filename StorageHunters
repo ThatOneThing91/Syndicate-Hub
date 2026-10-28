@@ -530,6 +530,12 @@ local function New(className, properties, parent)
         object[property] = value
     end
 
+    -- Gamepad directional navigation must be able to focus our buttons.
+    -- Activations use GuiButton.Activated for mouse, touch, and controller.
+    if object:IsA("GuiButton") and (not properties or properties.Selectable == nil) then
+        object.Selectable = true
+    end
+
     object.Parent = parent
 
     return object
@@ -1037,6 +1043,7 @@ do
         Font = Enum.Font.GothamBold,
         ZIndex = 50,
         AutoButtonColor = false,
+        Selectable = false, -- mouse/touch resize grip, not a gamepad action
     }, Main)
 
     local resizing = false
@@ -1437,7 +1444,7 @@ local function CreateToggle(parent, text, stateKey, callback)
     end
 
     TrackConnection(
-        button.MouseButton1Click:Connect(function()
+        button.Activated:Connect(function()
             if HubDestroyed then
                 return
             end
@@ -1523,7 +1530,7 @@ local function CreateAutoBidStatus(parent)
 
     Corner(AutoBidStatusLabel, 14)
 
-    TrackConnection(AutoBidStatusLabel.MouseButton1Click:Connect(function()
+    TrackConnection(AutoBidStatusLabel.Activated:Connect(function()
         if HubDestroyed then return end
         if ThisHubInstance.ToggleAutoBid then
             ThisHubInstance.ToggleAutoBid()
@@ -1632,7 +1639,7 @@ local function CreateDropdown(parent, title, initialValue, initialOptions, callb
     end
 
     TrackConnection(
-        button.MouseButton1Click:Connect(function()
+        button.Activated:Connect(function()
             if HubDestroyed or #options == 0 then
                 return
             end
@@ -1708,7 +1715,7 @@ local function CreateDropdown(parent, title, initialValue, initialOptions, callb
 
                 Corner(optionButton, 5)
 
-                optionButton.MouseButton1Click:Connect(function()
+                optionButton.Activated:Connect(function()
                     currentValue = option
                     button.Text = label(option)
 
@@ -1743,7 +1750,7 @@ local function CreateActionButton(parent, text, callback)
     Corner(button, 7)
 
     TrackConnection(
-        button.MouseButton1Click:Connect(function()
+        button.Activated:Connect(function()
             if not HubDestroyed then
                 task.spawn(callback)
             end
@@ -6431,7 +6438,7 @@ do
             row.frame.Parent = content
         end
     end
-    TrackConnection(header.MouseButton1Click:Connect(function()
+    TrackConnection(header.Activated:Connect(function()
         content.Visible = not content.Visible
         header.Text = content.Visible and "\071\097\114\100\101\110\032\065\117\116\111\109\097\116\105\111\110\032\032\226\150\188" or "\071\097\114\100\101\110\032\065\117\116\111\109\097\116\105\111\110\032\032\226\150\182"
     end))
@@ -6516,7 +6523,7 @@ do
         end)
     end)
     turnInButton.LayoutOrder = halloweenOrder + 1
-    TrackConnection(halloweenHeader.MouseButton1Click:Connect(function()
+    TrackConnection(halloweenHeader.Activated:Connect(function()
         halloweenContent.Visible = not halloweenContent.Visible
         halloweenHeader.Text = halloweenContent.Visible
             and "\072\097\108\108\111\119\101\101\110\032\069\118\101\110\116\032\032\226\150\188" or "\072\097\108\108\111\119\101\101\110\032\069\118\101\110\116\032\032\226\150\182"
@@ -9283,7 +9290,7 @@ local function SetupTestsRuleBuilder()
                     }, row)
                     Corner(removeButton, 5)
 
-                    TrackConnection(removeButton.MouseButton1Click:Connect(function()
+                    TrackConnection(removeButton.Activated:Connect(function()
                         ManualSaleExclusions[item.Guid] = true
                         SetStatus(item.Name .. "\032\114\101\109\111\118\101\100\032\102\114\111\109\032\115\097\108\101\032\113\117\101\117\101\046", Color3.fromRGB(100, 210, 140))
                         task.spawn(RefreshLiveInfo)
@@ -9540,12 +9547,12 @@ local function SetupTestsRuleBuilder()
             task.spawn(RefreshLiveInfo)
         end
 
-        TrackConnection(sellButton.MouseButton1Click:Connect(function()
+        TrackConnection(sellButton.Activated:Connect(function()
             config.Mode = "\083\101\108\108\032\083\101\108\101\099\116\101\100"
             RefreshMode()
         end))
 
-        TrackConnection(keepButton.MouseButton1Click:Connect(function()
+        TrackConnection(keepButton.Activated:Connect(function()
             config.Mode = "\075\101\101\112\032\083\101\108\101\099\116\101\100"
             RefreshMode()
         end))
@@ -9641,7 +9648,7 @@ local function SetupTestsRuleBuilder()
                     }, listFrame)
                     Corner(button, 5)
 
-                    TrackConnection(button.MouseButton1Click:Connect(function()
+                    TrackConnection(button.Activated:Connect(function()
                         local activeTable = CurrentRules()[key]
 
                         if activeTable[value] then
@@ -9664,7 +9671,7 @@ local function SetupTestsRuleBuilder()
                 )
             end
 
-            TrackConnection(header.MouseButton1Click:Connect(function()
+            TrackConnection(header.Activated:Connect(function()
                 open = not open
                 Rebuild()
             end))
@@ -9723,7 +9730,7 @@ local function SetupTestsRuleBuilder()
         }, root)
         Corner(presetButton, 7)
 
-        TrackConnection(presetButton.MouseButton1Click:Connect(function()
+        TrackConnection(presetButton.Activated:Connect(function()
             if not presetEnabled then
                 table.clear(presetAdded.Rarities)
                 table.clear(presetAdded.Mutators)
@@ -9772,7 +9779,7 @@ local function SetupTestsRuleBuilder()
         }, root)
         Corner(keepMutationsButton, 7)
 
-        TrackConnection(keepMutationsButton.MouseButton1Click:Connect(function()
+        TrackConnection(keepMutationsButton.Activated:Connect(function()
             if not keepMutationsEnabled then
                 keepMutationsSnapshot = {
                     Mode = config.Mode,
@@ -9821,7 +9828,7 @@ local function SetupTestsRuleBuilder()
         }, root)
         Corner(clearButton, 7)
 
-        TrackConnection(clearButton.MouseButton1Click:Connect(function()
+        TrackConnection(clearButton.Activated:Connect(function()
             table.clear(ActiveFilter.Rarities)
             table.clear(ActiveFilter.Mutators)
             presetEnabled = false
@@ -9906,12 +9913,12 @@ local function SetupTestsRuleBuilder()
         rateToggle.BackgroundColor3 = QuickSell.AutoRate and ThemeColor or OffColor
     end
 
-    TrackConnection(inventoryToggle.MouseButton1Click:Connect(function()
+    TrackConnection(inventoryToggle.Activated:Connect(function()
         QuickSell.AutoInventory = not QuickSell.AutoInventory
         RefreshTriggerButtons()
     end))
 
-    TrackConnection(rateToggle.MouseButton1Click:Connect(function()
+    TrackConnection(rateToggle.Activated:Connect(function()
         QuickSell.AutoRate = not QuickSell.AutoRate
         RefreshTriggerButtons()
     end))
@@ -10093,7 +10100,7 @@ local function SetupTestsRuleBuilder()
     }, TestsPage)
     Corner(restoreQueueButton, 7)
 
-    TrackConnection(restoreQueueButton.MouseButton1Click:Connect(function()
+    TrackConnection(restoreQueueButton.Activated:Connect(function()
         table.clear(ManualSaleExclusions)
         SetStatus("\088\045\114\101\109\111\118\101\100\032\105\116\101\109\115\032\114\101\115\116\111\114\101\100\032\116\111\032\102\105\108\116\101\114\032\101\118\097\108\117\097\116\105\111\110\046", MutedText)
         task.spawn(RefreshLiveInfo)
@@ -10110,7 +10117,7 @@ local function SetupTestsRuleBuilder()
     }, TestsPage)
     Corner(sellNowButton, 7)
 
-    TrackConnection(sellNowButton.MouseButton1Click:Connect(function()
+    TrackConnection(sellNowButton.Activated:Connect(function()
         task.spawn(function()
             SellEligible("\077\097\110\117\097\108")
         end)
@@ -10243,10 +10250,10 @@ local function ShowTests()
     TestsTabButton.BackgroundColor3 = ThemeColor
 end
 
-TrackConnection(MainTabButton.MouseButton1Click:Connect(ShowMain))
-TrackConnection(FarmingTabButton.MouseButton1Click:Connect(ShowFarming))
-TrackConnection(ShopTabButton.MouseButton1Click:Connect(ShowShop))
-TrackConnection(TestsTabButton.MouseButton1Click:Connect(ShowTests))
+TrackConnection(MainTabButton.Activated:Connect(ShowMain))
+TrackConnection(FarmingTabButton.Activated:Connect(ShowFarming))
+TrackConnection(ShopTabButton.Activated:Connect(ShowShop))
+TrackConnection(TestsTabButton.Activated:Connect(ShowTests))
 
                                                                 
                
@@ -10452,7 +10459,7 @@ TrackConnection(
 )
 
 TrackConnection(
-    ThemeButton.MouseButton1Click:Connect(function()
+    ThemeButton.Activated:Connect(function()
         if not HubDestroyed then
             ThemePicker.Visible = not ThemePicker.Visible
         end
@@ -10694,7 +10701,7 @@ TrackConnection(UserInputService.InputEnded:Connect(function(input)
     end
 end))
 
-TrackConnection(ThisHubInstance.RestoreButton.MouseButton1Click:Connect(function()
+TrackConnection(ThisHubInstance.RestoreButton.Activated:Connect(function()
     if HubDestroyed or ThisHubInstance.IconDidDrag
         or ThisHubInstance.IconSuppressClick then return end
     State.HubVisible = true
@@ -10707,7 +10714,7 @@ end))
 ThisHubInstance.Destroy = DestroyHub
 
 TrackConnection(
-    MinimizeButton.MouseButton1Click:Connect(function()
+    MinimizeButton.Activated:Connect(function()
         if HubDestroyed then
             return
         end
@@ -10722,7 +10729,7 @@ TrackConnection(
 )
 
 TrackConnection(
-    CloseButton.MouseButton1Click:Connect(function()
+    CloseButton.Activated:Connect(function()
         if HubDestroyed then
             return
         end
@@ -10734,7 +10741,7 @@ TrackConnection(
 )
 
 TrackConnection(
-    CancelCloseButton.MouseButton1Click:Connect(function()
+    CancelCloseButton.Activated:Connect(function()
         if not HubDestroyed then
             ConfirmOverlay.Visible = false
         end
@@ -10742,7 +10749,7 @@ TrackConnection(
 )
 
 TrackConnection(
-    DestroyHubButton.MouseButton1Click:Connect(function()
+    DestroyHubButton.Activated:Connect(function()
         DestroyHub()
     end)
 )
@@ -11499,7 +11506,7 @@ end)
                                                                                
                                                                 
 
-TrackConnection(ThisHubInstance.TestsExtraTabButton.MouseButton1Click:Connect(function()
+TrackConnection(ThisHubInstance.TestsExtraTabButton.Activated:Connect(function()
     if HubDestroyed then
         return
     end
@@ -11517,22 +11524,22 @@ TrackConnection(ThisHubInstance.TestsExtraTabButton.MouseButton1Click:Connect(fu
     ThisHubInstance.TestsExtraTabButton.BackgroundColor3 = ThemeColor
 end))
 
-TrackConnection(MainTabButton.MouseButton1Click:Connect(function()
+TrackConnection(MainTabButton.Activated:Connect(function()
     ThisHubInstance.TestsExtraPage.Visible = false
     ThisHubInstance.TestsExtraTabButton.BackgroundColor3 = ButtonBackground
 end))
 
-TrackConnection(FarmingTabButton.MouseButton1Click:Connect(function()
+TrackConnection(FarmingTabButton.Activated:Connect(function()
     ThisHubInstance.TestsExtraPage.Visible = false
     ThisHubInstance.TestsExtraTabButton.BackgroundColor3 = ButtonBackground
 end))
 
-TrackConnection(ShopTabButton.MouseButton1Click:Connect(function()
+TrackConnection(ShopTabButton.Activated:Connect(function()
     ThisHubInstance.TestsExtraPage.Visible = false
     ThisHubInstance.TestsExtraTabButton.BackgroundColor3 = ButtonBackground
 end))
 
-TrackConnection(TestsTabButton.MouseButton1Click:Connect(function()
+TrackConnection(TestsTabButton.Activated:Connect(function()
     ThisHubInstance.TestsExtraPage.Visible = false
     ThisHubInstance.TestsExtraTabButton.BackgroundColor3 = ButtonBackground
 end))
