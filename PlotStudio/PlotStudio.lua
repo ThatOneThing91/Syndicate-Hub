@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.8: unified version display and incremental release numbering
+    Standalone Plot Studio v2.9: captured wall elevation correction and detailed build diagnostics
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -22,7 +22,7 @@ local NAME = "StorageHunters_PlotStudio"
 -- Single release version. Bump this value once per published update:
 -- 2.8 -> 2.9 -> 3.0 -> 3.1 (never 2.10).
 -- All visible version labels use this constant.
-local VERSION = "2.8"
+local VERSION = "2.9"
 
 if type(env[KEY]) == "function" then pcall(env[KEY]) end
 for _, parent in ipairs({CoreGui, player:WaitForChild("PlayerGui")}) do
@@ -1967,10 +1967,15 @@ local function fireUnit(u)
         local desiredMaterial=u.material or profile.wall
         local wallId=stairCatalog.wall and stairCatalog.wall.id
         if not wallId then error("No verified solid-wall candidate") end
-        -- Captured PlaceWall and PlaceFloor used nil optional finish fields.
-        -- Do not send unverified finish overrides that may invalidate placement.
-        -- Preview colors/materials are conceptual until separately confirmed.
-        r:FireServer(wallId,"Walls",u.a,u.b,
+        -- The Cobalt capture recorded endpoints at Y=1720.1639404,
+        -- but the separate height reference at Y=1720.5044404.
+        -- Keep that observed delta relative to this plot's base level.
+        -- This placement geometry requires live validation; no accepted
+        -- result is assumed merely because FireServer did not throw.
+        local wallBaseY=u.a.Y-0.3405
+        local startPos=Vector3.new(u.a.X,wallBaseY,u.a.Z)
+        local endPos=Vector3.new(u.b.X,wallBaseY,u.b.Z)
+        r:FireServer(wallId,"Walls",startPos,endPos,
             Vector3.new(diff.X,0,diff.Z).Magnitude,
             math.atan2(-diff.Z,diff.X),u.a.Y,
             nil,nil,nil,u.lv)
@@ -3910,6 +3915,7 @@ local function startBuild()
     task.spawn(function()
         local counts={Wall=0,Floor=0,StairShape=0,Door=0,Roof=0,DetailShape=0}
         local errors={}
+        local firstWallRequest,firstFloorRequest=nil,nil
         local ok,err=pcall(function()
             local function note(msg) errors[#errors+1]=msg end
             local function stage(name)
@@ -3997,6 +4003,14 @@ local function startBuild()
                             for _,m in ipairs(structs:GetChildren()) do
                                 if m:IsA("Model") then before[m]=true end
                             end
+                        end
+                        if not firstWallRequest then
+                            local a,b=u.a,u.b
+                            firstWallRequest=string.format(
+                                "ID=%s endpoints=(%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f) refY=%.3f level=%d",
+                                tostring(stairCatalog.wall and stairCatalog.wall.id),
+                                a.X,a.Y-.3405,a.Z,b.X,b.Y-.3405,b.Z,
+                                a.Y,u.lv)
                         end
                         local worked,reason=pcall(function() fireUnit(u) end)
                         build.sent=build.sent+1
@@ -4086,6 +4100,12 @@ local function startBuild()
                     if not rejected and u.sx>=2.25 and u.sz>=2.25 then
                         local coverage=floorCoverage(u,occupiedFromPlot(plot,origin))
                         if coverage<=.04 then
+                            if not firstFloorRequest then
+                                local p=u.cf.Position
+                                firstFloorRequest=string.format(
+                                    "ID=32 center=(%.3f,%.3f,%.3f) size=%.2fx%.2f level=%d",
+                                    p.X,p.Y,p.Z,u.sx,u.sz,u.lv)
+                            end
                             local okay,errText=pcall(function() fireUnit(u) end)
                             build.sent=build.sent+1
                             local confirmed=okay and waitFor(function()
@@ -4315,6 +4335,9 @@ local function startBuild()
                 ", door "..counts.Door..", roofs "..counts.Roof..
                 ", ornaments "..counts.DetailShape..
                 "\nRemote requests sent (not proof of success): "..build.sent..
+                "\nFirst wall call: "..(firstWallRequest or "none")..
+                "\nFirst floor call: "..(firstFloorRequest or "none")..
+                "\nPlot origin: "..tostring(origin.Position)..
                 "\nStill missing from shell: "..missingWalls..
                 " walls / "..missingFloors.." floors"..
                 "\nNotes: "..(issues=="" and "No client errors recorded." or issues)..
