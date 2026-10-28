@@ -1224,6 +1224,9 @@ local function missingFloorGapUnits(plot,origin,physical,limit)
                     if missing then
                         uncovered=uncovered+1
                         if not first then first=ix end
+                        -- Small independent strips are much less likely to
+                        -- collide with the edge of an existing slab.
+                        if ix-first+1>=3 then finishRun(ix) end
                     elseif first then
                         finishRun(ix-1)
                     end
@@ -3316,15 +3319,33 @@ local function newShellCanAttach(u,physical)
     end
     if existingWalls<4 then return true end
     if u.kind=="Floor" then
-        -- Do not populate an unrelated, new building footprint. A new floor
-        -- must have nearby existing masonry on this storey or the one below.
+        -- An interior hole may be far from a wall, but next to an
+        -- existing slab. Accept a same-storey floor neighbour with a
+        -- small edge distance. Still reject isolated, unrelated wings.
+        local center=u.cf.Position
         for _,v in ipairs(physical) do
-            if v.kind=="Wall" and (v.lv==u.lv or v.lv==u.lv-1) then
-                local mid=(v.a+v.b)*.5
-                local c=u.cf.Position
-                if Vector2.new(mid.X-c.X,mid.Z-c.Z).Magnitude<
-                    math.max(u.sx,u.sz)*.68+5 then
+            if v.kind=="Floor" and v.cf and v.lv==u.lv and
+                math.abs(v.cf.Position.Y-center.Y)<2.4 then
+                local localCenter=v.cf:PointToObjectSpace(center)
+                if math.abs(localCenter.X)<v.sx*.5+u.sx*.5+5 and
+                    math.abs(localCenter.Z)<v.sz*.5+u.sz*.5+5 then
                     return true
+                end
+            elseif v.kind=="Wall" and
+                (v.lv==u.lv or v.lv==u.lv-1) then
+                local a,b=v.a,v.b
+                local ab=b-a
+                local len=ab.X*ab.X+ab.Z*ab.Z
+                if len>.01 then
+                    local t=math.clamp(
+                        ((center.X-a.X)*ab.X+(center.Z-a.Z)*ab.Z)/len,
+                        0,1)
+                    local near=a+ab*t
+                    local d=Vector2.new(center.X-near.X,
+                        center.Z-near.Z).Magnitude
+                    if d<math.max(u.sx,u.sz)*.65+7 then
+                        return true
+                    end
                 end
             end
         end
@@ -3764,19 +3785,13 @@ local function inspectCurrentPlot()
     end
     local missing={Wall=0,Floor=0,Roof=0}
     local protected=0
-    if units then
-        for _,u in ipairs(units) do
-            if u.kind=="Wall" or u.kind=="Floor" then
-                if not shellConfirmed(u,occupied) then
-                    if newShellCanAttach(u,occupied) then
-                        missing[u.kind]=missing[u.kind]+1
-                    else
-                        protected=protected+1
-                    end
-                end
-            end
+    local requests,stats=shellRepairCandidates(plot,origin,occupied)
+    for _,u in ipairs(requests) do
+        if missing[u.kind]~=nil then
+            missing[u.kind]=missing[u.kind]+1
         end
     end
+    protected=stats.protected
     local w,d=getFootprint(plot)
     build.lastAudit="LIVE PLOT SNAPSHOT (READ ONLY)\n"..
         "Plot: "..plot.Name..
@@ -3786,7 +3801,9 @@ local function inspectCurrentPlot()
         "\nReal roofs: "..existing.Roof..
         "\nShape-like instances: "..#shapeModels(plot)..
         "\nMissing wall segments near existing layout: "..missing.Wall..
-        "\nMissing interior floor tiles: "..missing.Floor..
+        "\nMissing interior floor strips: "..missing.Floor..
+        "\nFloor cells sampled: "..stats.sampledCells..
+        "\nFloor cells lacking coverage: "..stats.missingCells..
         "\nUnrelated/new layout pieces held back: "..protected..
         "\n\nWindows/doors are separate native items."..
         "\nPreview geometry is NOT a saved original blueprint."..
@@ -4506,20 +4523,20 @@ renderPage = function(page)
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"Scan your current plot and fill missing walls/floors without erasing the existing layout. Native roofs, doors, windows and Shapes are independent. Preview is not a guarantee.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"Auto-repair rechecks the live plot, retries missing wall/floor gaps and writes a copyable placement diagnostic. Roofs, doors, windows and Shapes remain separate.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
-        button(builderPanel,"BUILD / REPAIR SHELL",16,115,229,34,false,function()
-            modal("Build the missing structural shell?",
-                "REAL SHELL VIEW displays the remaining wall and floor placement requests after the current plot is checked. Stair confirmation is NOT required. This action does not build roof, windows, doors, or decorative Shapes. Your existing plot will NOT be erased. Some requests may still fail collision or server checks.",
-                "BUILD STRUCTURE",startBuild)
+        button(builderPanel,"AUTO REPAIR SHELL + GAPS",16,115,229,34,false,function()
+            modal("Automatically repair missing walls and floor gaps?",
+                "Runs up to 4 live plot scans and 120 paced requests without needing to press the button again. Each location gets up to 3 attempts with confirmation checks and cooldowns. Missing 4-stud floor sections are prioritized. Stops on request budget, no progress, or STOP. Existing structures are not removed. Full failure diagnostics are available in COPY LOG.",
+                "START AUTO REPAIR",startBuild)
         end)
         button(builderPanel,"STOP",252,115,84,34,false,stopBuild)
         button(builderPanel,"SCAN PLOT",16,156,135,26,false,inspectCurrentPlot)
         button(builderPanel,"VIEW AUDIT",159,156,131,26,false,function()
             modal("Last construction audit",build.lastAudit)
         end)
-        button(builderPanel,"COPY LOG",297,156,117,26,false,function()
+        button(builderPanel,"COPY FULL LOG",297,156,117,26,false,function()
             local copy=type(setclipboard)=="function" and setclipboard or
                 (type(toclipboard)=="function" and toclipboard or nil)
             if not copy then
@@ -4534,7 +4551,7 @@ renderPage = function(page)
         end)
         local note=block(scroll,80)
         sectionNote(note,"KEEP YOUR EXISTING PLOT",
-            "Build/repair missing walls and floors without stair confirmation. Use the independent door, roof and wing operations for missing features.",7)
+            "AUTO REPAIR checks each placement up to 3 times and continues through multiple passes. Use STOP to cancel. COPY FULL LOG includes exact coordinates, confirmation and suspected causes. No existing parts are deleted.",7)
     elseif page=="Catalog" then
         pageHead(scroll,"Build Catalog","Live building items discovered in Storage Hunters.")
         local summary=block(scroll,132,C.raised)
