@@ -13382,6 +13382,7 @@ return function(cfg)
     local shopperFolder=workspace:FindFirstChild("_NPCShoppers")
     local function resolveShopper(npc)
         if typeof(npc)~="Instance" then return nil end
+        shopperFolder=workspace:FindFirstChild("_NPCShoppers")
         if shopperFolder and npc:IsDescendantOf(shopperFolder) then return npc end
         return nil
     end
@@ -13425,16 +13426,13 @@ return function(cfg)
     local function onOutgoingPresented(id,offeredPercent,npc)
         if closed or not active or not uuid(id) then return end
         local n=tonumber(offeredPercent)
-        if not n or n~=n or n<0 or n>400 then
-            statusText.Text="Offer ID found; numeric value unavailable"
-            return
-        end
         local shopper=resolveShopper(npc)
         if typeof(npc)=="Instance" and not shopper then
             statusText.Text="Offer shopper no longer active"
             return
         end
-        refreshShopStock()
+        local ticket={}
+        offerTickets[id]=ticket
         pendingIds[id]=os.clock()
         lastIncomingOfferAt=os.clock()
         outgoingCount=outgoingCount+1
@@ -13450,22 +13448,27 @@ return function(cfg)
         -- the server's creation of the offer.
         task.spawn(function()
             task.wait(.22)
-            if closed or not active or decided[id] then return end
+            if closed or not active or decided[id]
+                or offerTickets[id]~=ticket then return end
             local guiPct,guiGuid=offerPanelPercent()
             local finalPct,source=nil,nil
-            if guiPct~=nil and (not guiGuid or guiGuid==id) then
+            if shopper and shopper.Parent then
+                local sign=readGuiOffer(shopper)
+                if sign and (not sign.id or sign.id==id) then
+                    finalPct,source=sign.pct,"this shopper's sign"
+                end
+            end
+            if finalPct~=nil then
+                -- This sign belongs to the NPC in this exact event.
+            elseif guiPct~=nil and guiGuid==id then
                 finalPct=guiPct
                 source="visible offer GUI"
             elseif percent<=-100 then
                 finalPct=-100
                 source="unconditional minimum threshold"
             else
-                -- Cobalt's second argument is a number such as 114.34.
-                -- Interpret it as percentage OF item value: 114.34 => +14.34%.
-                -- This interpretation needs confirmation against the actual
-                -- game's offer display; do not treat it as a currency amount.
-                finalPct=n-100
-                source="OfferPresented percentage-of-value (provisional)"
+                statusText.Text="Offer captured; waiting for this customer's %"
+                return
             end
             if finalPct>=-100 and finalPct<=300 then
                 statusText.Text="Offer "..tostring(math.floor(finalPct*10+.5)/10)..
@@ -13574,6 +13577,7 @@ return function(cfg)
         local presented=shopper:FindFirstChild("OfferPresented")
         local shown=shopper:FindFirstChild("ShowOffer")
         local hidden=shopper:FindFirstChild("HideOffer")
+        enableOutgoingCapture()
         -- Listen for future offers AND scan world-space signs already
         -- displayed, which may have appeared before this toggle was on.
         local shoppersFolder=workspace:FindFirstChild("_NPCShoppers")
@@ -13592,7 +13596,7 @@ return function(cfg)
                 if i%1800==0 then task.wait() end
             end
         end)
-        statusText.Text="Scanning visible shopper offers (world + screen)"
+        statusText.Text="Listening for NPC offers; scanning shopper signs"
         task.spawn(function()
             while not closed and active do
                 local ok,problem=pcall(pollOfferGui)
@@ -13612,7 +13616,18 @@ return function(cfg)
             stopListeners()
             statusText.Text="OFF · Requires a verifiable offer percentage"
         else
-            active=subscribe()
+            -- task.spawn starts immediately: activate BEFORE subscribe()
+            -- launches the GUI scanner and attaches offer callbacks.
+            active=true
+            local ok,subscribed=pcall(subscribe)
+            if not ok or not subscribed then
+                active=false
+                stopListeners()
+                if not ok then
+                    statusText.Text="Offer setup failed; see executor console"
+                    warn("[Auto Shop Offers] "..tostring(subscribed))
+                end
+            end
         end
         toggle.Text=active and "ON" or "OFF"
         toggle.BackgroundColor3=active and purple or off
