@@ -1,7 +1,7 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone GUI prototype v0.1
-    UI-only: no plot RemoteEvents are fired and no buildings are created.
+    Standalone GUI prototype v0.2 with local 3D blueprint previews
+    No plot RemoteEvents are fired. Previews are local and temporary.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
 
@@ -214,7 +214,7 @@ for i, data in ipairs(navSpecs) do
     navButtons[data[1]] = {button=b, label=lbl}
     on(b.MouseButton1Click, function() if switchPage then switchPage(data[1]) end end)
 end
-local sidebarBottom = text(sidebar, "VERSION 0.1  •  DEMO", 15, 0, 164, 18, 10, C.muted, true)
+local sidebarBottom = text(sidebar, "VERSION 0.2  •  PREVIEW", 15, 0, 164, 18, 10, C.muted, true)
 sidebarBottom.AnchorPoint = Vector2.new(0,1)
 sidebarBottom.Position = UDim2.new(0,15,1,-16)
 
@@ -228,7 +228,7 @@ local footer = ui("Frame", {
     Position = UDim2.new(0,0,1,-33), Size = UDim2.new(1,0,0,33),
 }, win)
 ui("Frame", {BackgroundColor3=C.line, BorderSizePixel=0, Size=UDim2.new(1,0,0,1)}, footer)
-local footLabel = text(footer, "●  SAFE DEMO  ·  No game build events are fired", 13, 3, 510, 30, 10, C.mint, true)
+local footLabel = text(footer, "●  SAFE DEMO  ·  No build events are fired", 13, 3, 510, 30, 10, C.mint, true)
 local resize = ui("TextButton", {
     BackgroundTransparency=1, Text="◢", Font=Enum.Font.GothamBold,
     TextColor3=C.muted, TextSize=20, AnchorPoint=Vector2.new(1,1),
@@ -253,6 +253,135 @@ local function notify(message)
     task.delay(3.1, function()
         if alive and id == noticeNumber then toast.Visible = false end
     end)
+end
+
+
+-- Client-only architectural previews. No remote calls and no changes to saved plots.
+local PREVIEW_NAME = "StorageHunters_PlotStudio_LocalPreview"
+local previewFolder = nil
+local function clearPreview(silent)
+    if previewFolder then pcall(function() previewFolder:Destroy() end); previewFolder=nil end
+    local old=workspace:FindFirstChild(PREVIEW_NAME)
+    if old then pcall(function() old:Destroy() end) end
+    if not silent then notify("3D preview cleared") end
+end
+clearPreview(true)
+
+local function ownedPlot()
+    local plots=workspace:FindFirstChild("_Plots")
+    if not plots then return nil end
+    for _,plot in ipairs(plots:GetChildren()) do
+        if plot:GetAttribute("OwnerUserId")==player.UserId then return plot end
+        local board=plot:FindFirstChild("OwnerHeadshot")
+        local label=board and board:FindFirstChild("OwnerName")
+        local ownerName
+        if label then
+            if label:IsA("StringValue") then ownerName=label.Value
+            elseif label:IsA("TextLabel") or label:IsA("TextButton") then ownerName=label.Text
+            else ownerName=label:GetAttribute("Value") end
+        end
+        if ownerName==player.Name then return plot end
+    end
+    return nil
+end
+
+local function plotFrame(plot)
+    if not plot then return nil end
+    local x,y,z=plot:GetAttribute("OriginX"),plot:GetAttribute("OriginY"),plot:GetAttribute("OriginZ")
+    local rot=plot:GetAttribute("RotationY") or 0
+    local base=plot:FindFirstChild("Base")
+    local floor=base and base:FindFirstChild("Floor")
+    if typeof(x)=="number" and typeof(y)=="number" and typeof(z)=="number" then
+        local sizeY=plot:GetAttribute("SizeY")
+        if typeof(sizeY)=="number" then y=y+sizeY/2
+        elseif floor and floor:IsA("BasePart") then y=floor.Position.Y+floor.Size.Y/2 end
+        return CFrame.new(x,y,z)*CFrame.Angles(0,math.rad(rot),0)
+    end
+    if floor and floor:IsA("BasePart") then
+        return CFrame.new(floor.Position+Vector3.new(0,floor.Size.Y/2,0))*(floor.CFrame-floor.CFrame.Position)
+    end
+    return nil
+end
+
+local function beginPreview()
+    clearPreview(true)
+    local plot=ownedPlot()
+    if not plot then notify("Your plot was not detected. Claim it first."); return end
+    local origin=plotFrame(plot)
+    if not origin then notify("Plot coordinates unavailable; preview skipped.");return end
+    local selected=designs[state.design]
+    if not selected then return end
+    local cfg
+    pcall(function() cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig) end)
+    local storeyHeight=cfg and cfg.StoreyHeight or 15
+    if typeof(storeyHeight)~="number" or storeyHeight<6 or storeyHeight>30 then storeyHeight=15 end
+    local material=Enum.Material.Slate
+    pcall(function()
+        local candidate=Enum.Material[state.material]
+        if candidate then material=candidate end
+    end)
+    previewFolder=Instance.new("Folder")
+    previewFolder.Name=PREVIEW_NAME
+    previewFolder.Parent=workspace
+    local floors=math.min(state.floors,selected.floors)
+    local w=state.design==5 and 22 or (state.design==2 and 48 or (state.design==4 and 38 or 56))
+    local d=state.design==4 and 50 or w
+    local count=0
+    local function make(label,x,y,z,sx,sy,sz,rotation,shade)
+        local p=Instance.new("Part")
+        p.Name=label
+        p.Anchored=true
+        p.CanCollide=false;p.CanTouch=false;p.CanQuery=false
+        p.CastShadow=false
+        p.Material=material
+        p.Color=shade or state.color
+        p.Transparency=.58
+        p.Size=Vector3.new(sx,sy,sz)
+        p.CFrame=origin*CFrame.new(x,y,z)*CFrame.Angles(0,rotation or 0,0)
+        p.Parent=previewFolder
+        count=count+1
+    end
+    local function room(cx,cz,width,depth,level,door)
+        local y=level*storeyHeight
+        local h=storeyHeight
+        if level>0 then make("Floor",cx,y-.25,cz,width,.5,depth) end
+        make("Back wall",cx,y+h/2,cz+depth/2,width,h,.55)
+        make("Left wall",cx-width/2,y+h/2,cz,depth,h,.55,math.pi/2)
+        make("Right wall",cx+width/2,y+h/2,cz,depth,h,.55,math.pi/2)
+        if door and level==0 and width>18 then
+            local side=(width-12)/2
+            make("Front wall L",cx-width/2+side/2,y+h/2,cz-depth/2,side,h,.55)
+            make("Front wall R",cx+width/2-side/2,y+h/2,cz-depth/2,side,h,.55)
+        else
+            make("Front wall",cx,y+h/2,cz-depth/2,width,h,.55)
+        end
+    end
+    for level=0,floors-1 do
+        if state.design==3 then
+            room(-21,0,22,44,level,true)
+            room(21,0,22,44,level,true)
+            if level>0 then make("Skybridge",0,level*storeyHeight-.25,0,22,.5,9) end
+        else
+            room(0,0,w,d,level,true)
+        end
+    end
+    if state.design==1 or state.design==2 then
+        local tw=state.design==1 and 13 or 11
+        for _,sx in ipairs({-1,1}) do
+            for _,sz in ipairs({-1,1}) do
+                local x,z=sx*w/2,sz*d/2
+                for level=0,floors-1 do room(x,z,tw,tw,level,false) end
+                make("Tower roof",x,floors*storeyHeight-.25,z,tw+1,.5,tw+1)
+            end
+        end
+    end
+    if state.design==3 then
+        make("West roof",-21,floors*storeyHeight-.25,0,24,.5,46)
+        make("East roof",21,floors*storeyHeight-.25,0,24,.5,46)
+    else
+        make("Roof",0,floors*storeyHeight-.25,0,w+.7,.5,d+.7)
+    end
+    notify("3D preview: "..selected.name.." ("..count.." temporary parts)")
 end
 
 local function pageView()
@@ -362,6 +491,7 @@ local function showcaseCard(scroll, d, index)
     local selected = state.design == index
     local btn=button(p,selected and "SELECTED ✓" or "SELECT",16,105,108,20,selected,function()
         state.design=index
+        if previewFolder then beginPreview() end
         notify(d.name.." selected as active blueprint")
         switchPage("Blueprints")
     end)
@@ -457,6 +587,7 @@ renderPage = function(page)
         text(opts,"Planned storeys",16,55,260,24,13,C.dim,false)
         local minusF=button(opts,"−",16,85,37,34,false,function()
             state.floors=math.max(1,state.floors-1)
+            if previewFolder then beginPreview() end
             switchPage("Builder")
         end)
         minusF.TextSize=20
@@ -465,6 +596,7 @@ renderPage = function(page)
         })
         local plusF=button(opts,"+",114,85,37,34,false,function()
             state.floors=math.min(5,state.floors+1)
+            if previewFolder then beginPreview() end
             switchPage("Builder")
         end)
         plusF.TextSize=19
@@ -475,15 +607,16 @@ renderPage = function(page)
             "Material: "..state.material.."     /     Accent: "..state.colorName,10)
         button(choice,"CHOOSE MATERIAL",16,76,165,28,false,function() switchPage("Materials") end)
 
-        local action=block(scroll,119,C.raised)
-        text(action,"READY TO DESIGN",16,12,380,25,15,C.mint,true)
-        text(action,"Build operations are intentionally disabled in this GUI preview.",16,41,430,32,12,C.dim,false,{
-            Size=UDim2.new(1,-32,0,32),TextWrapped=true
+        local action=block(scroll,145,C.raised)
+        text(action,"3D WORLD PREVIEW",16,12,380,25,15,C.mint,true)
+        text(action,"Draw a temporary blueprint over your own plot to inspect its dimensions and floors. It is visible only to you.",16,39,430,38,12,C.dim,false,{
+            Size=UDim2.new(1,-32,0,40),TextWrapped=true
         })
-        button(action,"START BUILD  (DEMO)",16,82,184,28,true,function()
-            modal("Builder not enabled",
-                "This release is the interface prototype only. No structures were created or modified.\n\nOnce the placement engine and blueprint format are tested, this control can start a verified build with progress and cancellation.")
-        end)
+        button(action,"SHOW BLUEPRINT",16,91,162,33,true,beginPreview)
+        button(action,"CLEAR PREVIEW",185,91,138,33,false,function() clearPreview(false) end)
+        local buildHint=block(scroll,90)
+        sectionNote(buildHint,"PERSISTENT CONSTRUCTION — NOT ENABLED",
+            "The actual PlaceWall, PlaceFloor and PlaceRoof build engine still needs live placement verification. Preview first; no plot items are purchased or placed.",9)
     elseif page=="Materials" then
         pageHead(scroll,"Material palette","31 materials captured from the Storage Hunters editor.")
         local current=block(scroll,102,C.raised)
@@ -515,6 +648,7 @@ renderPage = function(page)
             on(b.MouseButton1Click,function()
                 state.color=entry[1]
                 state.colorName=entry[2]
+                if previewFolder then beginPreview() end
                 switchPage("Materials")
             end)
         end
@@ -560,6 +694,7 @@ renderPage = function(page)
                     }) end
                     on(row.MouseButton1Click,function()
                         state.material=name
+                        if previewFolder then beginPreview() end
                         notify(name.." selected")
                         switchPage("Materials")
                     end)
@@ -587,7 +722,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 0.1",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 0.2",
             "Independent of Syndicate Hub. No imported models, network calls, or plot changes in this release.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -599,6 +734,7 @@ end
 local function closeStudio()
     if not alive then return end
     alive=false
+    clearPreview(true)
     for _, connection in ipairs(connections) do
         pcall(function() connection:Disconnect() end)
     end
