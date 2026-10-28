@@ -768,10 +768,14 @@ local function beginPreview()
                 local dx,dz=x2-x1,z2-z1
                 local len=math.sqrt(dx*dx+dz*dz)
                 if len>=1.8 then
+                    -- A 3D wall's local X axis transforms as (cos(a),-sin(a)).
+                    -- Snap shared endpoints once, not individual centers.
                     local angle=math.atan2(-dz,dx)
-                    wall(name,(x1+x2)/2,lev*h+h/2,(z1+z2)/2,len,h,angle,col)
+                    local overlap=math.min(.16,len*.015)
+                    wall(name,(x1+x2)/2,lev*h+h/2,(z1+z2)/2,
+                        len+overlap,h,angle,col)
                     deco("Curved stone coping",(x1+x2)/2,(lev+1)*h+.45,
-                        (z1+z2)/2,len,.85,1.4,light,angle)
+                        (z1+z2)/2,len+overlap,.85,1.4,light,angle)
                 end
             end
         end
@@ -984,7 +988,8 @@ local function openWallSegments(unit,occupied)
     for _,range in ipairs(ranges) do
         result[#result+1]={kind="Wall",lv=unit.lv,
             a=unit.a:Lerp(unit.b,range[1]/len),
-            b=unit.a:Lerp(unit.b,range[2]/len)}
+            b=unit.a:Lerp(unit.b,range[2]/len),
+            color=unit.color,material=unit.material}
     end
     return result
 end
@@ -2099,6 +2104,9 @@ end
 -- walls/floors and VERIFIED Stair/Detail Shapes appear where their placement
 -- requests would actually go, after the plot's current occupancy is scanned.
 local function showBuildablePreview()
+    -- Always rebuild the authored geometry before deriving placement units.
+    -- Otherwise a previously displayed plan could hide stale design parts.
+    beginPreview()
     local units,plot,origin,stats=buildPlan()
     if not units or not plot or not origin then
         notify("Owned plot required to preview the actual build plan")
@@ -2986,7 +2994,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 1.7",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 1.8",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -3084,4 +3092,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v1.7 open-courtyard builds and placeable-only previews; auction inventory excluded.")
+print("[Plot Studio] v1.8 joined crescent geometry and refreshed actual-build plans; auction inventory excluded.")
