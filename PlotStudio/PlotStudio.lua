@@ -1,5 +1,5 @@
 --[[
-  PLOT COPIER V3.4 | Storage Hunters
+  PLOT COPIER V3.5 | Storage Hunters
   Replaces the old Plot Studio interface (backed up in PlotStudio/Archive).
   Captures replicated builds as relative JSON blueprints.
   Local JSON: SyndicateHub/SavedBases/<name>.json
@@ -14,7 +14,7 @@ local UIS=game:GetService("UserInputService")
 local CoreGui=game:GetService("CoreGui")
 local player=Players.LocalPlayer
 if not player then return end
-local VERSION="3.4"
+local VERSION="3.5"
 local GUI_NAME="Syndicate_PlotCopier"
 local ENV=_G
 pcall(function() if type(getgenv)=="function" then ENV=getgenv() end end)
@@ -332,8 +332,9 @@ local function normalizeBlueprint(bp)
     -- The old JSON remains intact on disk. Migrate it after each load.
     local changed=0
     for _,piece in ipairs(bp.parts or {}) do
-        if piece.kind=="Floor" and tostring(piece.category or "")~="Floors"
-            and tostring(piece.id or "")~="32" then
+        local category=tostring(piece.category or "")
+        if piece.kind=="Floor" and category~="Floors" and
+            category~="Structures" and tostring(piece.id or "")~="32" then
             piece.kind="Item"
             piece.legacyBounds=true
             changed=changed+1
@@ -361,7 +362,11 @@ end
 local function classify(rootName,category,id,name,wallCf,wallLength,roofStyle)
     if typeof(wallCf)=="CFrame" and
         type(wallLength)=="number" and wallLength>1 then return "Wall" end
-    if category=="Floors" or rootName=="Floors" then return "Floor" end
+    if category=="Floors" or rootName=="Floors" or
+        (tostring(id or "")=="32" and
+            (category=="Structures" or category=="Furniture")) then
+        return "Floor"
+    end
     if category=="Roofs" or rootName=="Roofs" or roofStyle~=nil then
         return "Roof"
     end
@@ -824,8 +829,14 @@ local function matches(part,expected,found)
     local distance=(expected.Position-observed.Position).Magnitude
     local radius=part.kind=="Item" and 2.0 or part.kind=="Roof" and 3.0 or 1.5
     if distance>radius then return false end
-    local alignment=math.abs(expected.RightVector:Dot(observed.RightVector))
-    if alignment<.94 then return false end
+    local alignment=expected.RightVector:Dot(observed.RightVector)
+    -- A wall is reversible, but a shelf or decorative item facing
+    -- backward is NOT the same copied object.
+    if part.kind=="Wall" then
+        if math.abs(alignment)<.94 then return false end
+    elseif alignment<.94 then
+        return false
+    end
     if part.kind=="Wall" then return true end
     return closeSize(part.size,found.size,part.kind)
 end
