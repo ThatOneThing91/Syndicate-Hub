@@ -771,7 +771,9 @@ local function beginPreview()
                     -- A 3D wall's local X axis transforms as (cos(a),-sin(a)).
                     -- Snap shared endpoints once, not individual centers.
                     local angle=math.atan2(-dz,dx)
-                    local overlap=math.min(.16,len*.015)
+                    -- The server forbids overlapping wall footprints. Keep
+                -- geometric endpoints shared, with no intentional overlap.
+                local overlap=0
                     wall(name,(x1+x2)/2,lev*h+h/2,(z1+z2)/2,
                         len+overlap,h,angle,col)
                     deco("Curved stone coping",(x1+x2)/2,(lev+1)*h+.45,
@@ -959,8 +961,10 @@ local function overlapLength(u,v)
     local t1=pa.X*dir.X+pa.Z*dir.Z
     local t2=pb.X*dir.X+pb.Z*dir.Z
     local lo,hi=math.max(0,math.min(t1,t2)),math.min(l,math.max(t1,t2))
-    if hi-lo<.55 then return nil end
-    return math.max(0,lo-.25),math.min(l,hi+.25)
+    -- Only treat a substantial collinear run as a duplicate. Adjacent
+    -- curved segments meet at a CORNER and must not erase one another.
+    if hi-lo<1.35 then return nil end
+    return math.max(0,lo-.08),math.min(l,hi+.08)
 end
 local function openWallSegments(unit,occupied)
     local len=Vector3.new(unit.b.X-unit.a.X,0,unit.b.Z-unit.a.Z).Magnitude
@@ -986,10 +990,14 @@ local function openWallSegments(unit,occupied)
     end
     local result={}
     for _,range in ipairs(ranges) do
+        -- Tiny slivers are artifacts of collision clipping. Sending them
+        -- produces server "wall already there" errors and ugly seams.
+        if range[2]-range[1]>=2.25 then
         result[#result+1]={kind="Wall",lv=unit.lv,
             a=unit.a:Lerp(unit.b,range[1]/len),
             b=unit.a:Lerp(unit.b,range[2]/len),
             color=unit.color,material=unit.material}
+        end
     end
     return result
 end
@@ -2029,6 +2037,7 @@ local function startBuild()
         -- distinguish accepted pieces from throttled/rejected pieces.
         -- Do a bounded single reconciliation against actual replicated models.
         local repairSent,stillMissing=0,0
+        local serverConflicts=0
         if alive and not build.cancel and failures==0 and #submitted>0 then
             build.status="Checking server-placed pieces..."
             refreshBuildStatus()
@@ -2051,14 +2060,29 @@ local function startBuild()
                 if not present(u) then missing[#missing+1]=u end
                 if i%125==0 then task.wait() end
             end
-            local maximumRetry=math.min(#missing,75)
+            -- A wall with an adjacent corner or a short occupied overlap is
+            -- not necessarily missing. Never blindly retry wall requests:
+            -- the server can correctly reject them as already occupied.
+            local retryable={}
+            for _,u in ipairs(missing) do
+                if u.kind=="Wall" then
+                    serverConflicts=serverConflicts+1
+                elseif u.kind=="Floor" or u.kind=="Roof" then
+                    retryable[#retryable+1]=u
+                else
+                    -- Shapes may not be reflected in occupancy immediately;
+                    -- don't place duplicates on a speculative retry.
+                    serverConflicts=serverConflicts+1
+                end
+            end
+            local maximumRetry=math.min(#retryable,30)
             if maximumRetry>0 then
                 notify("Construction audit: "..#missing..
                     " pieces not confirmed / rechecking up to "..maximumRetry)
             end
             for i=1,maximumRetry do
                 if build.cancel or not alive then break end
-                local u=missing[i]
+                local u=retryable[i]
                 if i%10==1 then snapshot=occupiedFromPlot(plot,origin) end
                 if not present(u) then
                     local ok,err=pcall(function() fireUnit(u) end)
@@ -2091,7 +2115,8 @@ local function startBuild()
             build.status="Stopped due to local placement error"
         else
             build.status="Submitted "..sent.." + "..repairSent..
-                " repair requests; "..stillMissing.." unconfirmed placements"
+                " safe repair requests; "..stillMissing.." unconfirmed / "..
+                serverConflicts.." conflicts not retried"
         end
         refreshBuildStatus()
         notify(build.status..". No repeated repair loops. Game server acceptance is not guaranteed.")
@@ -2994,7 +3019,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 1.8",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 1.9",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -3092,4 +3117,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v1.8 joined crescent geometry and refreshed actual-build plans; auction inventory excluded.")
+print("[Plot Studio] v1.9 strict wall endpoints and no speculative wall retries; auction inventory excluded.")
