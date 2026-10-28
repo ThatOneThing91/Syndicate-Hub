@@ -172,7 +172,7 @@ local headerStatus = corner(ui("Frame", {
     Size = UDim2.fromOffset(102, 25),
     BackgroundColor3 = C.purpleDark, BorderSizePixel = 0,
 }, header), 12)
-text(headerStatus, "●  UI PREVIEW", 8, 0, 92, 25, 10, C.white, true)
+text(headerStatus, "●  BUILD BETA", 8, 0, 92, 25, 10, C.white, true)
 
 local minus = button(header, "—", 0, 0, 32, 30, false, nil)
 minus.AnchorPoint = Vector2.new(1, 0.5)
@@ -735,13 +735,13 @@ renderPage = function(page)
         text(hero,"Build something legendary.",17,45,460,32,20,C.white,true,{
             Size=UDim2.new(1,-34,0,32),TextScaled=false
         })
-        text(hero,"A dedicated studio for custom plots, castles, and community blueprints.",17,82,480,38,12,C.dim,false,{
+        text(hero,"Choose a blueprint, preview its outline, then test placement in Builder.",17,82,480,38,12,C.dim,false,{
             Size=UDim2.new(1,-34,0,38),TextWrapped=true
         })
         button(hero,"EXPLORE BLUEPRINTS",17,128,192,32,true,function() switchPage("Blueprints") end)
 
         local metrics=block(scroll,83)
-        local values={{"31","MATERIALS"},{"5","STOREYS PLANNED"},{"0","LIVE ACTIONS"}}
+        local values={{"31","MATERIALS"},{"5","STOREYS PLANNED"},{"3","PLACE REMOTES"}}
         for i,m in ipairs(values) do
             local x=(i-1)/3
             local cell=ui("Frame",{
@@ -1041,4 +1041,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] Standalone UI prototype loaded. No build remotes fired.")
+print("[Plot Studio] v0.3 loaded. Preview is local; confirmed builder actions may place permanent structures.")
