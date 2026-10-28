@@ -20,9 +20,14 @@ local ENV=_G
 pcall(function() if type(getgenv)=="function" then ENV=getgenv() end end)
 local KEY="__SyndicatePlotCopier"
 if type(ENV[KEY])=="function" then pcall(ENV[KEY]) end
+-- Switching from the old Plot Studio should also close its old loops and GUI.
+local oldShutdown=ENV["__StorageHunters_PlotStudio"]
+if type(oldShutdown)=="function" then pcall(oldShutdown) end
 for _,where in ipairs({CoreGui,player:WaitForChild("PlayerGui")}) do
-    local prior=where:FindFirstChild(GUI_NAME)
-    if prior then prior:Destroy() end
+    for _,guiName in ipairs({GUI_NAME,"StorageHunters_PlotStudio"}) do
+        local prior=where:FindFirstChild(guiName)
+        if prior then prior:Destroy() end
+    end
 end
 local alive=true
 local busy=false
@@ -70,8 +75,12 @@ local GUI=make("ScreenGui",{Name=GUI_NAME,ResetOnSpawn=false,
     ZIndexBehavior=Enum.ZIndexBehavior.Sibling,DisplayOrder=10030,
     IgnoreGuiInset=true},nil)
 local guiSet=false
-if type(gethui)=="function" then guiSet=pcall(function() GUI.Parent=gethui() end) end
-if not guiSet then guiSet=pcall(function() GUI.Parent=CoreGui end) end
+if type(gethui)=="function" then
+    guiSet=pcall(function() GUI.Parent=gethui() end) and GUI.Parent~=nil
+end
+if not guiSet then
+    guiSet=pcall(function() GUI.Parent=CoreGui end) and GUI.Parent~=nil
+end
 if not guiSet then GUI.Parent=player:WaitForChild("PlayerGui") end
 local viewport=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1000,700)
 local W=math.min(660,math.max(340,viewport.X-26))
@@ -99,7 +108,7 @@ local function btn(parent,title,x,y,w,h,handler,primary)
         BackgroundColor3=primary and COLORS.purple or COLORS.raised,
         BorderSizePixel=0,Size=UDim2.fromOffset(w,h),
         Position=UDim2.fromOffset(x,y),AutoButtonColor=true},parent),7)
-    if handler then connect(b.MouseButton1Click,function()
+    if handler then connect(b.Activated,function()
         if alive then
             local ok,err=pcall(handler)
             if not ok then log("UI error: "..tostring(err)) end
@@ -135,7 +144,7 @@ btn(top,"—",W-88,15,32,32,function()
     bubble.Visible=true
 end)
 btn(top,"×",W-47,15,32,32,shutdown)
-connect(bubble.MouseButton1Click,function()
+connect(bubble.Activated,function()
     minimized=false
     bubble.Visible=false
     win.Visible=true
@@ -363,7 +372,7 @@ local function fillScroll(scrollObj,rows,selected,clicked)
             Size=UDim2.new(1,-5,0,30),
             Position=UDim2.fromOffset(0,(i-1)*34),
             BorderSizePixel=0},scrollObj),6)
-        connect(b.MouseButton1Click,function() clicked(row.id) end)
+        connect(b.Activated,function() clicked(row.id) end)
     end
     scrollObj.CanvasSize=UDim2.fromOffset(0,#rows*34+4)
 end
