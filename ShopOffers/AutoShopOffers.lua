@@ -251,6 +251,13 @@ return function(cfg)
         local raw=s:match("([+-]%s*%d+%.?%d*)%s*%%")
         return raw and tonumber(raw:gsub("%s+","")) or nil
     end
+    local function buttonLabel(node)
+        if node:IsA("TextButton") then
+            return (node.Text.." "..node.Name):lower()
+        end
+        local label=node:FindFirstChildWhichIsA("TextLabel",true)
+        return (node.Name.." "..(label and label.Text or "")):lower()
+    end
     local function readGuiOffer(container)
         local labels,acceptButton,declineButton,guiId={},nil,nil,nil
         for _,node in ipairs(container:GetDescendants()) do
@@ -260,11 +267,14 @@ return function(cfg)
                     if node.Text~="" then labels[#labels+1]=node.Text end
                 end
                 if node:IsA("GuiButton") then
-                    local value=(node:IsA("TextButton") and node.Text or node.Name):lower()
-                    if (value:find("accept",1,true) or value:find("yes",1,true)) and
+                    local value=buttonLabel(node)
+                    if (value:find("accept",1,true) or
+                        value:find("agree",1,true) or
+                        value:match("^yes%s") or value:match("%syes%s")) and
                         not acceptButton then acceptButton=node end
                     if (value:find("decline",1,true) or
-                        value:find("reject",1,true) or value=="no") and
+                        value:find("reject",1,true) or
+                        value:find("refuse",1,true) or value:match("%sno%s")) and
                         not declineButton then declineButton=node end
                 end
             end
@@ -321,8 +331,12 @@ return function(cfg)
         if not pg then return {} end
         local output,seen={},{}
         for _,node in ipairs(pg:GetDescendants()) do
-            if node:IsA("TextButton") and visible(node) and
-                node.Text:lower():find("accept",1,true) then
+            if node:IsA("GuiButton") and visible(node) then
+                local label=buttonLabel(node)
+                local candidate=label:find("accept",1,true) or
+                    label:find("agree",1,true) or
+                    label:match("^yes%s") or label:match("%syes%s")
+                if candidate then
                 local p=node.Parent
                 for k=1,5 do
                     if not p or p==pg then break end
@@ -335,6 +349,7 @@ return function(cfg)
                         end
                     end
                     p=p.Parent
+                end
                 end
             end
         end
@@ -353,7 +368,7 @@ return function(cfg)
         local id,count=nil,0
         local now=os.clock()
         for guid,receivedAt in pairs(pendingIds) do
-            if decided[guid] or now-receivedAt>15 then
+            if decided[guid] or now-receivedAt>8 then
                 pendingIds[guid]=nil
             else
                 count=count+1
