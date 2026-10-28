@@ -916,56 +916,106 @@ end
 
 
 -- Discover the live furniture catalog rather than guessing five stair IDs.
-local stairCatalog={scanned=false,models={},shape=nil,error=nil}
-local stairStatus="Stair catalog has not been scanned"
+-- Scans real furniture definitions. Hard-coded item "5" is no longer assumed
+-- to be a stone wall: the game may use it for a different wall style.
+local stairCatalog={
+    scanned=false,scanning=false,models={},shape=nil,wall=nil,walls={},error=nil
+}
+local stairStatus="Building catalog: auto-scan when opening Builder"
 local function scanStairs()
+    if stairCatalog.scanning then return false end
+    stairCatalog.scanning=true
+    stairStatus="Scanning available stairs, shapes and walls..."
     local ok,registry=pcall(function()
         return require(game:GetService("ReplicatedStorage").Modules.Furniture)
     end)
     if not ok or type(registry)~="table" or type(registry.GetById)~="function" then
         stairCatalog.scanned=false
-        stairCatalog.error="Furniture registry is unavailable"
+        stairCatalog.scanning=false
+        stairCatalog.error="Furniture catalog unavailable"
         stairStatus=stairCatalog.error
         notify(stairStatus)
         return false
     end
-    local models,shapes={},{}
+    local models,shapes,walls={},{},{}
+    local known={}
     local function inspect(data,fallback)
         if type(data)~="table" then return end
         local id=tostring(data.Id or data.ID or data.ItemId or data.id or fallback or "")
         local category=tostring(data.Category or "")
         local label=tostring(data.Name or data.DisplayName or "")
-        if id=="" or label=="" then return end
+        if id=="" or label=="" or known[id] then return end
+        known[id]=true
         local lower=label:lower()
         if lower:find("stair",1,true) or lower:find("steps",1,true) then
-            models[#models+1]={id=id,name=label,category=category}
+            models[#models+1]={id=id,name=label,category=category,data=data}
         end
-        if category=="Shapes" and
-            (lower:find("block",1,true) or lower:find("cube",1,true)
-                or lower:find("box",1,true)) then
-            shapes[#shapes+1]={id=id,name=label,category=category}
+        if category=="Shapes" and (lower:find("block",1,true)
+            or lower:find("cube",1,true) or lower:find("box",1,true)) then
+            shapes[#shapes+1]={id=id,name=label,category=category,data=data}
+        end
+        if category=="Walls" then
+            local score=0
+            if lower:find("glass",1,true) or lower:find("clear",1,true)
+                or lower:find("window",1,true) or lower:find("transparent",1,true) then
+                score=-999
+            else
+                if lower:find("stone",1,true) then score=score+140 end
+                if lower:find("brick",1,true) then score=score+110 end
+                if lower:find("solid",1,true) then score=score+100 end
+                if lower:find("plaster",1,true) then score=score+90 end
+                if lower:find("plain",1,true) then score=score+80 end
+                if lower:find("wood",1,true) then score=score+65 end
+                if lower:find("wall",1,true) then score=score+35 end
+            end
+            walls[#walls+1]={id=id,name=label,score=score,data=data}
         end
     end
-    local known={}
-    for i=1,1900 do
+    -- The game furniture module exposes GetById. Scan candidate catalog IDs.
+    for i=1,2400 do
         local okItem,data=pcall(function() return registry:GetById(tostring(i)) end)
-        if okItem and type(data)=="table" then
-            local id=tostring(data.Id or data.ID or data.ItemId or i)
-            if not known[id] then known[id]=true;inspect(data,i) end
-        end
+        if okItem then inspect(data,i) end
         if i%250==0 then task.wait() end
     end
-    table.sort(models,function(a,b)return a.name<b.name end)
-    table.sort(shapes,function(a,b)return a.name<b.name end)
+    table.sort(models,function(x,y)return x.name<y.name end)
+    table.sort(shapes,function(x,y)
+        local function rank(v)
+            local n=v.name:lower()
+            return (n:find("cube",1,true) and 20 or 0)
+                +(n:find("block",1,true) and 10 or 0)
+        end
+        return rank(x)>rank(y)
+    end)
+    table.sort(walls,function(x,y)
+        if x.score~=y.score then return x.score>y.score end
+        return x.name<y.name
+    end)
     stairCatalog.models=models
     stairCatalog.shape=shapes[1]
+    stairCatalog.walls=walls
+    stairCatalog.wall=walls[1] and walls[1].score>=0 and walls[1] or nil
     stairCatalog.scanned=true
+    stairCatalog.scanning=false
     stairCatalog.error=nil
-    stairStatus=string.format("Catalog: %d stair models / %d block shapes",#models,#shapes)
+    stairStatus="Found "..#models.." stairs / "..#shapes.." block shapes / "..#walls.." wall styles"
     notify(stairStatus)
-    return #shapes>0 or #models>0
+    return true
 end
-
+local function ensureCatalog()
+    if stairCatalog.scanned then return true end
+    return scanStairs()
+end
+local function isGlassModel(model)
+    local seen,glass=0,0
+    for _,part in ipairs(model:GetDescendants()) do
+        if part:IsA("BasePart") and part.Size.Magnitude>2 then
+            seen=seen+1
+            if part.Material==Enum.Material.Glass
+                or part.Transparency>=.55 then glass=glass+1 end
+        end
+    end
+    return seen>0 and glass/seen>=.65
+end
 local function buildPlan()
     if not previewFolder then beginPreview() end
     if not previewFolder then return nil end
@@ -1008,7 +1058,9 @@ local function buildPlan()
                     local x2=-p.Size.X/2+k*p.Size.X/count
                     local a=p.CFrame:PointToWorldSpace(Vector3.new(x1,-p.Size.Y/2,0))
                     local b=p.CFrame:PointToWorldSpace(Vector3.new(x2,-p.Size.Y/2,0))
-                    units[#units+1]={kind="Wall",a=a,b=b,lv=lv}
+                    units[#units+1]={kind="Wall",a=a,b=b,lv=lv,
+                        material=p:GetAttribute("PlotStudioMaterial"),
+                        color=p:GetAttribute("PlotStudioColor")}
                 end
             end
         end
@@ -1094,15 +1146,24 @@ local function stairsAlreadyPresent(plot,u)
 end
 
 local function fireUnit(u)
-    local eventName=u.kind=="StairShape" and "Item" or u.kind
+    local eventName=(u.kind=="StairShape" or u.kind=="DetailShape") and "Item" or u.kind
     local r=eventFor(eventName)
     if not r then error("Missing Place"..eventName) end
-    if u.kind=="StairShape" then
+    if u.kind=="StairShape" or u.kind=="DetailShape" then
         r:FireServer(u.id,"Shapes",u.cf,u.color,u.material,1,u.size,u.lv)
     elseif u.kind=="Wall" then
         local diff=u.b-u.a
-        r:FireServer("5","Walls",u.a,u.b,Vector3.new(diff.X,0,diff.Z).Magnitude,
-            math.atan2(-diff.Z,diff.X),u.a.Y,nil,nil,nil,u.lv)
+        local profile=DESIGN_STYLES[state.design] or DESIGN_STYLES[1]
+        local desiredColor=u.color or profile.wallColor
+        local desiredMaterial=u.material or profile.wall
+        local wallId=stairCatalog.wall and stairCatalog.wall.id
+        if not wallId then error("No verified solid-wall candidate") end
+        -- 3 trailing wall parameters are optional finish fields. The server
+        -- must confirm the result; a sent request alone is not success.
+        r:FireServer(wallId,"Walls",u.a,u.b,
+            Vector3.new(diff.X,0,diff.Z).Magnitude,
+            math.atan2(-diff.Z,diff.X),u.a.Y,
+            desiredColor,desiredColor,desiredMaterial,u.lv)
     elseif u.kind=="Floor" then
         r:FireServer("32","Floors",u.cf,u.sx,u.sz,u.color,u.material,u.lv)
     elseif u.kind=="Roof" then
@@ -1126,6 +1187,12 @@ local function testWall()
         modal("Plot not recognized","Outlines can appear on a nearby plot, but permanent placement needs verified ownership. Make sure you're building on your own plot.")
         return
     end
+    if not ensureCatalog() then notify("Could not read the furniture catalog");return end
+    if not stairCatalog.wall then
+        modal("No solid wall found",
+            "The game's wall catalog did not reveal a non-glass wall. To avoid building another transparent castle, I've stopped the test. Please capture placing an ordinary stone or solid wall and share its event.")
+        return
+    end
     local units,plot,origin=buildPlan()
     if not units then notify("Could not generate a build plan");return end
     local index
@@ -1133,7 +1200,7 @@ local function testWall()
     if not index or not eventFor("Wall") then notify("Wall event not ready");return end
     build.signature=buildSignature(plot,origin)
     build.passed=false;build.testUnit=units[index];build.cancel=false;build.busy=true
-    build.status="Testing one wall"
+    build.status="Testing "..stairCatalog.wall.name.." (item "..stairCatalog.wall.id..")"
     refreshBuildStatus()
     local before={}
     local folder=plot:FindFirstChild("Structures")
@@ -1141,10 +1208,22 @@ local function testWall()
     task.spawn(function()
         local ok,err=pcall(function() fireUnit(units[index]) end)
         local confirmed=false
+        local glassFound=false
         if ok then
-            for _=1,25 do
+            for _=1,30 do
                 if not alive or build.cancel then break end
-                if seeNewWall(plot,before) then confirmed=true;break end
+                local refreshed=plot:FindFirstChild("Structures")
+                if refreshed then
+                    for _,item in ipairs(refreshed:GetChildren()) do
+                        if item:IsA("Model") and not before[item]
+                            and item:GetAttribute("WallLength") then
+                            glassFound=isGlassModel(item)
+                            confirmed=not glassFound
+                            break
+                        end
+                    end
+                end
+                if confirmed or glassFound then break end
                 task.wait(.18)
             end
         end
@@ -1154,7 +1233,8 @@ local function testWall()
             build.status="Wall test passed: ready to continue"
             notify("One wall placed! START BUILD is now available.")
         else
-            build.status=ok and "Wall not confirmed; inspect your plot" or "Wall remote error"
+            build.status=glassFound and "Wall is still transparent: build halted" or
+                (ok and "Solid wall not confirmed; build halted" or "Wall remote error")
             notify(build.status..(ok and "" or ": "..tostring(err):sub(1,90)))
         end
         refreshBuildStatus()
@@ -1171,7 +1251,7 @@ local function testStairShape()
         return
     end
     if not stairCatalog.scanned or not stairCatalog.shape then
-        if not scanStairs() or not stairCatalog.shape then
+        if not ensureCatalog() or not stairCatalog.shape then
             modal("No verified block shape","The catalog scanner could not find a block or cube in the game's Shapes category. Use the build editor to place a block, capture its PlaceItem event and send it to me.")
             return
         end
@@ -1237,6 +1317,10 @@ local function startBuild()
     if not build.passed or build.signature~=buildSignature(plot,origin) then
         build.passed=false
         notify("TEST ONE WALL first for this design and storey count")
+        return
+    end
+    if not stairCatalog.scanned or not stairCatalog.wall then
+        notify("Solid wall style unavailable; stopping to prevent all-glass build")
         return
     end
     -- Multi-storey shells are allowed. An accepted real Shapes tread unlocks
