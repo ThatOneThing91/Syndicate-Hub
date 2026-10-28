@@ -487,7 +487,9 @@ local function beginPreview()
         return part("Stained glass","Glass",x,y,z,sx,sy,.22,rot,glass)
     end
     local function crenels(x,z,len,y,rot)
-        wall("Rampart",x,y,z,len,2.3,rot,dark)
+        -- Battlements are decorative Shapes. PlaceWall cannot faithfully
+        -- produce a 2.3-stud crenel; it creates a full-height wall instead.
+        deco("Carved battlement base",x,y,z,len,2.3,.75,dark,rot)
         local n=math.max(2,math.floor(len/5))
         for j=1,n do
             local off=(j-.5)*len/n-len/2
@@ -536,32 +538,65 @@ local function beginPreview()
             openings(cx,cz-dz/2,wx,lv,0)
         end
     end
-    local function tower(x,z,r,levels,spire)
+    local function tower(x,z,r,levels,spire,entryFace)
         for level=0,levels-1 do
             local y=level*h+h/2
             local facet=r*1.16
+            -- Upper turrets beyond the five buildable storeys are trim, not
+            -- invalid full-height PlaceWall requests.
+            local function towerFace(name,px,pz,len,rot)
+                if level>=state.floors then
+                    deco("High turret sculpture",px,y,pz,len,h,.65,dark,rot)
+                else
+                    wall(name,px,y,pz,len,h,rot,dark)
+                end
+            end
             for _,rot in ipairs({0,math.pi/2}) do
-                for _,s in ipairs({-1,1}) do
-                    local px=x+(rot==0 and 0 or s*r)
-                    local pz=z+(rot==0 and s*r or 0)
-                    wall("Turret face",px,y,pz,facet,h,rot,dark)
+                for _,side in ipairs({-1,1}) do
+                    local px=x+(rot==0 and 0 or side*r)
+                    local pz=z+(rot==0 and side*r or 0)
+                    local hasUpperDoor=level>0 and level<state.floors
+                        and rot==0 and
+                        ((entryFace=="N" and side==1) or
+                        (entryFace=="S" and side==-1))
+                    if hasUpperDoor then
+                        -- Break the wall into two side pieces: a real walkable
+                        -- opening (not a glass pane stuck in front of masonry).
+                        local opening=math.min(7,facet*.45)
+                        local remaining=(facet-opening)*.5
+                        towerFace("Tower doorway west",x-(opening+remaining)*.5,pz,remaining,0)
+                        towerFace("Tower doorway east",x+(opening+remaining)*.5,pz,remaining,0)
+                        deco("Tower doorway lintel",x,level*h+h*.88,pz,
+                            opening+1,h*.23,1.2,light)
+                    else
+                        towerFace("Turret face",px,pz,facet,rot)
+                    end
                 end
             end
             for _,sx in ipairs({-1,1}) do
                 for _,sz in ipairs({-1,1}) do
-                    wall("Octagonal corner",x+sx*r*.69,y,z+sz*r*.69,r*.82,h,
-                        sx==sz and -math.pi/4 or math.pi/4,dark)
+                    towerFace("Octagonal corner",x+sx*r*.69,z+sz*r*.69,
+                        r*.82,sx==sz and -math.pi/4 or math.pi/4)
                 end
             end
-            if level>0 then deck("Floor",x,level*h-.28,z,r*2.1,r*2.1,stone) end
+            if level>0 and level<state.floors then
+                deck("Floor",x,level*h-.28,z,r*2.1,r*2.1,stone)
+            end
             deco("Turret cornice",x,(level+1)*h-.35,z,r*2.2,.8,r*2.2,light)
-            if level>=1 then glaze(x,level*h+h*.55,z-r-.1,2.5,h*.3,0) end
+            if level>=1 then
+                if entryFace=="S" then
+                    glaze(x+r+.1,level*h+h*.55,z,2.5,h*.3,math.pi/2)
+                else
+                    glaze(x,level*h+h*.55,z-r-.1,2.5,h*.3,0)
+                end
+            end
         end
         local top=levels*h
         deco("Crown cornice",x,top+.15,z,r*2.3,1,r*2.3,light)
         for j=1,8 do
             local ang=j*math.pi/4
-            deco("Tower battlement",x+r*math.cos(ang),top+2,z+r*math.sin(ang),2.4,3.1,2.4,dark)
+            deco("Tower battlement",x+r*math.cos(ang),top+2,z+r*math.sin(ang),
+                2.4,3.1,2.4,dark)
         end
         if spire then
             for i=1,8 do
@@ -707,7 +742,9 @@ local function beginPreview()
         wall("East gate wall",(door+side)/2,h*.68,-oz,side,h*1.36,0,dark)
         wall("Vaulted gateway",0,h*1.2,-oz,door,h*.3,0,light)
         for _,x in ipairs({-ox,ox}) do
-            for _,z in ipairs({-oz,oz}) do tower(x,z,r,floors+1,majestic) end
+            for _,z in ipairs({-oz,oz}) do
+                tower(x,z,r,floors+1,majestic,z<0 and "N" or "S")
+            end
         end
         crenels(0,oz,ox*2,h*1.36,0)
         crenels(-ox,0,oz*2,h*1.36,math.pi/2)
@@ -721,6 +758,39 @@ local function beginPreview()
             deco("Carved floor cornice",0,(lv+1)*h-.35,kz,kw+1,1.2,kd+1,light)
         end
         grandStaircase(0,kz,kw-2,kd-2,floors)
+        -- Continuous upper-level circulation. The keep's southern entrance
+        -- reaches the front towers; perimeter galleries connect the rear
+        -- towers. The ground floor remains open for selling plots.
+        if floors>1 then
+            local crossZ=-oz+r*.77
+            local frontKeepZ=kz-kd*.5
+            local northZ=oz-r*.77
+            local sideX=ox-r*.77
+            for lv=1,floors-1 do
+                local y=lv*h-.28
+                local pathCenter=(frontKeepZ+crossZ)*.5
+                local pathLength=math.abs(frontKeepZ-crossZ)+8
+                deck("Castle approach skybridge",0,y,pathCenter,9,pathLength,stone)
+                deck("Front tower connecting gallery",0,y,crossZ,
+                    2*sideX+8,9,stone)
+                deck("Rear tower connecting gallery",0,y,northZ,
+                    2*sideX+8,9,stone)
+                for _,sx in ipairs({-1,1}) do
+                    deck("Rampart skywalk",sx*sideX,y,0,9,2*northZ+8,stone)
+                    -- Fine decorative rails beyond the walkable 9-stud deck.
+                    deco("Gallery stone balustrade",sx*(sideX+5.1),
+                        lv*h+1.3,0,.7,2.7,2*northZ+8,light)
+                end
+                for _,sx in ipairs({-1,1}) do
+                    deco("Approach bronze balustrade",sx*5.05,
+                        lv*h+1.3,pathCenter,.5,2.7,pathLength,light)
+                end
+                deco("Front gallery parapet",0,lv*h+1.3,crossZ-5.2,
+                    2*sideX+8,2.7,.7,light)
+                deco("Rear gallery parapet",0,lv*h+1.3,northZ+5.2,
+                    2*sideX+8,2.7,.7,light)
+            end
+        end
         deco("Crowned keep roof",0,floors*h-.3,kz,kw+1,.8,kd+1,roof)
         for _,z in ipairs({kz-kd/2,kz+kd/2}) do crenels(0,z,kw,floors*h+1,0) end
         for _,x in ipairs({-kw/2,kw/2}) do crenels(x,kz,kd,floors*h+1,math.pi/2) end
@@ -2212,7 +2282,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 1.1",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 1.2",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -2300,4 +2370,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v1.1 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v1.2 loaded. Preview is local; confirmed builder actions may place permanent structures.")
