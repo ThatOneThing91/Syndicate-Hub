@@ -12450,7 +12450,7 @@ end
 
 
 CreateActionButton(ShopPage, "Launch Plot Studio", function()
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/refs/heads/main/PlotStudio/PlotStudio.lua"))()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/PlotStudio/PlotStudio.lua?v=" .. os.time()))()
 end)
 
 ShowMain()
