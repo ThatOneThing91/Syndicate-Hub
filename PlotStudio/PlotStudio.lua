@@ -1239,9 +1239,9 @@ local function startBuild()
         notify("TEST ONE WALL first for this design and storey count")
         return
     end
-    -- Multi-storey shells are now allowed at the user's explicit request.
-    -- Staircase and door props remain visual-only until real item IDs are verified.
-    -- The confirmation dialog warns that upper floors may not be accessible.
+    -- Multi-storey shells are allowed. An accepted real Shapes tread unlocks
+    -- the preview-derived staircase. Prefabricated stair sets are only catalogued
+    -- until their actual dimensions and placement can be checked in-game.
     if state.floors>1 and stairTest.passed and
         stairTest.signature==buildSignature(plot,origin) and stairTest.itemId==
             (stairCatalog.shape and stairCatalog.shape.id) then
