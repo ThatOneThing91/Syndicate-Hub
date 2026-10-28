@@ -3814,7 +3814,6 @@ local function inspectCurrentPlot()
     if not origin then notify("Owned plot not found");return end
     beginPreview()
     local occupied=occupiedFromPlot(plot,origin)
-    local units,_,_,stats=buildPlan()
     local existing={Wall=0,Floor=0,Roof=0}
     for _,v in ipairs(occupied) do
         if existing[v.kind]~=nil then
