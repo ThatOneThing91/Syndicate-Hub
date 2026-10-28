@@ -319,6 +319,7 @@ local State = {
     AutoFishing = false,
     AutoTrickOrTreat = false,
     AutoMarketRolling = false,
+    AutoMarketRollingFive = false,
     GraveDigger = false,
     AutoHarvest = false,
     AutoPlantSeeds = false,
@@ -354,6 +355,7 @@ local RunIds = {
     Fishing = 0,
     TrickOrTreat = 0,
     MarketRolling = 0,
+    MarketRollingFive = 0,
     GraveDigger = 0,
     Harvest = 0,
     PlantSeeds = 0,
@@ -5780,6 +5782,46 @@ do
     end)
 end
 
+do
+    local function active(id)
+        return not HubDestroyed and State.AutoMarketRollingFive
+            and RunIds.MarketRollingFive == id
+    end
+
+    CreateToggle(MainPage, "Auto Market Rolling x5", "AutoMarketRollingFive", function(enabled)
+        RunIds.MarketRollingFive += 1
+        if not enabled then return end
+        local id = RunIds.MarketRollingFive
+        task.spawn(function()
+            local events = ReplicatedStorage:FindFirstChild("\069\118\101\110\116\115")
+            local market = events and events:FindFirstChild("\072\097\108\108\111\119\101\101\110\077\097\114\107\101\116")
+            local roll = market and market:FindFirstChild("\082\111\108\108")
+            if not roll or not roll:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") then
+                if active(id) then
+                    State.AutoMarketRollingFive = false
+                    ToggleObjects.AutoMarketRollingFive(false)
+                    Notify("Market Rolling x5", "\072\097\108\108\111\119\101\101\110\032\077\097\114\107\101\116\032\114\111\108\108\032\114\101\109\111\116\101\032\117\110\097\118\097\105\108\097\098\108\101\046", 4)
+                end
+                return
+            end
+            while active(id) do
+                local ok, result = pcall(function()
+                    return roll:InvokeServer(5)
+                end)
+                if not active(id) then break end
+                if not ok or type(result) ~= "\116\097\098\108\101" or result.success ~= true then
+                    State.AutoMarketRollingFive = false
+                    RunIds.MarketRollingFive += 1
+                    ToggleObjects.AutoMarketRollingFive(false)
+                    Notify("Market Rolling x5", "\082\111\108\108\105\110\103\032\115\116\111\112\112\101\100\058\032\102\097\105\108\101\100\032\111\114\032\117\110\097\118\097\105\108\097\098\108\101\046", 4)
+                    break
+                end
+                task.wait(0.5)
+            end
+        end)
+    end)
+end
+
                                                                               
 do
 (function()
@@ -6473,6 +6515,7 @@ do
         ["\090\111\109\098\105\101\032\067\111\108\108\101\099\116\111\114\032\040\077\097\112\041"] = true,
         ["\065\117\116\111\032\084\114\105\099\107\032\111\114\032\084\114\101\097\116"] = true,
         ["\065\117\116\111\032\077\097\114\107\101\116\032\082\111\108\108\105\110\103"] = true,
+        ["Auto Market Rolling x5"] = true,
         ["\071\114\097\118\101\032\068\105\103\103\101\114"] = true,
     }
     local halloweenOrder = 0
@@ -10582,6 +10625,8 @@ local function DestroyHub()
     RunIds.TrickOrTreat += 1
     State.AutoMarketRolling = false
     RunIds.MarketRolling += 1
+    State.AutoMarketRollingFive = false
+    RunIds.MarketRollingFive += 1
     State.AutoHarvest = false
     State.AutoPlantSeeds = false
     State.AutoWaterPlants = false
