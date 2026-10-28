@@ -1152,6 +1152,13 @@ local function floorCoveredAt(point,lv,physical,margin)
 end
 local function floorCoverage(u,physical)
     if not u.cf or not u.sx or not u.sz then return 0,0,0 end
+    local nearby={}
+    for _,v in ipairs(physical) do
+        if v.kind=="Floor" and v.cf and v.lv==u.lv and
+            math.abs(v.cf.Position.Y-u.cf.Position.Y)<2.4 then
+            nearby[#nearby+1]=v
+        end
+    end
     local nx=math.clamp(math.ceil(u.sx/3.5),2,14)
     local nz=math.clamp(math.ceil(u.sz/3.5),2,14)
     local hit,total=0,nx*nz
@@ -1160,7 +1167,7 @@ local function floorCoverage(u,physical)
             local point=u.cf:PointToWorldSpace(Vector3.new(
                 (ix-.5)*u.sx/nx-u.sx*.5,0,
                 (iz-.5)*u.sz/nz-u.sz*.5))
-            if floorCoveredAt(point,u.lv,physical,.12) then
+            if floorCoveredAt(point,u.lv,nearby,.12) then
                 hit=hit+1
             end
         end
@@ -1193,6 +1200,13 @@ local function missingFloorGapUnits(plot,origin,physical,limit)
             local nx=math.max(1,math.ceil(p.Size.X/3))
             local nz=math.max(1,math.ceil(p.Size.Z/3))
             local dx,dz=p.Size.X/nx,p.Size.Z/nz
+            local nearby={}
+            for _,v in ipairs(physical) do
+                if v.kind=="Floor" and v.cf and v.lv==lv and
+                    math.abs(v.cf.Position.Y-p.Position.Y)<2.4 then
+                    nearby[#nearby+1]=v
+                end
+            end
             local runs={}
             for iz=1,nz do
                 if #out+#runs>=maxUnits or scanned>=maxSamples then break end
@@ -1222,7 +1236,7 @@ local function missingFloorGapUnits(plot,origin,physical,limit)
                     local point=p.CFrame:PointToWorldSpace(Vector3.new(
                         (ix-.5)*dx-p.Size.X*.5,0,
                         (iz-.5)*dz-p.Size.Z*.5))
-                    local missing=not floorCoveredAt(point,lv,physical,.12)
+                    local missing=not floorCoveredAt(point,lv,nearby,.12)
                     if missing then
                         uncovered=uncovered+1
                         if not first then first=ix end
