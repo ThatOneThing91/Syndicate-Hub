@@ -1644,8 +1644,28 @@ local function stairsAlreadyPresent(plot,u)
     for _,model in ipairs(furniture:GetChildren()) do
         if model:IsA("Model") and
             tostring(model:GetAttribute("ItemId") or "")==tostring(u.id) then
-            if (model:GetPivot().Position-u.cf.Position).Magnitude<1.3 then
-                return true
+            local ok,box,size=pcall(function() return model:GetBoundingBox() end)
+            if ok and (model:GetPivot().Position-u.cf.Position).Magnitude<1.35 then
+                -- Same item ID + approximate position is NOT enough. A
+                -- different-size Shape previously caused false "all filled".
+                local intended=u.size
+                local fits=math.abs(size.X-intended.X)<math.max(.85,intended.X*.25)
+                    and math.abs(size.Y-intended.Y)<math.max(.55,intended.Y*.40)
+                    and math.abs(size.Z-intended.Z)<math.max(.85,intended.Z*.25)
+                if fits then
+                    local visible,walkable=false,false
+                    for _,piece in ipairs(model:GetDescendants()) do
+                        if piece:IsA("BasePart") and piece.Transparency<.88 then
+                            visible=true
+                            if piece.CanCollide and piece.CFrame.UpVector.Y>.7 then
+                                walkable=true
+                            end
+                        end
+                    end
+                    if visible and (u.kind~="StairShape" or walkable) then
+                        return true
+                    end
+                end
             end
         end
     end
@@ -1939,10 +1959,13 @@ local function ornateDetailUnits(plot,origin,maxUnits)
     local prioritized={}
     local function rank(name)
         local low=name:lower()
-        if low:find("spire",1,true) or low:find("finial",1,true) then return 100 end
-        if low:find("battlement",1,true) or low:find("merlon",1,true) then return 95 end
-        if low:find("column",1,true) or low:find("capital",1,true) then return 85 end
-        if low:find("cornice",1,true) or low:find("keystone",1,true) then return 80 end
+        -- First make the accessible entrance/courtyard look finished;
+        -- very tall spires are often outside the build height and fail.
+        if low:find("column",1,true) or low:find("capital",1,true) then return 100 end
+        if low:find("cornice",1,true) or low:find("keystone",1,true) then return 95 end
+        if low:find("lintel",1,true) or low:find("sill",1,true) then return 90 end
+        if low:find("battlement",1,true) or low:find("merlon",1,true) then return 80 end
+        if low:find("spire",1,true) or low:find("finial",1,true) then return 10 end
         if low:find("gate",1,true) or low:find("portcullis",1,true) then return 78 end
         if low:find("lantern",1,true) or low:find("banner",1,true) then return 75 end
         if low:find("balustrade",1,true) or low:find("railing",1,true) then return 70 end
@@ -1962,13 +1985,15 @@ local function ornateDetailUnits(plot,origin,maxUnits)
     end)
     local cap=maxUnits or 220
     local layerMax=math.min(state.floors,(designs[state.design] or designs[1]).floors)
+    local plotW,plotD=getFootprint(plot)
     for _,entry in ipairs(prioritized) do
         if #result>=cap then break end
         local p=entry.part
         local height=p.Position.Y-origin.Position.Y
         -- Skip extreme finials above the build envelope, rather than aborting
         -- the remaining ornamentation with an out-of-height request.
-        if height>=0 and height<layerMax*h+7 then
+        if height-p.Size.Y*.5>=-.25 and
+            height+p.Size.Y*.5<=layerMax*h+2 then
             local countX=math.ceil(p.Size.X/12)
             local countY=math.ceil(p.Size.Y/12)
             local countZ=math.ceil(p.Size.Z/12)
@@ -1983,13 +2008,19 @@ local function ornateDetailUnits(plot,origin,maxUnits)
                                 (iy-(countY+1)/2)*sy,
                                 (iz-(countZ+1)/2)*sz
                             )
-                            result[#result+1]={
-                                kind="DetailShape",id=stairCatalog.shape.id,cf=cf,
-                                size=Vector3.new(sx,sy,sz),
-                                color=p:GetAttribute("PlotStudioColor"),
-                                material=p:GetAttribute("PlotStudioMaterial"),
-                                lv=math.clamp(math.floor((cf.Position.Y-origin.Position.Y)/h),0,4)
-                            }
+                            local localPos=origin:PointToObjectSpace(cf.Position)
+                            if math.abs(localPos.X)+sx*.5<plotW*.5-1
+                                and math.abs(localPos.Z)+sz*.5<plotD*.5-1 and
+                                localPos.Y-sy*.5>=-.25 and
+                                localPos.Y+sy*.5<=layerMax*h+2 then
+                                result[#result+1]={
+                                    kind="DetailShape",id=stairCatalog.shape.id,cf=cf,
+                                    size=Vector3.new(sx,sy,sz),
+                                    color=p:GetAttribute("PlotStudioColor"),
+                                    material=p:GetAttribute("PlotStudioMaterial"),
+                                    lv=math.clamp(math.floor(localPos.Y/h),0,4)
+                                }
+                            end
                         end
                     end
                 end
@@ -2002,13 +2033,26 @@ local function staircaseAndDetails(plot,origin)
     local result,skipped={},0
     if not stairTest.passed or stairTest.signature~=buildSignature(plot,origin)
         or stairTest.itemId~=(stairCatalog.shape and stairCatalog.shape.id) then
-        return nil,"Test one real Shape tread first"
+        -- Re-execution should not force another test tread into a staircase
+        -- that already exists. Adopt only a size-matched, solid real tread.
+        for _,u in ipairs(rawStairUnits(plot,origin)) do
+            if stairsAlreadyPresent(plot,u) then
+                stairTest.passed=true
+                stairTest.signature=buildSignature(plot,origin)
+                stairTest.itemId=u.id
+                stairTest.first=u
+                break
+            end
+        end
+    end
+    if not stairTest.passed or stairTest.signature~=buildSignature(plot,origin)
+        or stairTest.itemId~=(stairCatalog.shape and stairCatalog.shape.id) then
+        return nil,"No size-verified existing tread. TEST STAIR TREAD first."
     end
     local stairs=rawStairUnits(plot,origin)
     local details=ornateDetailUnits(plot,origin,260)
     for _,u in ipairs(stairs) do
-        if not sameStairUnit(u,stairTest.first)
-            and not stairsAlreadyPresent(plot,u) then
+        if not stairsAlreadyPresent(plot,u) then
             result[#result+1]=u
         else skipped=skipped+1 end
     end
@@ -2030,7 +2074,10 @@ local function finishCastle()
     end
     local units,err,stairs,details,skipped=staircaseAndDetails(plot,origin)
     if not units then notify(err);return end
-    if #units==0 then notify("All matching staircase/detail positions are already filled");return end
+    if #units==0 then
+        notify("No eligible missing Shapes in the current plan. This does NOT mean the castle is complete. Check the actual build audit.")
+        return
+    end
     if not eventFor("Item") then notify("PlaceItem event missing");return end
     local hasRealMasonry=false
     local structures=plot:FindFirstChild("Structures")
@@ -2053,8 +2100,11 @@ local function finishCastle()
     refreshBuildStatus()
     notify("Finishing "..stairs.." stair treads and up to "..details.." detail shapes")
     task.spawn(function()
-        local sent,skip=0,skipped
-        for i,u in ipairs(units) do
+        local sent,confirmed,failed,skip,consecutive=0,0,0,skipped,0
+        local stairOK,detailOK=0,0
+        local cap=math.min(#units,85)
+        for i=1,cap do
+            local u=units[i]
             if not alive or build.cancel then break end
             if stairsAlreadyPresent(plot,u) then
                 skip=skip+1
@@ -2066,20 +2116,50 @@ local function finishCastle()
                 end
                 sent=sent+1
                 build.sent=sent
-                if i%10==0 or i==#units then
-                    build.status="Finishing: "..i.." / "..#units.." / skipped "..skip
-                    refreshBuildStatus()
+                local found=false
+                for attempt=1,12 do
+                    if not alive or build.cancel then break end
+                    if stairsAlreadyPresent(plot,u) then found=true;break end
+                    task.wait(.16)
                 end
-                task.wait(pace.interval+(sent%pace.burst==0 and pace.cooldown or 0))
+                if found then
+                    confirmed=confirmed+1
+                    consecutive=0
+                    if u.kind=="StairShape" then stairOK=stairOK+1
+                    else detailOK=detailOK+1 end
+                else
+                    failed=failed+1
+                    consecutive=consecutive+1
+                end
+                build.status="Finish: "..confirmed.." confirmed / "..failed..
+                    " unconfirmed / "..skip.." already there"
+                refreshBuildStatus()
+                if consecutive>=3 then
+                    build.status="STOPPED: 3 consecutive unconfirmed Shapes. Check the audit."
+                    break
+                end
+                task.wait(math.max(.15,pace.interval))
             end
         end
         build.busy=false
+        build.lastAudit="SHAPE FINISH AUDIT\n"..
+            "Confirmed: "..confirmed.." (stairs "..stairOK..
+            ", details "..detailOK..")\n"..
+            "Unconfirmed: "..failed.."\n"..
+            "Already verified in plot: "..skip.."\n"..
+            "Attempted this run: "..sent.." / eligible: "..#units..
+            "\nRun cap: 85; never treats sent as placed."..
+            "\nUnconfirmed pieces are not proof of server rejection."
         if build.cancel then build.status="Finishing stopped at "..sent
-        elseif build.status:find("Finish stopped",1,true) then
-            -- Preserve error.
-        else build.status="Finished sending "..sent.." Shape requests; inspect the plot" end
+        elseif build.status:find("Finish stopped",1,true) or
+            build.status:find("STOPPED:",1,true) then
+            -- Preserve the failure reason.
+        else
+            build.status="Finished: "..confirmed.." confirmed / "..failed..
+                " unconfirmed; "..math.max(0,#units-cap).." not attempted"
+        end
         refreshBuildStatus()
-        notify(build.status..". Server acceptance is not guaranteed.")
+        notify(build.status)
         if alive and state.page=="Builder" then switchPage("Builder") end
     end)
 end
