@@ -2821,11 +2821,11 @@ local function repairDoorGaps()
         end
         build.busy=false
         build.lastAudit="DOOR OPENING REPAIR\n"..
-            "Door width: "..math.floor(doorW*100+.5)/100..
-            "\nOpening width: "..math.floor(width*100+.5)/100..
+            "Door width: "..(math.floor(doorW*100+.5)/100)..
+            "\nOpening width: "..(math.floor(width*100+.5)/100)..
             "\nLeft/right measured gaps: "..
-                math.floor(leftGap*100+.5)/100.."/"..
-                math.floor(rightGap*100+.5)/100..
+                (math.floor(leftGap*100+.5)/100).."/"..
+                (math.floor(rightGap*100+.5)/100)..
             "\nSide trim confirmed: "..accepted..
             "\nUnconfirmed: "..missing..
             "\n"..table.concat(notes,"\n")..
