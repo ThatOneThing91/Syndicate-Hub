@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.4.1: multi-pass auto shell repair, measured floor-gap scanning and copyable per-placement diagnostics
+    Standalone Plot Studio v2.5: multi-pass auto shell repair, measured floor-gap scanning and copyable per-placement diagnostics
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -1190,7 +1190,7 @@ local function missingFloorGapUnits(plot,origin,physical,limit)
     if not previewFolder then beginPreview() end
     if not previewFolder then return out,scanned,uncovered,skipped end
     for _,p in ipairs(previewFolder:GetChildren()) do
-        if #out>=maxUnits or scanned>=maxSamples then break end
+        if scanned>=maxSamples then break end
         if p:IsA("BasePart") and
             p:GetAttribute("PlotStudioKind")=="Floor" then
             local lv=math.clamp(math.floor(
@@ -1209,7 +1209,7 @@ local function missingFloorGapUnits(plot,origin,physical,limit)
             end
             local runs={}
             for iz=1,nz do
-                if #out+#runs>=maxUnits or scanned>=maxSamples then break end
+                if scanned>=maxSamples then break end
                 local first=nil
                 local function finishRun(last)
                     if first then
@@ -3523,7 +3523,7 @@ local function shellRepairCandidates(plot,origin,physical)
         sampledCells=samples,overflow=overflow
     }
 end
-local function startBuild()
+local function autoRepairShell()
     if build.busy then notify("A build is already running");return end
     if not ensureCatalog() or not stairCatalog.wall then
         notify("Could not identify a solid wall style from the catalog.")
@@ -3837,6 +3837,388 @@ end
 
 -- The server-replicated plot is the layout snapshot. Nothing is
 -- deleted or redrawn when a script update changes the design concept.
+
+-- Primary one-click builder. Auto-tests each construction type on the first
+-- eligible, confirmed placement, then proceeds with the same verified remote.
+-- The separately named autoRepairShell remains an optional recovery tool.
+local function startBuild()
+    if build.busy then notify("A build is already running");return end
+    if not ownedPlot() then
+        notify("Your owned plot must be available before building.")
+        return
+    end
+    if not ensureCatalog() or not stairCatalog.wall then
+        notify("No solid wall style found. Cannot start safe construction.")
+        return
+    end
+    if not eventFor("Wall") or not eventFor("Floor") then
+        notify("PlaceWall or PlaceFloor is unavailable.")
+        return
+    end
+    beginPreview()
+    local units,plot,origin=buildPlan()
+    if not units or not plot or not origin then
+        notify("Unable to generate the structural build plan.")
+        return
+    end
+    build.busy=true
+    build.cancel=false
+    build.sent=0
+    build.total=#units
+    build.status="START BUILD: checking existing structures..."
+    refreshBuildStatus()
+    task.spawn(function()
+        local ok,err=pcall(function()
+            local counts={Wall=0,Floor=0,StairShape=0,Door=0,Roof=0,DetailShape=0}
+            local errors={}
+            local function note(msg) errors[#errors+1]=msg end
+            local function stage(name)
+                build.status="START BUILD: "..name.." / "..build.sent.." requests"
+                refreshBuildStatus()
+            end
+            local function running()
+                return alive and not build.cancel
+            end
+            local function waitFor(check,n)
+                for i=1,(n or 14) do
+                    if not running() then return false end
+                    if check() then return true end
+                    task.wait(.2)
+                end
+                return running() and check()
+            end
+            -- Streaming can make a populated plot appear almost empty.
+            -- Never reinterpret that temporary snapshot as an invitation to
+            -- overwrite its architecture.
+            local first=occupiedFromPlot(plot,origin)
+            task.wait(1.0)
+            local second=occupiedFromPlot(plot,origin)
+            local function count(physical,kind)
+                local n=0
+                for _,u in ipairs(physical) do
+                    if u.kind==kind then n=n+1 end
+                end
+                return n
+            end
+            local fw,sw=count(first,"Wall"),count(second,"Wall")
+            local ff,sf=count(first,"Floor"),count(second,"Floor")
+            if (math.abs(fw-sw)>math.max(3,fw*.25)) or
+                (math.abs(ff-sf)>math.max(5,ff*.25)) then
+                note("Plot structures changed during the preflight scan. Wait for plot streaming and retry; no requests sent.")
+                return
+            end
+            local chosen
+            local structures=plot:FindFirstChild("Structures")
+            if structures then
+                for _,m in ipairs(structures:GetChildren()) do
+                    if m:IsA("Model") and
+                        typeof(m:GetAttribute("WallCFrame"))=="CFrame" and
+                        not isGlassModel(m) then
+                        chosen=chosen or m:GetAttribute("ItemId")
+                    end
+                end
+            end
+            local row=chosen and buildCatalog.byId["Walls|"..tostring(chosen)]
+            if row and scoreWall(row.name)>=0 then
+                stairCatalog.wall={id=row.id,name=row.name,category="Walls"}
+            end
+            if not running() then return end
+            local wallUnits,floorUnits={},{}
+            for _,u in ipairs(units) do
+                if u.kind=="Wall" then wallUnits[#wallUnits+1]=u
+                elseif u.kind=="Floor" then floorUnits[#floorUnits+1]=u end
+            end
+            local structuralFailure=false
+            local budget=140
+            stage("walls (automatic first-piece test)")
+            local consecutive=0
+            for _,u in ipairs(wallUnits) do
+                if not running() or structuralFailure or build.sent>=budget then break end
+                local live=occupiedFromPlot(plot,origin)
+                if not shellConfirmed(u,live) then
+                    local okay,failure=pcall(function() fireUnit(u) end)
+                    build.sent=build.sent+1
+                    local confirmed=okay and waitFor(function()
+                        return shellConfirmed(u,occupiedFromPlot(plot,origin))
+                    end,14)
+                    if confirmed then
+                        counts.Wall=counts.Wall+1
+                        consecutive=0
+                        build.passed=true
+                        build.signature=buildSignature(plot,origin)
+                    else
+                        consecutive=consecutive+1
+                        if not okay then
+                            note("Wall remote error: "..tostring(failure):sub(1,100))
+                        end
+                        if consecutive>=3 then
+                            structuralFailure=true
+                            note("Three walls were unconfirmed. Stopped before flooring or decorations; no repeated wall spam.")
+                        end
+                    end
+                    stage("walls: "..counts.Wall.." confirmed")
+                    task.wait(.12)
+                end
+            end
+            if not running() or structuralFailure then return end
+            if build.sent>=budget then
+                note("Structural request budget reached. Press START BUILD again to resume confirmed gaps.")
+                return
+            end
+            -- Floor construction uses the original planned slabs, not
+            -- hundreds of thin repair strips. A whole-slab verification
+            -- requires matching coverage at the intended coordinates.
+            stage("floors (checking actual slab coverage)")
+            local _,_,missingBefore=missingFloorGapUnits(
+                plot,origin,occupiedFromPlot(plot,origin),1)
+            local checkpointMissing=missingBefore
+            local checkpointCount=0
+            local floorFailure=0
+            for _,u in ipairs(floorUnits) do
+                if not running() or build.sent>=budget or floorFailure>=3 then break end
+                local live=occupiedFromPlot(plot,origin)
+                if shellCoverage(u,live)<.94 then
+                    local okay,failure=pcall(function() fireUnit(u) end)
+                    build.sent=build.sent+1
+                    local confirmed=okay and waitFor(function()
+                        return shellConfirmed(u,occupiedFromPlot(plot,origin))
+                    end,15)
+                    if confirmed then
+                        counts.Floor=counts.Floor+1
+                        floorFailure=0
+                    else
+                        floorFailure=floorFailure+1
+                        if not okay then
+                            note("Floor remote error: "..tostring(failure):sub(1,100))
+                        end
+                    end
+                    checkpointCount=checkpointCount+1
+                    stage("floors: "..counts.Floor.." confirmed")
+                    if checkpointCount>=6 then
+                        local _,_,missingNow=missingFloorGapUnits(
+                            plot,origin,occupiedFromPlot(plot,origin),1)
+                        if missingNow>=checkpointMissing and counts.Floor>0 then
+                            note("Floor blueprint coverage did not improve over six attempts. Flooring paused to prevent duplicates.")
+                            floorFailure=3
+                            break
+                        end
+                        checkpointMissing=missingNow
+                        checkpointCount=0
+                    end
+                    task.wait(.12)
+                end
+            end
+            if floorFailure>=3 then
+                note("Floor construction paused. Stairs, roofs and decorations were not placed over potentially incomplete floors.")
+                return
+            end
+            if build.sent>=budget then
+                note("Structural request budget reached. Press START BUILD again to continue.")
+                return
+            end
+            if not running() then return end
+            -- Auto-test ONE real stair tread, then continue with verified
+            -- existing/matching Shapes; no separate test button required.
+            if stairCatalog.shape and eventFor("Item") and state.floors>1 then
+                stage("stairs (automatic first-tread test)")
+                local stairs=rawStairUnits(plot,origin)
+                local stairsOK=adoptExistingStairs(plot,origin)
+                local consecutiveStairs=0
+                for _,u in ipairs(stairs) do
+                    if not running() or build.sent>=budget or consecutiveStairs>=3 then break end
+                    if not stairsAlreadyPresent(plot,u) then
+                        local snapshot={}
+                        for _,m in ipairs(shapeModels(plot)) do snapshot[m]=true end
+                        local okay=pcall(function() fireUnit(u) end)
+                        build.sent=build.sent+1
+                        local confirmed=okay and waitFor(function()
+                            return stairsAlreadyPresent(plot,u) or
+                                verifyPlacedStair(plot,u,snapshot)
+                        end,16)
+                        if confirmed then
+                            stairsOK=true
+                            counts.StairShape=counts.StairShape+1
+                            consecutiveStairs=0
+                            stairTest.passed=true
+                            stairTest.signature=buildSignature(plot,origin)
+                            stairTest.itemId=u.id
+                            stairTest.first=u
+                        else
+                            consecutiveStairs=consecutiveStairs+1
+                            if not stairsOK then break end
+                        end
+                        stage("stairs: "..counts.StairShape.." confirmed")
+                        task.wait(.1)
+                    end
+                end
+                if not stairsOK then note("Automatic stair test unconfirmed; no bulk stairs or decorative Shape placement.") end
+            else
+                note("Stair Shape catalog or PlaceItem unavailable; stairs skipped.")
+            end
+            if not running() or build.sent>=budget then return end
+            -- Door: test precisely ONE native entrance door, never place
+            -- through existing masonry and never duplicate an existing door.
+            if nativeDoor.id and eventFor("Item") then
+                stage("entrance door (automatic test)")
+                local cf=entrancePosition(plot,origin)
+                if cf then
+                    local blocked=false
+                    for _,wall in ipairs(occupiedFromPlot(plot,origin)) do
+                        if wall.kind=="Wall" and wall.lv==0 then
+                            local ab=wall.b-wall.a
+                            local length2=ab.X*ab.X+ab.Z*ab.Z
+                            if length2>.01 then
+                                local ap=cf.Position-wall.a
+                                local t=math.clamp((ap.X*ab.X+ap.Z*ab.Z)/length2,0,1)
+                                local near=wall.a+ab*t
+                                local delta=cf.Position-near
+                                if Vector2.new(delta.X,delta.Z).Magnitude<1.6 then
+                                    blocked=true;break
+                                end
+                            end
+                        end
+                    end
+                    local alreadyDoor=false
+                    for _,m in ipairs(realDoors(plot)) do
+                        local good,p=pcall(function() return m:GetPivot() end)
+                        if good and (p.Position-cf.Position).Magnitude<8 then
+                            alreadyDoor=true;break
+                        end
+                    end
+                    if alreadyDoor then
+                        nativeDoor.status="Existing real entrance door found; skipped duplicate."
+                    elseif blocked then
+                        note("Entry door skipped because old masonry obstructs its opening.")
+                    else
+                        local before={}
+                        for _,m in ipairs(realDoors(plot)) do before[m]=true end
+                        local id=nativeDoor.id
+                        local okay,failure=pcall(function()
+                            eventFor("Item"):FireServer(id,"Doors",cf,nil,nil,.25,nil,0)
+                        end)
+                        build.sent=build.sent+1
+                        local confirmed=okay and waitFor(function()
+                            return newDoorConfirmed(plot,before,cf.Position,id)
+                        end,22)
+                        if confirmed then
+                            counts.Door=1
+                            nativeDoor.passed=true
+                            nativeDoor.signature=plot.Name.."|"..tostring(id)
+                            nativeDoor.status="Real entrance door CONFIRMED automatically."
+                        else
+                            note("Automatic door test unconfirmed"..
+                                (not okay and (": "..tostring(failure):sub(1,80)) or "")..
+                                "; no further door requests sent.")
+                        end
+                    end
+                end
+            end
+            if not running() or build.sent>=budget then return end
+            -- Genuine roofs are attempted only when actual walls support
+            -- them. One confirmation unlocks subsequent missing segments.
+            if eventFor("Roof") then
+                stage("native roof (automatic test)")
+                local roofOK=adoptExistingNativeRoofs(plot,origin)
+                local roofAttempts,roofFailures=0,0
+                for _,u in ipairs(plannedRoofs(plot,origin)) do
+                    if not running() or roofAttempts>=6 or roofFailures>=2 or
+                        build.sent>=budget then break end
+                    if not roofAt(plot,origin,u) and roofSupported(plot,origin,u) then
+                        local before={}
+                        for _,m in ipairs(realRoofs(plot)) do before[m]=true end
+                        local okay=pcall(function() fireUnit(u) end)
+                        build.sent=build.sent+1
+                        roofAttempts=roofAttempts+1
+                        local confirmed=okay and waitFor(function()
+                            return newRoofConfirmed(plot,origin,u,before)
+                        end,22)
+                        if confirmed then
+                            roofOK=true
+                            counts.Roof=counts.Roof+1
+                            roofFailures=0
+                            roofTest.passed=true
+                            roofTest.signature=buildSignature(plot,origin)
+                            roofTest.status="Native roof placement CONFIRMED automatically."
+                        else
+                            roofFailures=roofFailures+1
+                            if not roofOK then
+                                note("Automatic roof test unconfirmed; no bulk roofs sent.")
+                                break
+                            end
+                        end
+                        stage("roofs: "..counts.Roof.." confirmed")
+                        task.wait(.12)
+                    end
+                end
+            end
+            if not running() or build.sent>=budget then return end
+            -- Finish ornaments only after masonry, floor and stair checks.
+            -- Windows intentionally remain manual/optional since they need
+            -- wall GUIDs and separate server confirmation.
+            if stairTest.passed and
+                stairTest.signature==buildSignature(plot,origin) and
+                eventFor("Item") then
+                stage("ornaments (existing pieces skipped)")
+                local consecutiveDetails=0
+                for _,u in ipairs(ornateDetailUnits(plot,origin,80)) do
+                    if not running() or counts.DetailShape>=40 or
+                        consecutiveDetails>=3 or build.sent>=budget then break end
+                    if not stairsAlreadyPresent(plot,u) then
+                        local snapshot={}
+                        for _,m in ipairs(shapeModels(plot)) do snapshot[m]=true end
+                        local okay=pcall(function() fireUnit(u) end)
+                        build.sent=build.sent+1
+                        local confirmed=okay and waitFor(function()
+                            return stairsAlreadyPresent(plot,u) or
+                                verifyPlacedStair(plot,u,snapshot)
+                        end,12)
+                        if confirmed then
+                            counts.DetailShape=counts.DetailShape+1
+                            consecutiveDetails=0
+                        else
+                            consecutiveDetails=consecutiveDetails+1
+                        end
+                        stage("ornaments: "..counts.DetailShape.." confirmed")
+                        task.wait(.1)
+                    end
+                end
+            end
+        end)
+        build.busy=false
+        if not ok then
+            build.status="START BUILD stopped: client error."
+            build.lastAudit="START BUILD EXCEPTION\\n"..tostring(err)
+            notify(build.status.." Check VIEW AUDIT.")
+        elseif build.cancel then
+            build.status="START BUILD stopped by user."
+            notify(build.status)
+        else
+            -- The audit remains optional, not another required build step.
+            -- Summary data is intentionally compact.
+            local issues=table.concat(errors,"\\n")
+            build.lastAudit="ONE-CLICK BUILD SUMMARY\\n"..
+                "Plot: "..plot.Name.."\\n"..
+                "Confirmed this run: walls "..counts.Wall..
+                ", floors "..counts.Floor..
+                ", stairs "..counts.StairShape..
+                ", door "..counts.Door..
+                ", roofs "..counts.Roof..
+                ", ornaments "..counts.DetailShape.."\\n"..
+                "Requests: "..build.sent.."\\n"..
+                "Notes: "..(issues=="" and "No reported validation stops." or issues)..
+                "\\nWindows are intentionally separate."
+            build.status="START BUILD: "..counts.Wall.." walls, "..
+                counts.Floor.." floors, "..counts.StairShape..
+                " stairs, "..counts.Door.." door, "..counts.Roof..
+                " roofs, "..counts.DetailShape.." details confirmed."..
+                (#errors>0 and " Check status/audit." or "")
+            notify(build.status)
+        end
+        refreshBuildStatus()
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+
 local function inspectCurrentPlot()
     if build.busy then notify("Finish the active build job first");return end
     local plot=ownedPlot()
@@ -4556,7 +4938,7 @@ renderPage = function(page)
                 "Checks the actual installed door width and opening. Attempts only side jambs without covering the door, one at a time. Stops immediately if a Shape fails confirmation. No doors or walls are removed.",
                 "TRY SIDE TRIM",repairDoorGaps)
         end)
-        text(completion,"Order: scan plot → repair shell → doorway → stairs → genuine roof or flat fallback → ornaments.",
+        text(completion,"START BUILD now runs structural placement and tests automatically. Advanced actions below are optional.",
             16,319,435,37,10,C.dim,false,{
                 Size=UDim2.new(1,-32,0,37),TextWrapped=true
             })
@@ -4587,23 +4969,24 @@ renderPage = function(page)
         })
 
         end -- advanced glass-wall and Shape tools
-        local builderPanel=block(scroll,194,C.raised)
+        local builderPanel=block(scroll,270,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"Auto-repair rechecks the live plot, retries missing wall/floor gaps and writes a copyable placement diagnostic. Roofs, doors, windows and Shapes remain separate.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"START BUILD automatically verifies the first wall, floors, stairs, door and roof, then continues confirmed placements. Existing pieces are skipped; windows stay separate.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
-        button(builderPanel,"AUTO REPAIR SHELL + GAPS",16,115,229,34,false,function()
+        button(builderPanel,"START BUILD",16,115,229,38,true,startBuild)
+        button(builderPanel,"STOP",252,115,84,38,false,stopBuild)
+        button(builderPanel,"AUTO REPAIR SHELL + GAPS",16,163,229,32,false,function()
             modal("Automatically repair missing walls and floor gaps?",
                 "Runs up to 4 live plot scans and 120 paced requests without needing to press the button again. Each location gets up to 3 attempts with confirmation checks and cooldowns. Missing 4-stud floor sections are prioritized. Stops on request budget, no progress, or STOP. Existing structures are not removed. Full failure diagnostics are available in COPY LOG.",
-                "START AUTO REPAIR",startBuild)
+                "START AUTO REPAIR",autoRepairShell)
         end)
-        button(builderPanel,"STOP",252,115,84,34,false,stopBuild)
-        button(builderPanel,"SCAN PLOT",16,156,135,26,false,inspectCurrentPlot)
-        button(builderPanel,"VIEW AUDIT",159,156,131,26,false,function()
+        button(builderPanel,"SCAN PLOT",252,163,135,32,false,inspectCurrentPlot)
+        button(builderPanel,"VIEW AUDIT",16,207,131,26,false,function()
             modal("Last construction audit",build.lastAudit)
         end)
-        button(builderPanel,"COPY FULL LOG",297,156,117,26,false,function()
+        button(builderPanel,"COPY FULL LOG",159,207,138,26,false,function()
             local copy=type(setclipboard)=="function" and setclipboard or
                 (type(toclipboard)=="function" and toclipboard or nil)
             if not copy then
@@ -4618,7 +5001,7 @@ renderPage = function(page)
         end)
         local note=block(scroll,80)
         sectionNote(note,"KEEP YOUR EXISTING PLOT",
-            "AUTO REPAIR checks each placement up to 3 times and continues through multiple passes. Use STOP to cancel. COPY FULL LOG includes exact coordinates, confirmation and suspected causes. No existing parts are deleted.",7)
+            "START BUILD is the normal one-click workflow. AUTO REPAIR is optional and guarded; it is not required for normal building. Neither mode deletes existing plot parts.",7)
     elseif page=="Catalog" then
         pageHead(scroll,"Build Catalog","Live building items discovered in Storage Hunters.")
         local summary=block(scroll,132,C.raised)
