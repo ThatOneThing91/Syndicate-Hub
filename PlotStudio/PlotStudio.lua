@@ -3588,9 +3588,13 @@ local function startBuild()
     local maxNoProgress=15
     build.busy=true;build.cancel=false
     build.sent=0;build.total=maxRequests
+    build.lastAudit="AUTO REPAIR IN PROGRESS\nPlot: "..plot.Name..
+        "\nInitial candidates: "..#initial..
+        "\nUse STOP to cancel. A complete log appears when the job ends."
     build.status="Auto-repair: "..#initial.." candidates / checking..."
     refreshBuildStatus()
     task.spawn(function()
+        local jobOk,jobError=pcall(function()
         local totalSent,confirmed,partial,failed,already,protected=0,0,0,0,0,0
         local retried,passes,withoutProgress=0,0,0
         local targetAttempts={}
@@ -3785,6 +3789,19 @@ local function startBuild()
         refreshBuildStatus()
         notify(build.status)
         if alive and state.page=="Builder" then switchPage("Builder") end
+        end)
+        if not jobOk then
+            build.busy=false
+            build.status="Auto repair script error; COPY FULL LOG."
+            build.lastAudit="AUTO SHELL REPAIR • CLIENT EXCEPTION\n"..
+                "Plot: "..plot.Name.."\nError: "..tostring(jobError)..
+                "\nThis is a script-side exception, not a confirmed "..
+                "server placement rejection. No more requests were sent "..
+                "after the exception. Please copy and share this log."
+            warn("[Plot Studio] "..build.lastAudit)
+            refreshBuildStatus()
+            notify(build.status)
+        end
     end)
 end
 
