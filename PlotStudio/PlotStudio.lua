@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.3: live plot repair snapshots, verified Shape diagnostics and optional roof cap
+    Standalone Plot Studio v2.4: multi-pass auto shell repair, measured floor-gap scanning and copyable per-placement diagnostics
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -1179,7 +1179,7 @@ local function missingFloorGapUnits(plot,origin,physical,limit)
     end)
     h=math.clamp(h,6,30)
     local maxUnits=limit or 160
-    local maxSamples=11000
+    local maxSamples=15000
     if not previewFolder then beginPreview() end
     if not previewFolder then return out,scanned,uncovered,skipped end
     for _,p in ipairs(previewFolder:GetChildren()) do
@@ -1188,8 +1188,10 @@ local function missingFloorGapUnits(plot,origin,physical,limit)
             p:GetAttribute("PlotStudioKind")=="Floor" then
             local lv=math.clamp(math.floor(
                 (p.Position.Y-origin.Position.Y+.55)/h+.1),0,4)
-            local nx=math.max(1,math.ceil(p.Size.X/4))
-            local nz=math.max(1,math.ceil(p.Size.Z/4))
+            -- A 3-stud sample grid catches narrower walk-through
+            -- cracks that the old 4-stud grid could miss.
+            local nx=math.max(1,math.ceil(p.Size.X/3))
+            local nz=math.max(1,math.ceil(p.Size.Z/3))
             local dx,dz=p.Size.X/nx,p.Size.Z/nz
             local runs={}
             for iz=1,nz do
@@ -3416,8 +3418,13 @@ local function shellLabel(u)
     local p=shellPosition(u)
     local size=u.kind=="Wall" and (u.b-u.a).Magnitude or u.sx
     local depth=u.kind=="Floor" and u.sz or 0
-    return string.format("%s L%d (%.1f, %.1f, %.1f) %.1fx%.1f",
+    local label=string.format("%s L%d (%.1f, %.1f, %.1f) %.1fx%.1f",
         u.kind,u.lv+1,p.X,p.Y,p.Z,size,depth)
+    if u.kind=="Wall" then
+        label=label..string.format(" endpoints (%.1f,%.1f)-(%.1f,%.1f)",
+            u.a.X,u.a.Z,u.b.X,u.b.Z)
+    end
+    return label
 end
 local function shellSuspectedCause(u,physical,before,after,pcallError)
     if pcallError then
@@ -3555,7 +3562,7 @@ local function startBuild()
             "\nMissing floor sample cells: "..initialStats.missingCells..
             "\nProtected by attachment checks: "..initialStats.protected..
             "\nNo eligible missing sections found. A visual gap may lie "..
-            "outside the current blueprint or below the 4-stud scan resolution."
+            "outside the current blueprint or below the 3-stud scan resolution."
         build.status="Plot scanned: no safe shell repair candidates."
         refreshBuildStatus()
         notify(build.status)
@@ -3727,7 +3734,7 @@ local function startBuild()
             "\nPre-existing walls/floors: "..wallsPresent.."/"..floorsPresent..
             "\nFinal observed walls/floors: "..afterWalls.."/"..afterFloors..
             "\nInitial candidates: "..initialMissing..
-            "\nInitial missing floor cells (4-stud samples): "..samples..
+            "\nInitial missing floor cells (3-stud samples): "..samples..
             "\nFinal missing floor cells: "..endingStats.missingCells..
             "\nRemaining eligible candidates: "..#remaining..
             "\nProtected/skipped by layout checks: "..protected..
@@ -4874,7 +4881,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 2.3",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 2.4",
             "Independent of Syndicate Hub. Local previews are conceptual; build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -4972,4 +4979,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v2.3 live plot snapshots, safer confirmed repairs, roof-cap fallback, Shape diagnostics.")
+print("[Plot Studio] v2.4 auto-repairs shell and narrow floor gaps with 3 attempts per location, 4 live scans, and full copyable diagnostics.")
