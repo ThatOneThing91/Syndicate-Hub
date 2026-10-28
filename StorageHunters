@@ -12449,26 +12449,8 @@ end)()
 end
 
 
--- Plot Studio remains a separate standalone script, loaded only when this Shop button is pressed.
-CreateActionButton(ShopPage, "\076\097\117\110\099\104\032\080\108\111\116\032\083\116\117\100\105\111", function()
-    if HubDestroyed then return end
-    if type(loadstring) ~= "function" then
-        Notify("\080\108\111\116\032\083\116\117\100\105\111", "\089\111\117\114\032\101\120\101\099\117\116\111\114\032\100\111\101\115\032\110\111\116\032\115\117\112\112\111\114\116\032\108\111\097\100\115\116\114\105\110\103\046", 5)
-        return
-    end
-
-    local ok, err = pcall(function()
-        local source = game:HttpGet("\104\116\116\112\115\058\047\047\114\097\119\046\103\105\116\104\117\098\117\115\101\114\099\111\110\116\101\110\116\046\099\111\109\047\084\104\097\116\079\110\101\084\104\105\110\103\057\049\047\083\121\110\100\105\099\097\116\101\045\072\117\098\047\109\097\105\110\047\080\108\111\116\083\116\117\100\105\111\047\080\108\111\116\083\116\117\100\105\111\046\108\117\097")
-        local run, compileError = loadstring(source)
-        if not run then error(compileError or "Plot Studio could not compile.", 0) end
-        run()
-    end)
-
-    if not ok then
-        Notify("\080\108\111\116\032\083\116\117\100\105\111", "\067\111\117\108\100\032\110\111\116\032\111\112\101\110\032\080\108\111\116\032\083\116\117\100\105\111\058\032" .. tostring(err), 6)
-    else
-        Notify("\080\108\111\116\032\083\116\117\100\105\111", "\080\108\111\116\032\083\116\117\100\105\111\032\108\097\117\110\099\104\101\100\046", 3)
-    end
+CreateActionButton(ShopPage, "Launch Plot Studio", function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/refs/heads/main/PlotStudio/PlotStudio.lua"))()
 end)
 
 ShowMain()
