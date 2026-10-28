@@ -1,7 +1,7 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone GUI prototype v0.2 with local 3D blueprint previews
-    No plot RemoteEvents are fired. Previews are local and temporary.
+    Standalone GUI v0.3 with outlined previews and gated build
+    Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
 
@@ -214,7 +214,7 @@ for i, data in ipairs(navSpecs) do
     navButtons[data[1]] = {button=b, label=lbl}
     on(b.MouseButton1Click, function() if switchPage then switchPage(data[1]) end end)
 end
-local sidebarBottom = text(sidebar, "VERSION 0.2  •  PREVIEW", 15, 0, 164, 18, 10, C.muted, true)
+local sidebarBottom = text(sidebar, "VERSION 0.3  •  PREVIEW", 15, 0, 164, 18, 10, C.muted, true)
 sidebarBottom.AnchorPoint = Vector2.new(0,1)
 sidebarBottom.Position = UDim2.new(0,15,1,-16)
 
@@ -267,48 +267,75 @@ local function clearPreview(silent)
 end
 clearPreview(true)
 
+
+local function plotOwner(plot)
+    local id=plot:GetAttribute("OwnerUserId")
+    if type(id)=="number" and id>0 then return id==player.UserId end
+    local name=plot:GetAttribute("OwnerName") or plot:GetAttribute("OwnerUsername")
+    if type(name)=="string" and name~="" then return name:lower()==player.Name:lower() end
+    local board=plot:FindFirstChild("OwnerHeadshot",true)
+    local value=board and board:FindFirstChild("OwnerName",true)
+    if value then
+        if value:IsA("StringValue") then name=value.Value
+        elseif value:IsA("TextLabel") or value:IsA("TextButton") then name=value.Text
+        else name=value:GetAttribute("Value") end
+        if type(name)=="string" and name~="" then
+            return name:lower():find(player.Name:lower(),1,true)~=nil
+        end
+    end
+    return false
+end
 local function ownedPlot()
     local plots=workspace:FindFirstChild("_Plots")
     if not plots then return nil end
     for _,plot in ipairs(plots:GetChildren()) do
-        if plot:GetAttribute("OwnerUserId")==player.UserId then return plot end
-        local board=plot:FindFirstChild("OwnerHeadshot")
-        local label=board and board:FindFirstChild("OwnerName")
-        local ownerName
-        if label then
-            if label:IsA("StringValue") then ownerName=label.Value
-            elseif label:IsA("TextLabel") or label:IsA("TextButton") then ownerName=label.Text
-            else ownerName=label:GetAttribute("Value") end
-        end
-        if ownerName==player.Name then return plot end
+        if plotOwner(plot) then return plot end
     end
     return nil
 end
-
 local function plotFrame(plot)
     if not plot then return nil end
-    local x,y,z=plot:GetAttribute("OriginX"),plot:GetAttribute("OriginY"),plot:GetAttribute("OriginZ")
-    local rot=plot:GetAttribute("RotationY") or 0
     local base=plot:FindFirstChild("Base")
     local floor=base and base:FindFirstChild("Floor")
-    if typeof(x)=="number" and typeof(y)=="number" and typeof(z)=="number" then
-        local sizeY=plot:GetAttribute("SizeY")
-        if typeof(sizeY)=="number" then y=y+sizeY/2
+    local x,y,z=plot:GetAttribute("OriginX"),plot:GetAttribute("OriginY"),plot:GetAttribute("OriginZ")
+    if type(x)=="number" and type(y)=="number" and type(z)=="number" then
+        local sy=plot:GetAttribute("SizeY")
+        if type(sy)=="number" then y=y+sy/2
         elseif floor and floor:IsA("BasePart") then y=floor.Position.Y+floor.Size.Y/2 end
-        return CFrame.new(x,y,z)*CFrame.Angles(0,math.rad(rot),0)
+        return CFrame.new(x,y,z)*CFrame.Angles(0,math.rad(plot:GetAttribute("RotationY") or 0),0)
     end
     if floor and floor:IsA("BasePart") then
         return CFrame.new(floor.Position+Vector3.new(0,floor.Size.Y/2,0))*(floor.CFrame-floor.CFrame.Position)
     end
     return nil
 end
-
+local function previewFrame()
+    local owned=ownedPlot()
+    local f=plotFrame(owned)
+    if f then return f,"Owned plot: "..owned.Name end
+    local hrp=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    local plots=workspace:FindFirstChild("_Plots")
+    if hrp and plots then
+        local best,distance
+        for _,p in ipairs(plots:GetChildren()) do
+            local cf=plotFrame(p)
+            if cf then
+                local d=(Vector3.new(cf.Position.X,0,cf.Position.Z)-Vector3.new(hrp.Position.X,0,hrp.Position.Z)).Magnitude
+                if not distance or d<distance then best=cf;distance=d end
+            end
+        end
+        if best and distance<180 then return best,"Nearest plot (preview only; owner not verified)" end
+    end
+    if hrp then
+        local c=hrp.Position+hrp.CFrame.LookVector*35
+        return CFrame.new(c.X,hrp.Position.Y-3,c.Z),"Near character (preview only)"
+    end
+    return nil,"No position"
+end
 local function beginPreview()
     clearPreview(true)
-    local plot=ownedPlot()
-    if not plot then notify("Your plot was not detected. Claim it first."); return end
-    local origin=plotFrame(plot)
-    if not origin then notify("Plot coordinates unavailable; preview skipped.");return end
+    local origin,where=previewFrame()
+    if not origin then notify("No plot or player position for preview");return end
     local selected=designs[state.design]
     if not selected then return end
     local cfg
@@ -335,10 +362,18 @@ local function beginPreview()
         p.CastShadow=false
         p.Material=material
         p.Color=shade or state.color
-        p.Transparency=.58
+        p.Transparency=.74
         p.Size=Vector3.new(sx,sy,sz)
         p.CFrame=origin*CFrame.new(x,y,z)*CFrame.Angles(0,rotation or 0,0)
         p.Parent=previewFolder
+        local edge=Instance.new("SelectionBox")
+        edge.Name="BlueprintEdge"
+        edge.Adornee=p
+        edge.Color3=C.purple
+        edge.LineThickness=.08
+        edge.Transparency=0
+        edge.SurfaceTransparency=1
+        edge.Parent=p
         count=count+1
     end
     local function room(cx,cz,width,depth,level,door)
@@ -381,7 +416,178 @@ local function beginPreview()
     else
         make("Roof",0,floors*storeyHeight-.25,0,w+.7,.5,d+.7)
     end
-    notify("3D preview: "..selected.name.." ("..count.." temporary parts)")
+    notify("Outlines: "..selected.name.." / "..count.." parts / "..where)
+end
+
+
+-- Build engine v0.3. The first real action is always a one-wall test.
+local build={busy=false,cancel=false,passed=false,signature=nil,firstIndex=nil,status="Not started"}
+local function buildSignature(plot,origin)
+    return plot.Name.."|"..tostring(state.design).."|"..tostring(state.floors).."|"..tostring(origin.Position)
+end
+local function buildPlan()
+    if not previewFolder then beginPreview() end
+    if not previewFolder then return nil end
+    local plot=ownedPlot()
+    if not plot then return nil end
+    local origin=plotFrame(plot)
+    if not origin then return nil end
+    local config
+    pcall(function() config=require(game:GetService("ReplicatedStorage").Modules.PlotConfig) end)
+    local h=config and config.StoreyHeight or 15
+    if type(h)~="number" or h<6 or h>30 then h=15 end
+    local units={}
+    for _,p in ipairs(previewFolder:GetChildren()) do
+        if p:IsA("BasePart") then
+            local name=p.Name
+            if name=="Floor" or name=="Skybridge" then
+                local lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y+.55)/h+.1),0,4)
+                local nx,nz=math.ceil(p.Size.X/40),math.ceil(p.Size.Z/40)
+                for ix=1,nx do for iz=1,nz do
+                    local sx,sz=p.Size.X/nx,p.Size.Z/nz
+                    local cf=p.CFrame*CFrame.new((ix-.5)*sx-p.Size.X/2,0,(iz-.5)*sz-p.Size.Z/2)
+                    units[#units+1]={kind="Floor",cf=cf,sx=sx,sz=sz,lv=lv}
+                end end
+            elseif name:find("roof") or name:find("Roof") then
+                local lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y+.4)/h+.1)-1,0,4)
+                local cf=origin:ToObjectSpace(p.CFrame)
+                local nx,nz=math.ceil(p.Size.X/40),math.ceil(p.Size.Z/40)
+                for ix=1,nx do for iz=1,nz do
+                    local sx,sz=p.Size.X/nx,p.Size.Z/nz
+                    local c=cf*CFrame.new((ix-.5)*sx-p.Size.X/2,0,(iz-.5)*sz-p.Size.Z/2)
+                    units[#units+1]={kind="Roof",x=c.Position.X,z=c.Position.Z,sx=sx,sz=sz,lv=lv}
+                end end
+            else
+                local lv=math.clamp(math.floor((p.Position.Y-origin.Position.Y)/h),0,4)
+                local count=math.ceil(p.Size.X/15)
+                for k=1,count do
+                    local x1=-p.Size.X/2+(k-1)*p.Size.X/count
+                    local x2=-p.Size.X/2+k*p.Size.X/count
+                    local a=p.CFrame:PointToWorldSpace(Vector3.new(x1,-p.Size.Y/2,0))
+                    local b=p.CFrame:PointToWorldSpace(Vector3.new(x2,-p.Size.Y/2,0))
+                    units[#units+1]={kind="Wall",a=a,b=b,lv=lv}
+                end
+            end
+        end
+    end
+    local priority={Floor=1,Wall=2,Roof=3}
+    table.sort(units,function(x,y)
+        if x.lv~=y.lv then return x.lv<y.lv end
+        return priority[x.kind]<priority[y.kind]
+    end)
+    return units,plot,origin
+end
+local function eventFor(kind)
+    local folder=game:GetService("ReplicatedStorage"):FindFirstChild("Events")
+    folder=folder and folder:FindFirstChild("Plot")
+    local event=folder and folder:FindFirstChild("Place"..kind)
+    if event and event:IsA("RemoteEvent") then return event end
+end
+local function fireUnit(u)
+    local r=eventFor(u.kind)
+    if not r then error("Missing Place"..u.kind) end
+    if u.kind=="Wall" then
+        local diff=u.b-u.a
+        r:FireServer("5","Walls",u.a,u.b,Vector3.new(diff.X,0,diff.Z).Magnitude,
+            math.atan2(-diff.Z,diff.X),u.a.Y,nil,nil,nil,u.lv)
+    elseif u.kind=="Floor" then
+        r:FireServer("32","Floors",u.cf,u.sx,u.sz,nil,nil,u.lv)
+    elseif u.kind=="Roof" then
+        r:FireServer("Flat",u.x,u.z,u.sx,u.sz,0,0,0,state.color,state.material,nil,u.lv)
+    end
+end
+local function seeNewWall(plot,before)
+    local f=plot:FindFirstChild("Structures")
+    if not f then return false end
+    for _,child in ipairs(f:GetChildren()) do
+        if not before[child] and child:IsA("Model") and
+            (child:GetAttribute("WallCFrame") or child:GetAttribute("WallLength")) then
+            return true
+        end
+    end
+    return false
+end
+local function testWall()
+    if build.busy then notify("Builder already running");return end
+    if not ownedPlot() then
+        modal("Plot not recognized","Outlines can appear on a nearby plot, but permanent placement needs verified ownership. Make sure you're building on your own plot.")
+        return
+    end
+    clearPreview(true)
+    local units,plot,origin=buildPlan()
+    if not units then notify("Could not generate a build plan");return end
+    local index
+    for i,u in ipairs(units) do if u.kind=="Wall" then index=i;break end end
+    if not index or not eventFor("Wall") then notify("Wall event not ready");return end
+    build.signature=buildSignature(plot,origin)
+    build.passed=false;build.firstIndex=index;build.cancel=false;build.busy=true
+    build.status="Testing one wall"
+    local before={}
+    local folder=plot:FindFirstChild("Structures")
+    if folder then for _,child in ipairs(folder:GetChildren()) do before[child]=true end end
+    task.spawn(function()
+        local ok,err=pcall(function() fireUnit(units[index]) end)
+        local confirmed=false
+        if ok then
+            for _=1,25 do
+                if not alive or build.cancel then break end
+                if seeNewWall(plot,before) then confirmed=true;break end
+                task.wait(.18)
+            end
+        end
+        build.busy=false
+        if confirmed then
+            build.passed=true
+            build.status="Wall test passed: ready to continue"
+            notify("One wall placed! START BUILD is now available.")
+        else
+            build.status=ok and "Wall not confirmed; inspect your plot" or "Wall remote error"
+            notify(build.status..(ok and "" or ": "..tostring(err):sub(1,90)))
+        end
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+local function startBuild()
+    if build.busy then notify("A build is already running");return end
+    local units,plot,origin=buildPlan()
+    if not units or not plot then notify("No owned plot detected; build stopped");return end
+    if not build.passed or build.signature~=buildSignature(plot,origin) then
+        build.passed=false
+        notify("TEST ONE WALL first for this design and storey count")
+        return
+    end
+    if #units>400 then notify("Blueprint exceeds 400-piece limit");return end
+    for _,kind in ipairs({"Wall","Floor","Roof"}) do
+        if not eventFor(kind) then notify("Place"..kind.." remote missing");return end
+    end
+    build.busy=true;build.cancel=false
+    build.status="Building..."
+    task.spawn(function()
+        local sent=0;local failures=0
+        for i,u in ipairs(units) do
+            if build.cancel or not alive then break end
+            if i~=build.firstIndex then
+                local ok,err=pcall(function() fireUnit(u) end)
+                if not ok then failures=failures+1;notify(tostring(err):sub(1,100));break end
+                sent=sent+1
+                if sent%10==0 then
+                    build.status="Submitted "..sent.." / "..(#units-1)
+                    notify(build.status)
+                end
+                task.wait(.35)
+            end
+        end
+        build.busy=false;build.passed=false
+        if build.cancel then build.status="Stopped after "..sent.." sends"
+        elseif failures>0 then build.status="Stopped: placement error"
+        else build.status="Sent "..sent.." requests; inspect plot" end
+        notify(build.status..". Existing placed pieces remain.")
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+local function stopBuild()
+    if build.busy then build.cancel=true;notify("Stopping remaining build requests")
+    else notify("No build is running") end
 end
 
 local function pageView()
@@ -447,11 +653,21 @@ local dialogBody=text(dialog,"",22,59,410,108,13,C.dim,false,{
     ZIndex=27,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top,
     TextTruncate=Enum.TextTruncate.None, Size=UDim2.new(1,-44,0,108)
 })
-local dialogClose=button(dialog,"GOT IT",22,190,116,34,true,function() overlay.Visible=false end)
+local dialogAction=nil
+local dialogClose
+dialogClose=button(dialog,"GOT IT",22,190,155,34,true,function()
+    overlay.Visible=false
+    local fn=dialogAction
+    dialogAction=nil
+    dialogClose.Text="GOT IT"
+    if fn then fn() end
+end)
 dialogClose.ZIndex=27
-local function modal(title,body)
+local function modal(title,body,confirmText,callback)
     dialogTitle.Text=title
     dialogBody.Text=body
+    dialogAction=callback
+    dialogClose.Text=confirmText or "GOT IT"
     overlay.Visible=true
 end
 
@@ -607,16 +823,31 @@ renderPage = function(page)
             "Material: "..state.material.."     /     Accent: "..state.colorName,10)
         button(choice,"CHOOSE MATERIAL",16,76,165,28,false,function() switchPage("Materials") end)
 
-        local action=block(scroll,145,C.raised)
-        text(action,"3D WORLD PREVIEW",16,12,380,25,15,C.mint,true)
-        text(action,"Draw a temporary blueprint over your own plot to inspect its dimensions and floors. It is visible only to you.",16,39,430,38,12,C.dim,false,{
-            Size=UDim2.new(1,-32,0,40),TextWrapped=true
+        local action=block(scroll,143,C.raised)
+        text(action,"BLUEPRINT OUTLINES",16,10,380,24,15,C.mint,true)
+        text(action,"Client-only outlines, visible even if your plot owner marker is missing. No pieces are purchased.",16,38,430,36,12,C.dim,false,{
+            Size=UDim2.new(1,-32,0,36),TextWrapped=true
         })
-        button(action,"SHOW BLUEPRINT",16,91,162,33,true,beginPreview)
-        button(action,"CLEAR PREVIEW",185,91,138,33,false,function() clearPreview(false) end)
-        local buildHint=block(scroll,90)
-        sectionNote(buildHint,"PERSISTENT CONSTRUCTION — NOT ENABLED",
-            "The actual PlaceWall, PlaceFloor and PlaceRoof build engine still needs live placement verification. Preview first; no plot items are purchased or placed.",9)
+        button(action,"SHOW OUTLINES",16,86,147,32,true,beginPreview)
+        button(action,"CLEAR OUTLINES",171,86,143,32,false,function() clearPreview(false) end)
+
+        local builderPanel=block(scroll,194,C.raised)
+        text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
+        text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
+        text(builderPanel,"First confirm one wall can be placed. Then continue the experimental shell build (walls, floors, flat roofs).",16,63,435,47,12,C.dim,false,{
+            Size=UDim2.new(1,-32,0,47),TextWrapped=true
+        })
+        button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
+            modal("Place one real wall?","This sends one real wall placement to your owned plot and may spend in-game money. It does not automatically retry if the server doesn't confirm the wall.","PLACE TEST",testWall)
+        end)
+        button(builderPanel,"2. START BUILD",176,115,160,34,build.passed,function()
+            if not build.passed then modal("Test required","Press TEST ONE WALL and wait for a successful confirmation before starting the shell build.");return end
+            modal("Start experimental shell?","This can send many permanent placements and spend in-game money. Designs are basic shells only, without stairs, doors or windows. You may need to clean up failed or overlapping pieces manually.","START BUILD",startBuild)
+        end)
+        button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
+        local note=block(scroll,80)
+        sectionNote(note,"TESTING STAGE / NOT A FINISHED CASTLE",
+            "The preview is local; actual build placement depends on the game's server rules. STOP prevents further sends, but will not undo what was placed.",7)
     elseif page=="Materials" then
         pageHead(scroll,"Material palette","31 materials captured from the Storage Hunters editor.")
         local current=block(scroll,102,C.raised)
@@ -722,8 +953,8 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 0.2",
-            "Independent of Syndicate Hub. No imported models, network calls, or plot changes in this release.",12)
+        sectionNote(about,"PLOT STUDIO  •  VERSION 0.3",
+            "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
                 "A standalone building interface for Storage Hunters.\n\nPlanned: blueprint import/export, community library, real material assignment, building verification, and safe stop/resume. The current version is only a GUI demonstration.")
@@ -734,6 +965,7 @@ end
 local function closeStudio()
     if not alive then return end
     alive=false
+    build.cancel=true
     clearPreview(true)
     for _, connection in ipairs(connections) do
         pcall(function() connection:Disconnect() end)
