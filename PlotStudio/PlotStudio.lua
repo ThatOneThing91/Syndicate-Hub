@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v1.0 with real shape finishing, wall material verification and automatic catalog detection
+    Standalone Plot Studio v1.4 with usable switchback stair planning, upper skywalks, and transparent wall safety test
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -2198,7 +2198,7 @@ renderPage = function(page)
 
         local action=block(scroll,194,C.raised)
         text(action,"ORNATE BLUEPRINT PREVIEW",16,10,380,24,15,C.mint,true)
-        text(action,"Castle-scale structure with curated materials, stairwells and custom steps. Show Castle creates a safe local preview.",16,38,430,36,12,C.dim,false,{
+        text(action,"Grand architecture with linked upper galleries, two-flight stairs and custom finishes. No plot edits until you confirm a build.",16,38,430,36,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,36),TextWrapped=true
         })
         button(action,"SHOW CASTLE",16,88,147,32,true,beginPreview)
@@ -2271,20 +2271,20 @@ renderPage = function(page)
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
-            modal("Test one wall on your plot?",
-                "You can build up to five storeys. Stairs and doors shown in previews aren't placed yet.\n\nFor a clean plot, back up existing work and bulldoze manually if desired. This may spend game currency.",
-                "TEST ONE WALL",testWall)
+            modal("Verify one solid wall?",
+                "Please do NOT bulldoze the plot for another prototype test. This places only ONE wall in a free spot and verifies that it is not transparent. The full castle will not run if the wall material is still glass. This may spend in-game currency.",
+                "TEST SOLID WALL",testWall)
         end)
         button(builderPanel,"2. START BUILD",176,115,160,34,build.passed,function()
             if not build.passed then modal("Test required","Press TEST ONE WALL and wait for a successful confirmation before starting the shell build.");return end
-            modal("Build the selected castle?",
-                "Permanent walls and floors will be submitted. A verified Shapes stair test enables additional real staircase treads; otherwise stairs remain a preview.\n\nDoors, windows and exterior ornamentation still need placement validation. Existing occupied items are skipped where detected. Game currency may be spent.",
-                "BUILD CASTLE",startBuild)
+            modal("Build only after inspecting the route",
+                "Review HIGHLIGHT ACCESS and CHECK DESIGN first. The builder will attempt real masonry, galleries and the verified staircase/ornaments. Some parts may still be rejected by the game; this has not been verified end-to-end.\n\nDo NOT bulldoze to retest. You can add stairs and detail to the existing build using FINISH & REPAIR. Permanent changes may cost currency.",
+                "BUILD STRUCTURE",startBuild)
         end)
         button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
         local note=block(scroll,80)
-        sectionNote(note,"STYLING AND STAIR SAFETY",
-            "Catalog scans automatically. Test one real Shape and one solid wall. Finish the existing castle without repeating the entire shell.",7)
+        sectionNote(note,"NO MORE PLOT RESETS FOR TESTING",
+            "Inspect the U-shaped stair route first, test one solid wall and one walkable Shape. Finish the existing castle instead of rebuilding its shell.",7)
     elseif page=="Materials" then
         pageHead(scroll,"Material director","The studio automatically picks a different finish for each architectural feature.")
         local current=block(scroll,102,C.raised)
@@ -2394,7 +2394,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 1.3",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 1.4",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -2482,4 +2482,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v1.3 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v1.4 loaded. Preview is local; confirmed builder actions may place permanent structures.")
