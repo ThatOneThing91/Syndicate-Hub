@@ -403,6 +403,7 @@ return function(cfg)
     local function pollOfferGui()
         local dialogs=guiOffers()
         lastGui=dialogs
+        if #dialogs==0 then guiHandled={} end
         if #dialogs~=1 then return end
         local d=dialogs[1]
         if not d.pct then
@@ -452,12 +453,36 @@ return function(cfg)
                 lines[#lines+1]="   "..tostring(d.labels[j]):sub(1,120)
             end
         end
+        -- If the game's controls have different names, collect a small
+        -- sample of visible offer/customer UI elements for the next fix.
+        local pg=player and player:FindFirstChild("PlayerGui")
+        if pg then
+            local count=0
+            for _,node in ipairs(pg:GetDescendants()) do
+                if count>=28 then break end
+                if node:IsA("GuiObject") and visible(node) then
+                    local value=(node:IsA("TextLabel") or
+                        node:IsA("TextButton") or node:IsA("TextBox")) and
+                        node.Text or ""
+                    local lower=(node.Name.." "..value):lower()
+                    if lower:find("offer",1,true) or
+                       lower:find("shopper",1,true) or
+                       lower:find("customer",1,true) or
+                       lower:find("accept",1,true) or
+                       lower:find("decline",1,true) then
+                        count=count+1
+                        lines[#lines+1]="GUI "..node:GetFullName():sub(-140)..
+                            " | "..tostring(value):sub(1,120)
+                    end
+                end
+            end
+        end
         local output=table.concat(lines,"\n")
         print(output)
         local clip=setclipboard or toclipboard
         if type(clip)=="function" then
             pcall(clip,output)
-            statusText.Text="Diagnostic copied. Send its output."
+            statusText.Text="Diagnostic copied. Send the SCAN OFFER output."
         else
             statusText.Text="Diagnostic printed to executor console."
         end
