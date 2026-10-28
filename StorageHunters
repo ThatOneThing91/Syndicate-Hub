@@ -329,6 +329,8 @@ local State = {
     AutoWash = false,
     AutoRepair = false,
     AutoMuseumGift = false,
+    AutoShopOffers = false,
+    AutoShopOffersPercent = 0,
 
     AutoBid = false,
     InstantUnload = false,
@@ -12448,6 +12450,394 @@ do
 end)()
 end
 
+
+-- Auto Shop Offers: one-row threshold control, event-driven offer handling.
+-- The recorded NPCShopper.RespondOffer call uses (offerGuid, acceptBoolean).
+-- Require verified offer percentage or price/value before responding.
+do
+    local offerGroup = ReplicatedStorage:FindFirstChild("Events")
+    offerGroup = offerGroup and offerGroup:FindFirstChild("NPCShopper")
+    local responseEvent = offerGroup and offerGroup:FindFirstChild("RespondOffer")
+    local pendingOffers, answeredOffers = {}, {}
+    local listening, offerConnections = false, {}
+    local shopOfferHolder = New("Frame", {
+        Size = UDim2.new(1, -8, 0, 56),
+        BackgroundColor3 = ButtonBackground,
+        BorderSizePixel = 0,
+    }, ShopPage)
+    Corner(shopOfferHolder, 7)
+    local offerLabel = New("TextLabel", {
+        Size = UDim2.new(1, -172, 0, 23),
+        Position = UDim2.fromOffset(12, 3),
+        BackgroundTransparency = 1,
+        Text = "Auto Shop Offers",
+        TextColor3 = TextColor,
+        TextSize = 13,
+        Font = Enum.Font.GothamMedium,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    }, shopOfferHolder)
+    local offerStatus = New("TextLabel", {
+        Size = UDim2.new(1, -166, 0, 16),
+        Position = UDim2.fromOffset(12, 22),
+        BackgroundTransparency = 1,
+        Text = "Min vs. item value",
+        TextColor3 = MutedText,
+        TextSize = 10,
+        Font = Enum.Font.Gotham,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    }, shopOfferHolder)
+    local offerTrack = New("TextButton", {
+        Size = UDim2.new(1, -162, 0, 8),
+        Position = UDim2.new(0, 12, 1, -12),
+        BackgroundColor3 = DarkerBackground,
+        BorderSizePixel = 0,
+        Text = "",
+        AutoButtonColor = false,
+        Active = true,
+    }, shopOfferHolder)
+    Corner(offerTrack, 4)
+    local offerFill = New("Frame", {
+        Size = UDim2.fromScale(0.5, 1),
+        BackgroundColor3 = ThemeColor,
+        BorderSizePixel = 0,
+    }, offerTrack)
+    Corner(offerFill, 4)
+    local offerKnob = New("Frame", {
+        Size = UDim2.fromOffset(12, 12),
+        AnchorPoint = Vector2.new(.5, .5),
+        Position = UDim2.fromScale(.5, .5),
+        BackgroundColor3 = TextColor,
+        BorderSizePixel = 0,
+    }, offerTrack)
+    Corner(offerKnob, 6)
+    local percentBox = New("TextBox", {
+        Size = UDim2.fromOffset(66, 30),
+        Position = UDim2.new(1, -143, 0, 8),
+        BackgroundColor3 = DarkerBackground,
+        BorderSizePixel = 0,
+        TextColor3 = TextColor,
+        TextSize = 12,
+        Text = "0%",
+        ClearTextOnFocus = false,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Center,
+    }, shopOfferHolder)
+    Corner(percentBox, 6)
+    local offerButton = New("TextButton", {
+        Size = UDim2.fromOffset(58, 28),
+        Position = UDim2.new(1, -68, .5, -14),
+        BackgroundColor3 = OffColor,
+        Text = "OFF",
+        TextColor3 = TextColor,
+        TextSize = 11,
+        Font = Enum.Font.GothamBold,
+        BorderSizePixel = 0,
+    }, shopOfferHolder)
+    Corner(offerButton, 14)
+
+    local function pctString(x)
+        return (x > 0 and "+" or "") .. tostring(x) .. "%"
+    end
+    local function setThreshold(value)
+        value = tonumber(value)
+        if not value or value ~= value then value = State.AutoShopOffersPercent or 0 end
+        value = math.clamp(math.floor(value + .5), -100, 100)
+        State.AutoShopOffersPercent = value
+        percentBox.Text = pctString(value)
+        local fraction = (value + 100) / 200
+        offerFill.Size = UDim2.fromScale(fraction, 1)
+        offerKnob.Position = UDim2.fromScale(fraction, .5)
+    end
+    setThreshold(State.AutoShopOffersPercent)
+
+    local sliding = false
+    local function setThresholdFromPointer(position)
+        local width = offerTrack.AbsoluteSize.X
+        if width <= 0 then return end
+        local fraction = math.clamp((position.X - offerTrack.AbsolutePosition.X)/width, 0, 1)
+        setThreshold(-100 + fraction * 200)
+    end
+    TrackConnection(offerTrack.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            sliding = true
+            setThresholdFromPointer(input.Position)
+        end
+    end))
+    TrackConnection(UserInputService.InputChanged:Connect(function(input)
+        if sliding and not HubDestroyed and
+            (input.UserInputType == Enum.UserInputType.MouseMovement
+                or input.UserInputType == Enum.UserInputType.Touch) then
+            setThresholdFromPointer(input.Position)
+        end
+    end))
+    TrackConnection(UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            sliding = false
+        end
+    end))
+    -- Controller activation steps the slider 5%; number entry supports exact values.
+    TrackConnection(offerTrack.Activated:Connect(function()
+        if not HubDestroyed and not sliding then
+            local nextValue = (State.AutoShopOffersPercent or 0) + 5
+            setThreshold(nextValue > 100 and -100 or nextValue)
+        end
+    end))
+    TrackConnection(percentBox.FocusLost:Connect(function()
+        setThreshold(tonumber(percentBox.Text:match("[+-]?%d+")) or
+            State.AutoShopOffersPercent)
+    end))
+
+    local function uuid(value)
+        return type(value) == "string"
+            and value:match("^[%x]+%-%x+%-%x+%-%x+%-%x]+$") ~= nil
+    end
+    local function getField(data, keys)
+        for _, name in ipairs(keys) do
+            local value = rawget(data, name)
+            if value ~= nil then return value end
+        end
+        return nil
+    end
+    local GUID_KEYS = {"offerId","OfferId","offerID","OfferID",
+        "offerGuid","OfferGuid","OfferGUID","offerUUID",
+        "id","Id","ID","guid","Guid","GUID","uuid","UUID"}
+    local PRICE_KEYS = {"offerPrice","OfferPrice","offeredPrice",
+        "OfferedPrice","offeredAmount","OfferedAmount","offerAmount",
+        "OfferAmount","priceOffered","PriceOffered"}
+    local VALUE_KEYS = {"itemValue","ItemValue","marketValue","MarketValue",
+        "fairValue","FairValue","baseValue","BaseValue",
+        "listedPrice","ListedPrice","askingPrice","AskingPrice"}
+    local DIFF_KEYS = {"differencePercent","DifferencePercent",
+        "percentDifference","PercentDifference","percentageDifference",
+        "PercentageDifference","offerDifferencePercent","OfferDifferencePercent",
+        "profitPercent","ProfitPercent","percentageAboveValue","PercentageAboveValue"}
+    local function asNumber(value)
+        if type(value) == "number" then return value end
+        if type(value) == "string" then
+            return tonumber(value:gsub("[%$, ]", ""))
+        end
+    end
+    local function signedPercent(str)
+        if type(str) ~= "string" then return nil end
+        local n = str:match("([+-]%s*%d+%.?%d*)%s*%%")
+        if n then return tonumber((n:gsub("%s", ""))) end
+    end
+    local function percentFromData(data)
+        if type(data) ~= "table" then return nil end
+        local offerPrice = asNumber(getField(data, PRICE_KEYS))
+        local value = asNumber(getField(data, VALUE_KEYS))
+        if offerPrice and value and value > 0 and offerPrice >= 0 then
+            return (offerPrice / value - 1) * 100
+        end
+        local explicit = getField(data, DIFF_KEYS)
+        if type(explicit) == "number" then return explicit end
+        if type(explicit) == "string" then
+            return signedPercent(explicit) or tonumber(explicit)
+        end
+        return nil
+    end
+    local function setOfferStatus(label)
+        if not HubDestroyed and State.AutoShopOffers and offerStatus.Parent then
+            offerStatus.Text = label
+        end
+    end
+    local function respondToOffer(id, pct)
+        if HubDestroyed or not State.AutoShopOffers or not uuid(id)
+            or not responseEvent or not responseEvent:IsA("RemoteEvent") then
+            return
+        end
+        if type(pct) ~= "number" or pct ~= pct or
+            pct < -100 or pct > 500 then return end
+        local now = os.clock()
+        if answeredOffers[id] or (pendingOffers[id] and pendingOffers[id].busy) then
+            return
+        end
+        pendingOffers[id] = {busy = true, at = now}
+        local accepted = pct >= (State.AutoShopOffersPercent or 0)
+        local ok, err = pcall(function()
+            responseEvent:FireServer(id, accepted)
+        end)
+        if ok then
+            answeredOffers[id] = now
+            pendingOffers[id] = nil
+            setOfferStatus((accepted and "Accepted " or "Declined ") ..
+                pctString(math.floor(pct + .5)) .. " offer")
+        else
+            pendingOffers[id] = nil
+            warn("[Syndicate Auto Shop Offers] Response failed: " .. tostring(err))
+            setOfferStatus("Offer response failed")
+        end
+    end
+    local function learnOffer(id, percent)
+        if not uuid(id) then return end
+        if percent == nil then
+            if not pendingOffers[id] then
+                pendingOffers[id] = {at = os.clock()}
+            end
+            return
+        end
+        respondToOffer(id, percent)
+    end
+    local function inspectPayload(value, depth, inheritedId, visited)
+        if depth > 5 or type(value) ~= "table" or visited[value] then
+            return
+        end
+        visited[value] = true
+        local id = getField(value, GUID_KEYS) or inheritedId
+        if uuid(id) then
+            local percent = percentFromData(value)
+            learnOffer(id, percent)
+        end
+        for _, child in pairs(value) do
+            if type(child) == "table" then
+                inspectPayload(child, depth + 1, uuid(id) and id or nil, visited)
+            end
+        end
+    end
+    local function inspectEvent(...)
+        if not State.AutoShopOffers then return end
+        local items = {...}
+        local eventId
+        for _,v in ipairs(items) do
+            if uuid(v) then eventId = v; break end
+        end
+        local visited = {}
+        for _,v in ipairs(items) do
+            if type(v) == "table" then
+                inspectPayload(v, 0, eventId, visited)
+            end
+        end
+        if eventId then learnOffer(eventId, nil) end
+    end
+    local function registerEvent(item)
+        if not item:IsA("RemoteEvent") or item == responseEvent then return end
+        local name = item.Name:lower()
+        if not (name:find("offer", 1, true) or name:find("shopper", 1, true)
+            or name:find("customer", 1, true)) then return end
+        local connection = item.OnClientEvent:Connect(function(...)
+            if not HubDestroyed and State.AutoShopOffers then
+                inspectEvent(...)
+            end
+        end)
+        offerConnections[#offerConnections + 1] = connection
+    end
+
+    -- GUI fallback only handles a visibly active, explicitly SIGNED percentage.
+    -- Never guess a percentage from arbitrary dollar figures on the screen.
+    local function guiOffer()
+        local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+        if not playerGui then return end
+        local matchingPopups = {}
+        for _,frame in ipairs(playerGui:GetDescendants()) do
+            if frame:IsA("GuiObject") then
+                local name = frame.Name:lower()
+                if (name:find("offer", 1, true) or name:find("shopper", 1, true))
+                    and frame.Visible and frame.AbsoluteSize.X > 0 then
+                    local labels = {}
+                    local possibleIds = {}
+                    for _,descendant in ipairs(frame:GetDescendants()) do
+                        if descendant:IsA("TextLabel") or
+                            descendant:IsA("TextButton") then
+                            if descendant.Visible then
+                                labels[#labels + 1] = descendant.Text
+                            end
+                        elseif descendant:IsA("StringValue") and uuid(descendant.Value) then
+                            possibleIds[#possibleIds + 1] = descendant.Value
+                        end
+                        for attrName, attr in pairs(descendant:GetAttributes()) do
+                            if type(attrName) == "string" and
+                                attrName:lower():find("offer", 1, true) and uuid(attr) then
+                                possibleIds[#possibleIds + 1] = attr
+                            end
+                        end
+                    end
+                    local percent
+                    for _,label in ipairs(labels) do
+                        percent = signedPercent(label)
+                        if percent then break end
+                    end
+                    if percent then
+                        matchingPopups[#matchingPopups + 1] =
+                            {percent = percent, ids = possibleIds}
+                    end
+                end
+            end
+        end
+        if #matchingPopups ~= 1 then return end
+        local popup = matchingPopups[1]
+        if #popup.ids == 1 then
+            learnOffer(popup.ids[1], popup.percent)
+        else
+            local id, count = nil, 0
+            for key, record in pairs(pendingOffers) do
+                if not record.busy and os.clock() - record.at < 8 then
+                    id = key
+                    count = count + 1
+                end
+            end
+            if count == 1 then learnOffer(id, popup.percent) end
+        end
+    end
+    local function disconnectOfferListeners()
+        for _, c in ipairs(offerConnections) do
+            pcall(function() c:Disconnect() end)
+        end
+        offerConnections = {}
+        listening = false
+        pendingOffers = {}
+    end
+    local function startOfferListeners()
+        if listening or not offerGroup then return end
+        listening = true
+        for _,child in ipairs(offerGroup:GetDescendants()) do
+            registerEvent(child)
+        end
+        offerConnections[#offerConnections + 1] =
+            offerGroup.DescendantAdded:Connect(registerEvent)
+        task.spawn(function()
+            while not HubDestroyed and State.AutoShopOffers and listening do
+                pcall(guiOffer)
+                local now = os.clock()
+                for id, info in pairs(pendingOffers) do
+                    if now - info.at > 12 then pendingOffers[id] = nil end
+                end
+                for id, at in pairs(answeredOffers) do
+                    if now - at > 180 then answeredOffers[id] = nil end
+                end
+                task.wait(.4)
+            end
+        end)
+    end
+    TrackConnection(offerButton.Activated:Connect(function()
+        if HubDestroyed then return end
+        State.AutoShopOffers = not State.AutoShopOffers
+        local on = State.AutoShopOffers
+        offerButton.Text = on and "ON" or "OFF"
+        offerButton.BackgroundColor3 = on and ThemeColor or OffColor
+        if on then
+            offerGroup = ReplicatedStorage:FindFirstChild("Events")
+            offerGroup = offerGroup and offerGroup:FindFirstChild("NPCShopper")
+            responseEvent = offerGroup and offerGroup:FindFirstChild("RespondOffer")
+            if not responseEvent or not responseEvent:IsA("RemoteEvent") then
+                State.AutoShopOffers = false
+                offerButton.Text = "OFF"
+                offerButton.BackgroundColor3 = OffColor
+                Notify("Auto Shop Offers", "NPCShopper.RespondOffer not available.", 5)
+                return
+            end
+            offerStatus.Text = "Watching for NPC offers..."
+            startOfferListeners()
+        else
+            disconnectOfferListeners()
+            offerStatus.Text = "Min vs. item value"
+        end
+    end))
+    ThisHubInstance.StopAutoShopOffers = disconnectOfferListeners
+end
 
 CreateActionButton(ShopPage, "Launch Plot Studio", function()
     loadstring(game:HttpGet("https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/PlotStudio/PlotStudio.lua?v=" .. os.time()))()
