@@ -13194,6 +13194,51 @@ return function(cfg)
     -- This is an OUTGOING call made by the game's client scripts.
     -- Installing OnClientEvent on that remote alone cannot observe it.
     -- An executor's optional namecall hook can observe this exact call.
+    -- Shopper registry: resolve current NPC instances rather than hard-code
+    -- a captured GetNil debug ID. This also distinguishes active shoppers.
+    local shopperFolder=workspace:FindFirstChild("_NPCShoppers")
+    local function resolveShopper(npc)
+        if typeof(npc)~="Instance" then return nil end
+        if shopperFolder and npc:IsDescendantOf(shopperFolder) then return npc end
+        return nil
+    end
+    local stockSnapshot=nil
+    local stockFetchedAt=0
+    local function currentPlot()
+        local plots=workspace:FindFirstChild("_Plots")
+        if not plots then return nil end
+        local playerName=player and player.Name
+        if not playerName then return nil end
+        for _,plot in ipairs(plots:GetChildren()) do
+            local head=plot:FindFirstChild("OwnerHeadshot")
+            local owner=head and head:FindFirstChild("OwnerName")
+            if owner and owner:IsA("TextLabel") and
+                (owner.Text==playerName or owner.Text=="@"..playerName) then
+                return plot
+            end
+            if owner and owner:IsA("StringValue") and
+                (owner.Value==playerName or owner.Value=="@"..playerName) then
+                return plot
+            end
+        end
+        return nil
+    end
+    local function refreshShopStock()
+        if not active or closed or os.clock()-stockFetchedAt<20 then return end
+        stockFetchedAt=os.clock()
+        local plot=currentPlot()
+        if not plot then return end
+        local events=ReplicatedStorage:FindFirstChild("Events")
+        local plotEvents=events and events:FindFirstChild("Plot")
+        local remote=plotEvents and plotEvents:FindFirstChild("GetShopStock")
+        if not remote or not remote:IsA("RemoteFunction") then return end
+        task.spawn(function()
+            local ok,result=pcall(function() return remote:InvokeServer(plot) end)
+            if ok and not closed and active then
+                stockSnapshot=result
+            end
+        end)
+    end
     local function onOutgoingPresented(id,offeredPercent,npc)
         if closed or not active or not uuid(id) then return end
         local n=tonumber(offeredPercent)
@@ -13201,6 +13246,12 @@ return function(cfg)
             statusText.Text="Offer ID found; numeric value unavailable"
             return
         end
+        local shopper=resolveShopper(npc)
+        if typeof(npc)=="Instance" and not shopper then
+            statusText.Text="Offer shopper no longer active"
+            return
+        end
+        refreshShopStock()
         pendingIds[id]=os.clock()
         lastIncomingOfferAt=os.clock()
         outgoingCount=outgoingCount+1
@@ -13341,6 +13392,7 @@ return function(cfg)
         local shown=shopper:FindFirstChild("ShowOffer")
         local hidden=shopper:FindFirstChild("HideOffer")
         local hookActive=enableOutgoingCapture()
+        refreshShopStock()
         statusText.Text=hookActive
             and "Watching live OfferPresented calls and customer GUI"
             or ("GUI/event fallback; "..outgoingStatus)
