@@ -2034,6 +2034,100 @@ local function startBuild()
     end)
 end
 
+
+-- A truthful, request-derived preview. Concept-only embellishments fade away;
+-- walls/floors and VERIFIED Stair/Detail Shapes appear where their placement
+-- requests would actually go, after the plot's current occupancy is scanned.
+local function showBuildablePreview()
+    local units,plot,origin,stats=buildPlan()
+    if not units or not plot or not origin then
+        notify("Owned plot required to preview the actual build plan")
+        return
+    end
+    local previewShapes=false
+    if stairTest.passed and stairTest.signature==buildSignature(plot,origin)
+        and stairCatalog.shape and stairTest.itemId==stairCatalog.shape.id then
+        local finish=staircaseAndDetails(plot,origin)
+        if finish then
+            for _,unit in ipairs(finish) do units[#units+1]=unit end
+            previewShapes=true
+        end
+    end
+    -- Replace an older request preview without erasing the source layout.
+    local existing=previewFolder:FindFirstChild("ActualPlacementPlan")
+    if existing then existing:Destroy() end
+    local folder=Instance.new("Folder")
+    folder.Name="ActualPlacementPlan"
+    folder.Parent=previewFolder
+    local plannedCount={Wall=0,Floor=0,Roof=0,StairShape=0,DetailShape=0}
+    local maxShow=math.min(#units,1200)
+    local h=15
+    pcall(function()
+        local cfg=require(game:GetService("ReplicatedStorage").Modules.PlotConfig)
+        if type(cfg.StoreyHeight)=="number" then h=cfg.StoreyHeight end
+    end)
+    local function put(u)
+        local part=Instance.new("Part")
+        part.Anchored=true
+        part.CanCollide=false;part.CanQuery=false;part.CanTouch=false
+        part.CastShadow=false
+        part.Name="INTENDED "..u.kind
+        local kind=u.kind
+        if kind=="Wall" then
+            local diff=u.b-u.a
+            local length=Vector3.new(diff.X,0,diff.Z).Magnitude
+            part.Size=Vector3.new(length,h,.7)
+            part.CFrame=CFrame.new((u.a+u.b)*.5+Vector3.new(0,h*.5,0))*
+                CFrame.Angles(0,math.atan2(-diff.Z,diff.X),0)
+        elseif kind=="Floor" then
+            part.Size=Vector3.new(u.sx,.55,u.sz)
+            part.CFrame=u.cf
+        elseif kind=="Roof" then
+            part.Size=Vector3.new(u.sx,.6,u.sz)
+            part.CFrame=origin*CFrame.new(u.x,(u.lv+1)*h,u.z)
+        elseif kind=="StairShape" or kind=="DetailShape" then
+            part.Size=u.size
+            part.CFrame=u.cf
+        else
+            part:Destroy()
+            return
+        end
+        local colors={
+            Wall=Color3.fromRGB(196,194,180),
+            Floor=Color3.fromRGB(129,198,227),
+            Roof=Color3.fromRGB(148,113,190),
+            StairShape=Color3.fromRGB(73,224,164),
+            DetailShape=Color3.fromRGB(234,188,88)
+        }
+        part.Color=u.color or colors[kind] or Color3.fromRGB(214,214,214)
+        part.Material=Enum.Material.SmoothPlastic
+        part.Transparency=.14
+        part.Parent=folder
+        plannedCount[kind]=plannedCount[kind]+1
+    end
+    -- Concepts are not hidden from the geometry authoring functions, only
+    -- from the player's screen: buildPlan() still sees their source parts.
+    for _,child in ipairs(previewFolder:GetChildren()) do
+        if child:IsA("BasePart") then
+            child.Transparency=1
+            for _,desc in ipairs(child:GetChildren()) do
+                if desc:IsA("SelectionBox") then desc.Transparency=1 end
+            end
+        end
+    end
+    for i=1,maxShow do
+        put(units[i])
+        if i%70==0 then task.wait() end
+    end
+    local hidden=math.max(0,#units-maxShow)
+    notify("PLACEABLE VIEW: "..plannedCount.Wall.." walls / "..
+        plannedCount.Floor.." floor units / "..plannedCount.StairShape..
+        " stair Shapes / "..plannedCount.DetailShape.." details"..
+        (previewShapes and " (Shape test passed)" or " (UNTESTED decorations hidden)")..
+        (hidden>0 and (" / "..hidden.." units beyond preview cap") or "")..
+        ". These are requests, not confirmed game placements.")
+end
+
 -- Restore an already-built glass-looking wall only after one MaterialItem
 -- request visibly changes it; never assume a remote call succeeded.
 local wallRepair={passed=false,material=nil,status="Material repair not tested"}
@@ -2445,14 +2539,15 @@ renderPage = function(page)
             16,116,442,18,10,C.dim,false,{Size=UDim2.new(1,-32,0,18)})
 
         local action=block(scroll,194,C.raised)
-        text(action,"ORNATE BLUEPRINT PREVIEW",16,10,380,24,15,C.mint,true)
-        text(action,"Grand architecture with linked upper galleries, two-flight stairs and custom finishes. No plot edits until you confirm a build.",16,38,430,36,12,C.dim,false,{
+        text(action,"CONCEPT vs. ACTUAL BUILD",16,10,410,24,15,C.mint,true)
+        text(action,"Design Concept shows the artistic goal. Actual Build View shows only placement requests the current engine intends to send.",16,38,430,36,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,36),TextWrapped=true
         })
-        button(action,"SHOW CASTLE",16,88,147,32,true,beginPreview)
-        button(action,"CLEAR PREVIEW",171,88,143,32,false,function() clearPreview(false) end)
+        button(action,"DESIGN CONCEPT",16,88,145,32,false,beginPreview)
+        button(action,"ACTUAL BUILD VIEW",170,88,166,32,true,showBuildablePreview)
         button(action,"HIGHLIGHT ACCESS",16,125,157,26,false,highlightStairRoute)
         button(action,"CHECK DESIGN",180,125,141,26,false,previewAccessAudit)
+        button(action,"CLEAR PREVIEW",338,125,112,26,false,function() clearPreview(false) end)
         text(action,"SIZE: "..lastFootprint,16,154,440,18,10,C.mint,false,{
             Size=UDim2.new(1,-32,0,18)
         })
