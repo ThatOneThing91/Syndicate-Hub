@@ -10559,6 +10559,9 @@ local function DestroyHub()
                       
                                                               
     HubDestroyed = true
+    if ThisHubInstance.StopAutoShopOffers then
+        pcall(ThisHubInstance.StopAutoShopOffers)
+    end
     if ThisHubInstance.StopPlotPotionPickup then
         pcall(ThisHubInstance.StopPlotPotionPickup)
     end
@@ -12454,6 +12457,41 @@ CreateActionButton(ShopPage, "Launch Plot Studio", function()
 end)
 
 ShowMain()
+
+-- Optional Auto Shop Offers is loaded separately after startup.
+-- Network, compilation or event errors here cannot stop Syndicate Hub.
+task.spawn(function()
+    if HubDestroyed then return end
+    local ok, err = pcall(function()
+        local url = "https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/ShopOffers/AutoShopOffers.lua?v=" .. os.time()
+        local code = game:HttpGet(url)
+        local chunk, compileError = loadstring(code)
+        if not chunk then error("Shop offers compile: " .. tostring(compileError)) end
+        local initialize = chunk()
+        if type(initialize) ~= "function" then error("Shop offers module invalid") end
+        local module = initialize({
+            parent = ShopPage,
+            theme = ThemeColor,
+            background = ButtonBackground,
+            darker = DarkerBackground,
+            foreground = TextColor,
+            muted = MutedText,
+            offColor = OffColor,
+        })
+        if not module or type(module.Destroy) ~= "function" then
+            error("Shop offers module did not return cleanup method")
+        end
+        if HubDestroyed then
+            module:Destroy()
+        else
+            ThisHubInstance.StopAutoShopOffers = function() module:Destroy() end
+        end
+    end)
+    if not ok then
+        warn("[Syndicate Hub] Optional Auto Shop Offers unavailable: " .. tostring(err))
+    end
+end)
+
 RefreshAuctionDropdown()
 UpdateAutoBidStatus()
 
