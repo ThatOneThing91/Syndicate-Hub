@@ -903,11 +903,13 @@ local function placeOne(part,origin,storey)
         local r=remote("Roof")
         if not r then return false,"PlaceRoof remote unavailable" end
         local pos=origin:ToObjectSpace(cf).Position
+        local roofStyle=part.style or
+            tostring(part.id or ""):match("^Roof_(.+)") or "Hip"
         local rgb=part.color
         local color=type(rgb)=="table" and Color3.new(
             tonumber(rgb[1]) or .5,tonumber(rgb[2]) or .5,
             tonumber(rgb[3]) or .5) or Color3.fromRGB(90,90,90)
-        r:FireServer(part.style or "Hip",pos.X,pos.Z,
+        r:FireServer(roofStyle,pos.X,pos.Z,
             tonumber(part.size and part.size[1]) or 10,
             tonumber(part.size and part.size[3]) or 10,
             .6,.8,.4,color,tostring(part.material or "Slate"),nil,lv)
@@ -1281,6 +1283,23 @@ local function paste()
             log("Missing by type: "..table.concat(kindText,", "))
             for _,line in ipairs(samples) do log("MISSING "..line) end
             log("Unsupported types in capture: "..#unsupported)
+            for _,i in ipairs(rest) do
+                local p=bp.parts[i]
+                if p.kind=="Roof" then
+                    local cf=expectedCf(p,origin)
+                    local relative=cf and origin:ToObjectSpace(cf).Position
+                    local info={}
+                    for name,value in pairs(p.roofSettings or {}) do
+                        info[#info+1]=tostring(name).."="..tostring(value)
+                    end
+                    table.sort(info)
+                    log("ROOF DIAGNOSTIC #"..i.." ID="..tostring(p.id)..
+                        " style="..tostring(p.style).." size="..
+                        tostring(p.size and table.concat(p.size,",") or "unknown")..
+                        " relative="..tostring(relative)..
+                        " extra={"..table.concat(info,",").."}")
+                end
+            end
             local count=confirmedCount()
             local summary=(cancel and "TRANSFER STOPPED" or
                 (#rest==0 and "TRANSFER VERIFIED" or "TRANSFER INCOMPLETE"))..
@@ -1321,7 +1340,8 @@ end)
 action(3,2,"READ GITHUB",downloadLibrary)
 local extraY=buttonY+81
 local finishBtn=btn(win,"SYNC FINISHES",14,extraY+1,125,22,syncFinishes,true)
-local l0=txt(win,"Source colors -> own plot",147,extraY+1,230,20,10,COLORS.dim,false)
+local l0=txt(win,"Source colors -> own plot",147,extraY+1,
+    math.max(20,W-278),20,10,COLORS.dim,false)
 local logBtn=btn(win,"COPY LOG",W-109,extraY+1,93,22,function()
     local payload=table.concat(logs,"\n")
     local clip=setclipboard or toclipboard
