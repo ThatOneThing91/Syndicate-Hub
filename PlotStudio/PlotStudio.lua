@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone GUI v0.5 with plot-sized ornate previews and adjustable fast construction pacing
+    Standalone Plot Studio v1.0 with real shape finishing, wall material verification and automatic catalog detection
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -1561,6 +1561,116 @@ local function startBuild()
         if alive and state.page=="Builder" then switchPage("Builder") end
     end)
 end
+
+-- Restore an already-built glass-looking wall only after one MaterialItem
+-- request visibly changes it; never assume a remote call succeeded.
+local wallRepair={passed=false,material=nil,status="Material repair not tested"}
+local function glassWalls(plot)
+    local out={}
+    local folder=plot:FindFirstChild("Structures")
+    if folder then
+        for _,model in ipairs(folder:GetChildren()) do
+            if model:IsA("Model") and model:GetAttribute("WallLength")
+                and model:GetAttribute("GUID")~=nil and isGlassModel(model) then
+                out[#out+1]=model
+            end
+        end
+    end
+    return out
+end
+local function materialRemote()
+    local events=game:GetService("ReplicatedStorage"):FindFirstChild("Events")
+    local plotEvents=events and events:FindFirstChild("Plot")
+    local r=plotEvents and plotEvents:FindFirstChild("MaterialItem")
+    return r and r:IsA("RemoteEvent") and r or nil
+end
+local function materialTest()
+    if build.busy then notify("A construction job is still running");return end
+    local plot=ownedPlot()
+    if not plot then notify("Owned plot not detected");return end
+    local walls=glassWalls(plot)
+    if #walls==0 then notify("No eligible glass walls with GUIDs found");return end
+    local remote=materialRemote()
+    if not remote then notify("MaterialItem event unavailable");return end
+    local target=walls[1]
+    local profile=DESIGN_STYLES[state.design] or DESIGN_STYLES[1]
+    local desired=Enum.Material[profile.wall]
+    if not desired then notify("Selected wall material is unsupported");return end
+    build.busy=true;build.cancel=false
+    build.status="Testing "..profile.wall.." on one glass wall"
+    refreshBuildStatus()
+    task.spawn(function()
+        local ok,err=pcall(function()
+            remote:FireServer(tostring(target:GetAttribute("GUID")),profile.wall)
+        end)
+        local confirmed=false
+        if ok then
+            for i=1,25 do
+                if build.cancel or not alive then break end
+                if target.Parent and not isGlassModel(target) then
+                    local changed=0;local count=0
+                    for _,p in ipairs(target:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            count=count+1
+                            if p.Material==desired then changed=changed+1 end
+                        end
+                    end
+                    if count>0 and changed/count>.50 then confirmed=true;break end
+                end
+                task.wait(.18)
+            end
+        end
+        wallRepair.passed=confirmed
+        wallRepair.material=confirmed and profile.wall or nil
+        wallRepair.status=confirmed and ("Glass wall fixed: "..profile.wall)
+            or "Glass wall did not change; no bulk repair permitted"
+        build.busy=false
+        build.status=wallRepair.status
+        refreshBuildStatus()
+        notify(wallRepair.status..(ok and "" or (" / "..tostring(err))))
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+local function repairGlassWalls()
+    if build.busy then notify("A job is running");return end
+    local plot=ownedPlot()
+    local profile=DESIGN_STYLES[state.design] or DESIGN_STYLES[1]
+    local remote=materialRemote()
+    if not plot or not remote or not wallRepair.passed
+        or wallRepair.material~=profile.wall then
+        notify("Test the existing wall material first")
+        return
+    end
+    local walls=glassWalls(plot)
+    build.busy=true;build.cancel=false
+    build.status="Reworking remaining glass walls..."
+    refreshBuildStatus()
+    task.spawn(function()
+        local changed=0
+        for _,wall in ipairs(walls) do
+            if not alive or build.cancel or changed>=320 then break end
+            local ok=pcall(function()
+                remote:FireServer(tostring(wall:GetAttribute("GUID")),profile.wall)
+            end)
+            if not ok then build.status="Repair interrupted";break end
+            changed=changed+1
+            if changed%12==0 then
+                build.status="Material requests: "..changed
+                refreshBuildStatus()
+            end
+            task.wait(.12)
+        end
+        build.busy=false
+        if build.cancel then build.status="Material repair cancelled"
+        elseif build.status~="Repair interrupted" then
+            build.status="Sent "..changed.." material updates; inspect finished walls"
+        end
+        refreshBuildStatus()
+        notify(build.status)
+        if alive and state.page=="Builder" then switchPage("Builder") end
+    end)
+end
+
 local function stopBuild()
     if build.busy then
         build.cancel=true
@@ -1624,14 +1734,14 @@ local overlay = ui("Frame",{
 },win)
 local dialog=corner(ui("Frame",{
     AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.5),
-    Size=UDim2.new(1,-90,0,250), BackgroundColor3=C.raised,
+    Size=UDim2.new(1,-90,0,315), BackgroundColor3=C.raised,
     BorderSizePixel=0,ZIndex=26
 },overlay),14)
 border(dialog,C.purple,1.5,0.1)
 local dialogTitle=text(dialog,"",22,19,420,32,20,C.white,true,{ZIndex=27,Size=UDim2.new(1,-44,0,32)})
 local dialogBody=text(dialog,"",22,59,410,108,13,C.dim,false,{
     ZIndex=27,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top,
-    TextTruncate=Enum.TextTruncate.None, Size=UDim2.new(1,-44,0,108)
+    TextTruncate=Enum.TextTruncate.None, Size=UDim2.new(1,-44,0,170)
 })
 local dialogAction=nil
 local dialogClose
@@ -1643,14 +1753,14 @@ dialogClose=button(dialog,"GOT IT",22,190,155,34,true,function()
     if fn then fn() end
 end)
 dialogClose.ZIndex=27
-dialogClose.Position=UDim2.new(.05,0,0,190)
+dialogClose.Position=UDim2.new(.05,0,0,267)
 dialogClose.Size=UDim2.new(.42,0,0,34)
 local cancelDialog=button(dialog,"CANCEL",0,190,95,34,false,function()
     dialogAction=nil
     overlay.Visible=false
 end)
 cancelDialog.ZIndex=27
-cancelDialog.Position=UDim2.new(.53,0,0,190)
+cancelDialog.Position=UDim2.new(.53,0,0,267)
 cancelDialog.Size=UDim2.new(.42,0,0,34)
 modal = function(title,body,confirmText,callback)
     dialogTitle.Text=title
@@ -1862,7 +1972,7 @@ renderPage = function(page)
 
         local stairsBox=block(scroll,191,C.raised)
         text(stairsBox,"AUTO STAIRCASE SYSTEM",16,11,420,24,15,C.white,true)
-        text(stairsBox,"The studio designs a staircase to fit the floor openings, then uses its Shapes catalog to build stone treads and landings.",16,37,420,48,11,C.dim,false,{
+        text(stairsBox,"The live catalog now scans automatically. Confirm ONE tread before building custom stairs and ornate details.",16,37,420,48,11,C.dim,false,{
             Size=UDim2.new(1,-32,0,45),TextWrapped=true
         })
         local status=stairTest.passed and ("VERIFIED / "..tostring(stairCatalog.shape and stairCatalog.shape.name or "Shape")) or stairStatus
@@ -1889,10 +1999,35 @@ renderPage = function(page)
             "Built-in stair sets: scan the game catalog to identify them.",
             16,157,427,24,10,C.dim,false,{Size=UDim2.new(1,-32,0,27),TextTruncate=Enum.TextTruncate.AtEnd})
 
+
+        local finishPanel=block(scroll,164,C.raised)
+        text(finishPanel,"FINISH OR REPAIR EXISTING CASTLE",16,11,440,26,15,C.white,true)
+        text(finishPanel,"Build real Shape-based stairs and ornate details on your current castle, or test a stone finish on one existing glass wall.",16,39,430,43,11,C.dim,false,{
+            Size=UDim2.new(1,-32,0,43),TextWrapped=true
+        })
+        button(finishPanel,"ADD STAIRS + DECOR",16,90,178,31,stairTest.passed,function()
+            modal("Finish the existing castle?",
+                "Requires one verified Shape tread. Adds custom stair treads and up to 260 real decorative Shapes to the existing plot, without rebuilding the walls. These may cost game currency. The server can reject placements.",
+                "ADD FINISHES",finishCastle)
+        end)
+        button(finishPanel,"TEST GLASS FIX",201,90,155,31,false,function()
+            modal("Test repairing one glass wall?",
+                "Uses MaterialItem to try changing ONE transparent wall into the blueprint's stone material. If the wall visibly changes, bulk repair can be enabled. If it fails, the rest of your plot is untouched.",
+                "TEST FINISH",materialTest)
+        end)
+        button(finishPanel,"REPAIR ALL GLASS",16,127,178,28,wallRepair.passed,function()
+            modal("Restyle existing transparent walls?",
+                "The single-wall material test must have succeeded. Applies the same verified material to remaining transparent walls; it never bulldozes or moves existing structures.",
+                "REPAIR WALLS",repairGlassWalls)
+        end)
+        text(finishPanel,wallRepair.status,201,128,235,27,10,wallRepair.passed and C.mint or C.orange,false,{
+            Size=UDim2.new(1,-215,0,27),TextTruncate=Enum.TextTruncate.AtEnd
+        })
+
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
         buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
-        text(builderPanel,"Multi-storey shell enabled. When TEST STAIR TREAD passes, custom stairs are queued too. Doors/windows remain preview-only.",16,63,435,47,12,C.dim,false,{
+        text(builderPanel,"Only the ornate preview is guaranteed. A verified Shape test unlocks real stairs and decorative pieces; walls must first pass a non-glass test.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
         button(builderPanel,"1. TEST ONE WALL",16,115,154,34,false,function()
@@ -1908,8 +2043,8 @@ renderPage = function(page)
         end)
         button(builderPanel,"STOP BUILD",16,156,128,26,false,stopBuild)
         local note=block(scroll,80)
-        sectionNote(note,"STAIRS VIA CURATED SHAPES",
-            "Scan the five stair sets and available blocks, then verify one custom tread. Unverified stair layouts are never batch-placed. STOP does not undo built pieces.",7)
+        sectionNote(note,"STYLING AND STAIR SAFETY",
+            "Catalog scans automatically. Test one real Shape and one solid wall. Finish the existing castle without repeating the entire shell.",7)
     elseif page=="Materials" then
         pageHead(scroll,"Material director","The studio automatically picks a different finish for each architectural feature.")
         local current=block(scroll,102,C.raised)
@@ -2019,7 +2154,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 0.9",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 1.0",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -2107,4 +2242,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v0.9 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v1.0 loaded. Preview is local; confirmed builder actions may place permanent structures.")
