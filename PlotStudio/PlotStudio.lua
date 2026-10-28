@@ -1091,7 +1091,10 @@ local function occupiedFromPlot(plot,origin)
         local folder=plot:FindFirstChild(name)
         if folder then
             for _,m in ipairs(folder:GetDescendants()) do
-                if m:IsA("Model") and not seen[m] then
+                local isSoloPart=m:IsA("BasePart") and
+                    not (m:FindFirstAncestorOfClass("Model") and
+                        m:FindFirstAncestorOfClass("Model"):IsDescendantOf(folder))
+                if (m:IsA("Model") or isSoloPart) and not seen[m] then
                     seen[m]=true
                     local cf,len=m:GetAttribute("WallCFrame"),m:GetAttribute("WallLength")
                     local level=m:GetAttribute("Storey")
@@ -1113,7 +1116,10 @@ local function occupiedFromPlot(plot,origin)
                         elseif category=="Roofs" or m:GetAttribute("RoofStyle")~=nil
                             or nameLower:find("roof",1,true) then kind="Roof" end
                         if kind then
-                            local ok,box,size=pcall(function() return m:GetBoundingBox() end)
+                            local ok,box,size=pcall(function()
+                                if m:IsA("BasePart") then return m.CFrame,m.Size end
+                                return m:GetBoundingBox()
+                            end)
                             if ok and size.X>=1 and size.Z>=1 and size.X<300 and size.Z<300 then
                                 local lv=type(level)=="number" and level or
                                     math.floor((box.Position.Y-origin.Position.Y)/h+.15)
