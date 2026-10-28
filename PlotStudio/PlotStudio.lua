@@ -201,7 +201,7 @@ local navSpecs = {
     {"Settings", "05"}
 }
 local navButtons = {}
-local renderPage, switchPage
+local renderPage, switchPage, modal
 for i, data in ipairs(navSpecs) do
     local b = corner(ui("TextButton", {
         Name = data[1], BackgroundColor3 = C.panel, BorderSizePixel = 0,
@@ -386,7 +386,7 @@ local function beginPreview()
     local count=0
     -- Explicit kind is vital: decorations must never be interpreted as wall requests.
     local function part(name,kind,x,y,z,sx,sy,sz,rot,color)
-        if count>=850 then return end
+        if count>=1080 then return end
         if math.min(sx,sy,sz)<.1 then return end
         local p=Instance.new("Part")
         p.Name=name;p.Anchored=true;p.CanCollide=false;p.CanQuery=false
@@ -620,6 +620,7 @@ local function beginPreview()
         crenels(0,-size/2,size,floors*h+1,0)
     end
     notify("ORNATE PREVIEW: "..count.." parts / "..lastFootprint)
+    if state.page=="Builder" and switchPage then switchPage("Builder") end
 end
 
 -- Build engine v0.3. The first real action is always a one-wall test.
@@ -865,7 +866,7 @@ dialogClose=button(dialog,"GOT IT",22,190,155,34,true,function()
     if fn then fn() end
 end)
 dialogClose.ZIndex=27
-local function modal(title,body,confirmText,callback)
+modal = function(title,body,confirmText,callback)
     dialogTitle.Text=title
     dialogBody.Text=body
     dialogAction=callback
