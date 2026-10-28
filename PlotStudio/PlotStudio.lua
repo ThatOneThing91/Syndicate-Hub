@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone Plot Studio v2.6: built-in blueprints, adaptive placement, one-click construction, and optional repairs
+    Standalone Plot Studio v2.7: captured placement signatures, audited results, and accurate construction status
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -1563,6 +1563,14 @@ local function scanStairs()
             stairCatalog.wall=entry;break
         end
     end
+    -- Prefer the previously captured PlaceWall ID 5 if the catalog
+    -- confirms it is not glass. Preserve explicit user selection first.
+    if not stairCatalog.wall then
+        local capturedWall=byId["Walls|5"]
+        if capturedWall and scoreWall(capturedWall.name)>=0 then
+            stairCatalog.wall=capturedWall
+        end
+    end
     if not stairCatalog.wall and walls[1] and walls[1].score>=0 then
         stairCatalog.wall=walls[1]
     end
@@ -1954,19 +1962,22 @@ local function fireUnit(u)
         local desiredMaterial=u.material or profile.wall
         local wallId=stairCatalog.wall and stairCatalog.wall.id
         if not wallId then error("No verified solid-wall candidate") end
-        -- 3 trailing wall parameters are optional finish fields. The server
-        -- must confirm the result; a sent request alone is not success.
+        -- Captured PlaceWall and PlaceFloor used nil optional finish fields.
+        -- Do not send unverified finish overrides that may invalidate placement.
+        -- Preview colors/materials are conceptual until separately confirmed.
         r:FireServer(wallId,"Walls",u.a,u.b,
             Vector3.new(diff.X,0,diff.Z).Magnitude,
             math.atan2(-diff.Z,diff.X),u.a.Y,
-            desiredColor,desiredColor,desiredMaterial,u.lv)
+            nil,nil,nil,u.lv)
     elseif u.kind=="Floor" then
-        r:FireServer("32","Floors",u.cf,u.sx,u.sz,u.color,u.material,u.lv)
+        r:FireServer("32","Floors",u.cf,u.sx,u.sz,nil,nil,u.lv)
     elseif u.kind=="Roof" then
         -- Native roof options follow the game's RoofBuilder defaults.
         -- This signature is not trusted for bulk placement until ONE
         -- real Roof model appears after the single-roof test.
-        local roofMaterial=Enum.Material[tostring(u.material or "")] or Enum.Material.Slate
+        -- Captured PlaceRoof passes a material name string, not Enum.Material.
+        -- A roof request must still replicate before more are sent.
+        local roofMaterial=tostring(u.material or "Slate")
         r:FireServer(u.style or "Hip",u.x,u.z,u.sx,u.sz,
             .6,.8,.4,u.color or state.color,roofMaterial,nil,u.lv)
     end
@@ -3960,7 +3971,7 @@ local function startBuild()
                 for _,entry in ipairs(failures) do
                     if entry.lv==u.lv and
                         Vector2.new(entry.p.X-point.X,
-                            entry.p.Z-point.Z).Magnitude<14 then
+                            entry.p.Z-point.Z).Magnitude<1.25 then
                         return true
                     end
                 end
@@ -4015,7 +4026,10 @@ local function startBuild()
                             consecutive=consecutive+1
                             failures[#failures+1]={lv=u.lv,p=(u.a+u.b)*.5}
                             if not worked then
-                                note("Wall call error: "..tostring(reason):sub(1,100))
+                                note("Wall client error at "..shellLabel(u)..": "..tostring(reason):sub(1,100))
+                            else
+                                note("Wall not replicated: "..shellLabel(u)..
+                                    " | Wall ID "..tostring(stairCatalog.wall and stairCatalog.wall.id))
                             end
                         end
                         stage("walls: "..counts.Wall.." confirmed")
@@ -4032,7 +4046,7 @@ local function startBuild()
             local function floorPieces(u,physical,depth,out)
                 local c=floorCoverage(u,physical)
                 if c>=.92 then return end
-                if c>.04 and math.max(u.sx,u.sz)>=7 and depth<5 then
+                if c>.04 and math.max(u.sx,u.sz)>=4.5 and depth<7 then
                     local alongX=u.sx>=u.sz
                     for sign=-1,1,2 do
                         local sx=alongX and u.sx*.5 or u.sx
@@ -4082,7 +4096,9 @@ local function startBuild()
                                     p=u.cf.Position,lv=u.lv
                                 }
                                 if not okay then
-                                    note("Floor error: "..tostring(errText):sub(1,90))
+                                    note("Floor client error at "..shellLabel(u)..": "..tostring(errText):sub(1,90))
+                                else
+                                    note("Floor not replicated: "..shellLabel(u))
                                 end
                             end
                             stage("floors: "..counts.Floor.." confirmed")
@@ -4273,23 +4289,47 @@ local function startBuild()
         else
             -- The audit remains optional, not another required build step.
             -- Summary data is intentionally compact.
+            local physical=occupiedFromPlot(plot,origin)
+            local missingWalls,missingFloors=0,0
+            for _,u in ipairs(units) do
+                if u.kind=="Wall" and not shellConfirmed(u,physical) then
+                    missingWalls=missingWalls+1
+                elseif u.kind=="Floor" and not shellConfirmed(u,physical) then
+                    missingFloors=missingFloors+1
+                end
+            end
+            local totalConfirmed=counts.Wall+counts.Floor+counts.StairShape+
+                counts.Door+counts.Roof+counts.DetailShape
             local issues=table.concat(errors,"\n")
-            build.lastAudit="ONE-CLICK BUILD SUMMARY\n"..
-                "Plot: "..plot.Name.."\n"..
-                "Confirmed this run: walls "..counts.Wall..
-                ", floors "..counts.Floor..
-                ", stairs "..counts.StairShape..
-                ", door "..counts.Door..
-                ", roofs "..counts.Roof..
-                ", ornaments "..counts.DetailShape.."\n"..
-                "Requests: "..build.sent.."\n"..
-                "Notes: "..(issues=="" and "No reported validation stops." or issues)..
-                "\nWindows are intentionally separate."
-            build.status="BUILD PASS: "..counts.Wall.." walls, "..
-                counts.Floor.." floors, "..counts.StairShape..
-                " stairs, "..counts.Door.." door, "..counts.Roof..
-                " roofs, "..counts.DetailShape.." details confirmed."..
-                (#errors>0 and " Some locations skipped; use REPAIR MISSING." or "")
+            build.lastAudit="PLOT STUDIO BUILD AUDIT\n"..
+                "Plot: "..plot.Name.." | Blueprint: "..loadedBlueprint.name..
+                "\nWall catalog ID: "..tostring(stairCatalog.wall and stairCatalog.wall.id)..
+                "\nTargets in loaded plan: "..#units..
+                "\nNew pieces CONFIRMED: walls "..counts.Wall..
+                ", floors "..counts.Floor..", stairs "..counts.StairShape..
+                ", door "..counts.Door..", roofs "..counts.Roof..
+                ", ornaments "..counts.DetailShape..
+                "\nRemote requests sent (not proof of success): "..build.sent..
+                "\nStill missing from shell: "..missingWalls..
+                " walls / "..missingFloors.." floors"..
+                "\nNotes: "..(issues=="" and "No client errors recorded." or issues)..
+                "\nFireServer does not report server-side rejection reasons."..
+                "\nConcept blueprints are generated previews, not imported models."..
+                "\nWindows are still a separate, unverified stage."
+            print("[Plot Studio] "..build.lastAudit)
+            if totalConfirmed==0 and build.sent>0 then
+                build.status="NOT BUILT: 0 pieces confirmed / "..build.sent..
+                    " requests. Use COPY LOG for diagnostics."
+            elseif missingWalls+missingFloors>0 then
+                build.status="INCOMPLETE: "..missingWalls.." walls and "..
+                    missingFloors.." floors still missing; "..
+                    totalConfirmed.." new pieces confirmed."
+            elseif build.sent==0 then
+                build.status="No new requests: structural plan already covered or empty."
+            else
+                build.status="STRUCTURE CONFIRMED: "..counts.Wall.." new walls and "..
+                    counts.Floor.." new floors. Optional details may remain."
+            end
             notify(build.status)
         end
         refreshBuildStatus()
@@ -4838,11 +4878,19 @@ renderPage = function(page)
         buildStatusText=text(builderPanel,build.status,16,189,425,48,11,C.mint,false,{
             Size=UDim2.new(1,-32,0,48),TextWrapped=true
         })
-        if state.advancedBuilder then
-            button(builderPanel,"VIEW AUDIT",327,144,102,37,false,function()
-                modal("Construction summary",build.lastAudit)
-            end)
-        end
+        button(builderPanel,"COPY LOG",327,144,102,37,false,function()
+            local copy=type(setclipboard)=="function" and setclipboard or
+                (type(toclipboard)=="function" and toclipboard or nil)
+            if copy then
+                local success=pcall(copy,build.lastAudit)
+                if success then
+                    notify("Build audit copied to clipboard")
+                    return
+                end
+            end
+            print("[Plot Studio Build Audit]\n"..build.lastAudit)
+            notify("Clipboard unavailable; audit printed to executor console")
+        end)
 
         local advancedControl=block(scroll,65,C.raised)
         text(advancedControl,"ESSENTIAL WORKFLOW",16,8,284,21,13,C.white,true)
@@ -5497,4 +5545,4 @@ task.spawn(function()
         end
     end
 end)
-print("[Plot Studio] v2.4 auto-repairs shell and narrow floor gaps with 3 attempts per location, 4 live scans, and full copyable diagnostics.")
+print("[Plot Studio] v2.7 captured placement signatures and truthful shell completion checks. Independent of Syndicate Hub.")
