@@ -12495,6 +12495,8 @@ return function(cfg)
     local offerEventTraces={}
     local eventCounts={}
     local lastOfferSignal=nil
+    local lastIncomingOfferAt=0
+    local lastSeenOfferKey=nil
     local function create(class,properties,parentObject)
         local item=Instance.new(class)
         for key,value in pairs(properties) do item[key]=value end
@@ -12732,16 +12734,48 @@ return function(cfg)
             return
         end
         local args={...}
-        local possibleId=nil
+        local offerSignal=sourceName=="OfferPresented" or sourceName=="ShowOffer"
+        if offerSignal then lastIncomingOfferAt=os.clock() end
+        local possibleId,idCount=nil,0
         for _,arg in ipairs(args) do
-            if uuid(arg) then possibleId=arg end
+            if uuid(arg) then
+                possibleId=arg
+                idCount=idCount+1
+            end
         end
-        if possibleId and not decided[possibleId] then
+        if idCount~=1 then possibleId=nil end
+        if offerSignal and possibleId and not decided[possibleId] then
             pendingIds[possibleId]=os.clock()
         end
         local seen={}
-        for _,arg in ipairs(args) do
-            if type(arg)=="table" then inspect(arg,possibleId,0,seen) end
+        if offerSignal then
+            for _,arg in ipairs(args) do
+                if type(arg)=="table" then inspect(arg,possibleId,0,seen) end
+            end
+            -- Some client events provide a signed percent as a plain
+            -- string ("-15%") alongside the live UUID.
+            -- The parser is declared below; this path uses event text only.
+            if possibleId then
+                local signed=nil
+                for _,arg in ipairs(args) do
+                    if type(arg)=="string" and not uuid(arg) then
+                        local normalized=arg:gsub("−","-")
+                        local match=normalized:match("([+-]%s*%d+%.?%d*)%s*%%")
+                        if match then
+                            local clean=match:gsub("%s+","")
+                            local number=tonumber(clean)
+                            if number then
+                                if signed~=nil and math.abs(signed-number)>.01 then
+                                    signed=nil
+                                    break
+                                end
+                                signed=number
+                            end
+                        end
+                    end
+                end
+                if signed~=nil then handleOffer(possibleId,signed) end
+            end
         end
         if (sourceName=="ShowOffer" or sourceName=="OfferPresented")
             and not possibleId then
@@ -13053,12 +13087,14 @@ return function(cfg)
             if not remote:IsA("RemoteEvent") or
                 remote==reply or watched[remote] then return end
             local lower=remote.Name:lower()
-            -- Watch every NPCShopper event and related seller/customer events
-            -- elsewhere under ReplicatedStorage.Events.
-            if not remote:IsDescendantOf(shopper) and
-                not (lower:find("offer",1,true) or
-                     lower:find("shopper",1,true) or
-                     lower:find("customer",1,true)) then return end
+            -- CashEffect, ThoughtBubble and TipEffect can contain an item
+            -- GUID unrelated to the current offer. Only observe offer
+            -- lifecycle events, so an unrelated GUID is never submitted.
+            if not (lower=="offerpresented" or lower=="showoffer" or
+                lower=="hideoffer" or
+                ((lower:find("offer",1,true) or
+                    lower:find("customer",1,true)) and
+                    not remote:IsDescendantOf(shopper))) then return end
             watched[remote]=true
             watchedNames[#watchedNames+1]=remote:GetFullName()
             watch(listeners,remote.OnClientEvent,function(...)
