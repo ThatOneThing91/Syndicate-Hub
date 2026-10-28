@@ -4129,7 +4129,12 @@ renderPage = function(page)
                 "ONLY if the native pitched roof isn't placing. Tests real PlaceFloor slabs at the roof line over existing supported rooms and checks every result. A flat cap isn't a pitched roof. No existing structures are deleted. This may cost currency.",
                 "TRY FLAT ROOF",addFlatRoofCap)
         end)
-        text(completion,"Order: shell → door → stair gaps → wings → native roof (or flat fallback) → ornaments.",
+        button(completion,"FILL DOOR SIDE GAPS",213,281,186,31,false,function()
+            modal("Try Shape trim around the real doorway?",
+                "Checks the actual installed door width and opening. Attempts only side jambs without covering the door, one at a time. Stops immediately if a Shape fails confirmation. No doors or walls are removed.",
+                "TRY SIDE TRIM",repairDoorGaps)
+        end)
+        text(completion,"Order: scan plot → repair shell → doorway → stairs → genuine roof or flat fallback → ornaments.",
             16,319,435,37,10,C.dim,false,{
                 Size=UDim2.new(1,-32,0,37),TextWrapped=true
             })
