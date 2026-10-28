@@ -135,7 +135,7 @@ local state = {
     page = "Overview", filter = "ALL", design = 1,
     material = "Cobblestone", color = swatches[1][1], colorName = "Amethyst",
     floors = 5, grid = true, confirm = true, notifications = true, compact = false,
-    buildSpeed = "Fast",
+    buildSpeed = "Fast", autoStyle = true,
 }
 
 local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
@@ -360,6 +360,36 @@ local function getFootprint(plot)
     return width,depth
 end
 
+
+-- Curated by design identity; no globally applied glass/material selection.
+local DESIGN_STYLES={
+    [1]={name="Royal Amethyst",wall="Limestone",tower="Granite",floor="Marble",
+        accent="Basalt",roof="Slate",trim="Marble",wood="WoodPlanks",metal="Metal",
+        wallColor=Color3.fromRGB(197,191,180),towerColor=Color3.fromRGB(124,127,139),
+        floorColor=Color3.fromRGB(211,207,197),accentColor=Color3.fromRGB(59,53,81),
+        roofColor=Color3.fromRGB(80,62,111),trimColor=Color3.fromRGB(225,207,158)},
+    [2]={name="Blackstone Gothic",wall="Basalt",tower="Cobblestone",floor="Slate",
+        accent="CorrodedMetal",roof="RoofShingles",trim="Granite",wood="WoodPlanks",metal="CorrodedMetal",
+        wallColor=Color3.fromRGB(76,78,86),towerColor=Color3.fromRGB(57,61,68),
+        floorColor=Color3.fromRGB(105,108,114),accentColor=Color3.fromRGB(36,34,46),
+        roofColor=Color3.fromRGB(76,33,48),trimColor=Color3.fromRGB(169,163,157)},
+    [3]={name="Ivory Palace",wall="Marble",tower="Limestone",floor="CeramicTiles",
+        accent="Granite",roof="ClayRoofTiles",trim="Plaster",wood="WoodPlanks",metal="Metal",
+        wallColor=Color3.fromRGB(235,221,195),towerColor=Color3.fromRGB(219,208,189),
+        floorColor=Color3.fromRGB(231,222,207),accentColor=Color3.fromRGB(136,100,75),
+        roofColor=Color3.fromRGB(150,90,57),trimColor=Color3.fromRGB(255,238,195)},
+    [4]={name="Azure Atrium",wall="Concrete",tower="Metal",floor="Marble",
+        accent="Metal",roof="Slate",trim="SmoothPlastic",wood="WoodPlanks",metal="Metal",
+        wallColor=Color3.fromRGB(185,193,205),towerColor=Color3.fromRGB(97,111,132),
+        floorColor=Color3.fromRGB(219,224,230),accentColor=Color3.fromRGB(72,94,119),
+        roofColor=Color3.fromRGB(55,69,85),trimColor=Color3.fromRGB(115,178,209)},
+    [5]={name="Ancient Watchtower",wall="Cobblestone",tower="Basalt",floor="WoodPlanks",
+        accent="CorrodedMetal",roof="RoofShingles",trim="Granite",wood="WoodPlanks",metal="Metal",
+        wallColor=Color3.fromRGB(148,144,134),towerColor=Color3.fromRGB(93,96,98),
+        floorColor=Color3.fromRGB(161,122,84),accentColor=Color3.fromRGB(63,69,76),
+        roofColor=Color3.fromRGB(80,78,77),trimColor=Color3.fromRGB(195,183,147)}
+}
+
 local function beginPreview()
     clearPreview(true)
     local origin,where=previewFrame()
@@ -372,15 +402,15 @@ local function beginPreview()
     local h=cfg and cfg.StoreyHeight or 15
     if type(h)~="number" or h<6 or h>30 then h=15 end
     local floors=math.min(state.floors,selected.floors)
-    local primary=state.color
-    local stone=Color3.fromRGB(174,167,194):Lerp(primary,.32)
-    local light=Color3.fromRGB(225,220,233):Lerp(primary,.22)
-    local dark=Color3.fromRGB(53,54,78):Lerp(primary,.23)
+    local profile=DESIGN_STYLES[state.design] or DESIGN_STYLES[1]
+    local primary=state.autoStyle and profile.roofColor or state.color
+    local stone=state.autoStyle and profile.wallColor or state.color
+    local light=state.autoStyle and profile.trimColor or Color3.fromRGB(225,220,233)
+    local dark=state.autoStyle and profile.towerColor or state.color
     local gold=Color3.fromRGB(229,178,100)
     local glass=Color3.fromRGB(85,174,221)
-    local roof=Color3.fromRGB(80,55,111)
+    local roof=state.autoStyle and profile.roofColor or state.color
     local mat=Enum.Material.Slate
-    pcall(function() mat=Enum.Material[state.material] or mat end)
     previewFolder=Instance.new("Folder")
     previewFolder.Name=PREVIEW_NAME
     previewFolder.Parent=workspace
@@ -391,9 +421,47 @@ local function beginPreview()
         if math.min(sx,sy,sz)<.1 then return end
         local p=Instance.new("Part")
         p.Name=name;p.Anchored=true;p.CanCollide=false;p.CanQuery=false
-        p.CanTouch=false;p.CastShadow=false;p.Material=kind=="Glass" and Enum.Material.Glass or mat
-        p.Color=color or stone
-        p.Transparency=kind=="Glass" and .32 or (kind=="Decor" and .42 or .72)
+        p.CanTouch=false;p.CastShadow=false
+        local key=name:lower()
+        local chosen,shade=profile.wall,profile.wallColor
+        if kind=="Glass" then
+            chosen="Glass";shade=glass
+        elseif key:find("banner") or key:find("flag") then
+            chosen="Fabric";shade=primary
+        elseif key:find("gate rod") or key:find("portcullis") or
+            key:find("iron") or key:find("gilded") or key:find("gold") then
+            chosen=profile.metal;shade=gold
+        elseif key:find("lantern") then
+            chosen="Neon";shade=gold
+        elseif key:find("stair tread") or key:find("balustrade") or
+            key:find("railing") or key:find("door") then
+            chosen=profile.wood;shade=profile.floorColor
+        elseif key:find("spire") or key:find("roof") then
+            chosen=profile.roof;shade=profile.roofColor
+        elseif key:find("column") or key:find("cornice") or key:find("capital") or
+            key:find("lintel") or key:find("battlement") or key:find("keystone") then
+            chosen=profile.trim;shade=profile.trimColor
+        elseif key:find("turret") or key:find("tower") or key:find("rampart")
+            or key:find("buttress") then
+            chosen=profile.tower;shade=profile.towerColor
+        elseif kind=="Floor" or key:find("terrace") or key:find("promenade") then
+            chosen=profile.floor;shade=profile.floorColor
+        elseif color==dark then
+            chosen=profile.accent;shade=profile.accentColor
+        elseif color==light then
+            chosen=profile.trim;shade=profile.trimColor
+        elseif color==gold then
+            chosen=profile.metal;shade=gold
+        end
+        if not state.autoStyle and kind~="Glass" then
+            chosen=state.material
+            shade=color or state.color
+        end
+        p.Material=Enum.Material[chosen] or mat
+        p.Color=shade
+        p:SetAttribute("PlotStudioMaterial",chosen)
+        p:SetAttribute("PlotStudioColor",shade)
+        p.Transparency=kind=="Glass" and .25 or (kind=="Decor" and .32 or .63)
         p.Size=Vector3.new(sx,sy,sz)
         p.CFrame=origin*CFrame.new(x,y,z)*CFrame.Angles(0,rot or 0,0)
         p:SetAttribute("PlotStudioKind",kind)
@@ -443,16 +511,21 @@ local function beginPreview()
         wall("North wall",cx,cy,cz+dz/2,wx,h,0,col)
         wall("West wall",cx-wx/2,cy,cz,dz,h,math.pi/2,col)
         wall("East wall",cx+wx/2,cy,cz,dz,h,math.pi/2,col)
-        if entry and lv==0 then
-            local open=math.min(wx*.29,19)
+        if entry then
+            -- A real opening in every storey, not glass or bars blocking the door.
+            local open=math.clamp(wx*.20,8,16)
             local chunk=(wx-open)/2
             for _,sign in ipairs({-1,1}) do
                 wall("Entrance masonry",cx+sign*(open+chunk)/2,cy,cz-dz/2,chunk,h,0,col)
             end
-            wall("Gate arch",cx,lv*h+h*.88,cz-dz/2,open,h*.22,0,light)
-            deco("Portcullis lintel",cx,lv*h+h*.58,cz-dz/2-1,open*.9,.65,1,gold)
-            for i=-3,3 do
-                deco("Iron gate rod",cx+i*open/8,lv*h+h*.35,cz-dz/2-1,.52,h*.65,.5,gold)
+            wall("Doorway lintel",cx,lv*h+h*.89,cz-dz/2,open,h*.22,0,light)
+            if lv>0 then
+                deco("Upper landing balcony",cx,lv*h-.1,cz-dz/2-3,open+3,.4,5,light)
+                for _,sign in ipairs({-1,1}) do
+                    deco("Balustrade pillar",cx+sign*(open/2+1),lv*h+1.7,cz-dz/2-5,.55,3.4,.55,light)
+                end
+            else
+                deco("Gothic door surround",cx,lv*h+h*.83,cz-dz/2-.75,open+2,.8,1.6,light)
             end
         else
             wall("South wall",cx,cy,cz-dz/2,wx,h,0,col)
@@ -510,6 +583,55 @@ local function beginPreview()
         end
         deco("Colonnade beam",x,h*.97,z,axis=="X" and len+2 or 2.7,1.1,axis=="Z" and len+2 or 2.7,light)
     end
+
+    -- Atrium cutout is left uncovered on upper decks. The staircase model is
+    -- local-preview geometry until actual stair item IDs are recorded.
+    local function galleryWithWell(cx,cz,wx,dz,lv)
+        if lv<1 then return end
+        local wellX=wx*.17
+        local wellW=math.max(12,wx*.22)
+        local wellD=math.max(23,dz*.65)
+        local west=wellX-wellW/2
+        local east=wellX+wellW/2
+        local leftW=west+wx/2
+        local rightW=wx/2-east
+        local yy=lv*h-.28
+        if leftW>2 then deck("Gallery floor",cx-wx/2+leftW/2,yy,cz,leftW,dz-2,stone) end
+        if rightW>2 then deck("Gallery floor",cx+east+rightW/2,yy,cz,rightW,dz-2,stone) end
+        local strip=(dz-wellD)/2
+        if strip>2 then
+            deck("North landing",cx+wellX,yy,cz+wellD/2+strip/2,wellW,strip,stone)
+            deck("South landing",cx+wellX,yy,cz-wellD/2-strip/2,wellW,strip,stone)
+        end
+        for _,side in ipairs({-1,1}) do
+            local bx=cx+wellX+side*wellW/2
+            deco("Open atrium balustrade",bx,lv*h+1.4,cz,.6,2.8,wellD,light)
+        end
+    end
+    local function grandStaircase(cx,cz,wx,dz,levels)
+        local wellX=wx*.17
+        local wellD=math.max(23,dz*.65)
+        local treadW=math.max(6,wx*.10)
+        local n=18
+        for lv=0,levels-2 do
+            for i=1,n do
+                local t=(i-.5)/n
+                local direction=lv%2==0 and 1 or -1
+                local px=cx+wellX
+                local pz=cz-direction*(wellD*.43)+direction*t*wellD*.86
+                local yy=lv*h+t*h
+                deco("Stair tread",px,yy,pz,treadW,.65,wellD*.86/n+.25,
+                    lv%2==0 and light or stone)
+            end
+            for _,side in ipairs({-1,1}) do
+                local px=cx+wellX+side*(treadW/2+.7)
+                deco("Stair railing",px,lv*h+h*.58,cz,.55,h*.90,wellD*.84,light)
+            end
+            deco("Intermediate landing",cx+wellX,(lv+1)*h-.2,
+                cz+(lv%2==0 and 1 or -1)*wellD*.44,treadW+3,.6,4,light)
+        end
+    end
+
     local function lantern(x,z)
         deco("Lantern plinth",x,.45,z,2,1.1,2,dark)
         deco("Lantern pedestal",x,2.8,z,.6,4.6,.6,light)
@@ -539,11 +661,12 @@ local function beginPreview()
         local kw,kd=w*.52,d*.39
         local kz=d*.12
         for lv=0,floors-1 do
-            walls(0,kz,kw,kd,lv,majestic and stone or dark,lv==0)
-            if lv>0 then deck("Floor",0,lv*h-.3,kz,kw-2,kd-2,stone) end
+            walls(0,kz,kw,kd,lv,majestic and stone or dark,true)
+            galleryWithWell(0,kz,kw-2,kd-2,lv)
             deco("Carved floor cornice",0,(lv+1)*h-.35,kz,kw+1,1.2,kd+1,light)
         end
-        deck("Roof terrace",0,floors*h-.3,kz,kw+1,kd+1,dark)
+        grandStaircase(0,kz,kw-2,kd-2,floors)
+        deco("Crowned keep roof",0,floors*h-.3,kz,kw+1,.8,kd+1,roof)
         for _,z in ipairs({kz-kd/2,kz+kd/2}) do crenels(0,z,kw,floors*h+1,0) end
         for _,x in ipairs({-kw/2,kw/2}) do crenels(x,kz,kd,floors*h+1,math.pi/2) end
         if majestic then
@@ -573,15 +696,16 @@ local function beginPreview()
             local x=sx*pos
             for lv=0,floors-1 do
                 walls(x,d*.06,wingW,wingD,lv,light,lv==0)
-                if lv>0 then deck("Floor",x,lv*h-.3,d*.06,wingW,wingD,stone) end
+                galleryWithWell(x,d*.06,wingW,wingD,lv)
             end
-            deck("Roof terrace",x,floors*h-.3,d*.06,wingW+2,wingD+2,stone)
+            deco("Palace roof terrace",x,floors*h-.3,d*.06,wingW+2,.8,wingD+2,roof)
+            grandStaircase(x,d*.06,wingW,wingD,floors)
             columns(x,-d*.31,wingW,"X")
             for _,z in ipairs({-d*.21,d*.27}) do tower(x,z,math.min(wingW*.23,10),floors+1,true) end
         end
         for lv=0,floors-1 do
             walls(0,d*.3,w*.43,d*.22,lv,stone,lv==0)
-            if lv>0 then deck("Floor",0,lv*h-.3,d*.3,w*.43,d*.22,light) end
+            if lv>0 then deck("Gallery floor",0,lv*h-.3,d*.3,w*.43,d*.22,light) end
         end
         tower(0,d*.3,math.min(w*.085,12),floors+2,true)
         columns(0,-d*.43,w*.49,"X")
@@ -592,9 +716,10 @@ local function beginPreview()
         local wx,dz=w*.77,d*.84
         for lv=0,floors-1 do
             walls(0,0,wx,dz,lv,dark,lv==0)
-            if lv>0 then deck("Floor",0,lv*h-.3,0,wx,dz,stone) end
+            galleryWithWell(0,0,wx,dz,lv)
             openings(0,dz/2,wx,math.max(1,lv),0)
         end
+        grandStaircase(0,0,wx,dz,floors)
         for i=-6,6 do
             local x=i*wx/13
             deco("Facade mullion",x,floors*h/2,-dz/2-1,1,floors*h,1,light)
@@ -610,9 +735,10 @@ local function beginPreview()
         local size=math.min(w,d)*.51
         for lv=0,floors-1 do
             walls(0,0,size,size,lv,dark,lv==0)
-            if lv>0 then deck("Floor",0,lv*h-.3,0,size,size,stone) end
+            galleryWithWell(0,0,size,size,lv)
         end
-        deck("Roof terrace",0,floors*h-.3,0,size+3,size+3,light)
+        grandStaircase(0,0,size,size,floors)
+        deco("Watchtower crest roof",0,floors*h-.3,0,size+3,.8,size+3,roof)
         tower(0,0,math.min(size*.24,13),floors+4,true)
         for _,x in ipairs({-w*.36,w*.36}) do
             tower(x,d*.27,math.min(w*.073,9),floors+1,false)
@@ -620,7 +746,7 @@ local function beginPreview()
         end
         crenels(0,-size/2,size,floors*h+1,0)
     end
-    notify("ORNATE PREVIEW: "..count.." parts / "..lastFootprint)
+    notify("DESIGN PREVIEW: "..count.." curated pieces / "..profile.name.." / "..lastFootprint)
     if state.page=="Builder" and switchPage then switchPage("Builder") end
 end
 
