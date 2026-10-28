@@ -198,8 +198,9 @@ local navSpecs = {
     {"Overview", "01"},
     {"Blueprints", "02"},
     {"Builder", "03"},
-    {"Materials", "04"},
-    {"Settings", "05"}
+    {"Catalog", "04"},
+    {"Materials", "05"},
+    {"Settings", "06"}
 }
 local navButtons = {}
 local renderPage, switchPage, modal
@@ -1042,91 +1043,267 @@ end
 -- Discover the live furniture catalog rather than guessing five stair IDs.
 -- Scans real furniture definitions. Hard-coded item "5" is no longer assumed
 -- to be a stone wall: the game may use it for a different wall style.
+-- The game keeps plot-build furniture separate from auction inventory.
+-- This scanner reads ONLY ReplicatedStorage.Modules.Furniture. It does not
+-- inspect players' inventories, auction items, or their stock collections.
+local BUILD_CATEGORIES={
+    "Walls","Doors","Windows","Floors","Ceilings","Structural",
+    "Shelves","Tables","Chairs","Kitchen","Lights","Outdoor","Shapes"
+}
+local BUILD_CATEGORY_SET={}
+for _,name in ipairs(BUILD_CATEGORIES) do BUILD_CATEGORY_SET[name]=true end
+local BUILD_ROOF_STYLES={
+    "Flat","Gable","Hip","Shed","Parapet","Gambrel","Saltbox",
+    "Butterfly","Pyramid","Pagoda","Sawtooth","Barrel"
+}
+local excludedCatalogCategories={
+    Stock=true,Inventory=true,Items=true,Auction=true,Loot=true,Storage=true
+}
 local stairCatalog={
     scanned=false,scanning=false,models={},shape=nil,wall=nil,walls={},error=nil
 }
-local stairStatus="Building catalog: auto-scan when opening Builder"
+local buildCatalog={
+    entries={},byCategory={},byId={},scanned=false,scanning=false,
+    skipped=0,total=0,sources={},status="Waiting for initial scan",
+    filter="All",query="",scanNumber=0
+}
+local stairStatus="Build catalog has not been scanned"
+local function scoreWall(name)
+    local lower=name:lower()
+    if lower:find("glass",1,true) or lower:find("clear",1,true)
+        or lower:find("window",1,true) or lower:find("transparent",1,true) then
+        return -999
+    end
+    local score=0
+    for _,rule in ipairs({
+        {"stone",140},{"brick",110},{"solid",105},{"plaster",90},
+        {"plain",80},{"wood",65},{"wall",35},{"medieval",60},
+    }) do
+        if lower:find(rule[1],1,true) then score=score+rule[2] end
+    end
+    return score
+end
 local function scanStairs()
     if stairCatalog.scanning then return false end
     stairCatalog.scanning=true
-    stairStatus="Scanning available stairs, shapes and walls..."
+    buildCatalog.scanning=true
+    buildCatalog.status="Scanning build catalog..."
+    stairStatus="Scanning build catalog..."
     local ok,registry=pcall(function()
         return require(game:GetService("ReplicatedStorage").Modules.Furniture)
     end)
-    if not ok or type(registry)~="table" or type(registry.GetById)~="function" then
+    if not ok or type(registry)~="table" then
         stairCatalog.scanned=false
         stairCatalog.scanning=false
-        stairCatalog.error="Furniture catalog unavailable"
+        buildCatalog.scanning=false
+        stairCatalog.error="Replicated Furniture catalog unavailable"
+        buildCatalog.status=stairCatalog.error
         stairStatus=stairCatalog.error
         notify(stairStatus)
         return false
     end
-    local models,shapes,walls={},{},{}
-    local known={}
-    local function inspect(data,fallback)
-        if type(data)~="table" then return end
-        local id=tostring(data.Id or data.ID or data.ItemId or data.id or fallback or "")
-        local category=tostring(data.Category or "")
-        local label=tostring(data.Name or data.DisplayName or "")
-        if id=="" or label=="" or known[id] then return end
-        known[id]=true
-        local lower=label:lower()
-        if lower:find("stair",1,true) or lower:find("steps",1,true) then
-            models[#models+1]={id=id,name=label,category=category,data=data}
+    local entries,byId,byCategory={}, {}, {}
+    local discoveredSources={}
+    local skipped=0
+    local function register(raw,fallback,source,categoryHint)
+        if type(raw)~="table" then return end
+        local category=raw.Category or raw.BuildCategory or categoryHint
+        local name=raw.Name or raw.DisplayName or raw.Label or raw.Title
+        local id=raw.Id or raw.ID or raw.ItemId or raw.ItemID or raw.id or fallback
+        if type(category)~="string" or excludedCatalogCategories[category]
+            or not BUILD_CATEGORY_SET[category] then
+            return
         end
-        if category=="Shapes" and (lower:find("block",1,true)
-            or lower:find("cube",1,true) or lower:find("box",1,true)) then
-            shapes[#shapes+1]={id=id,name=label,category=category,data=data}
+        if raw.IsStockItem==true or raw.IsInventoryItem==true
+            or raw.InventoryOnly==true or raw.IsAuctionItem==true then
+            return
         end
-        if category=="Walls" then
-            local score=0
-            if lower:find("glass",1,true) or lower:find("clear",1,true)
-                or lower:find("window",1,true) or lower:find("transparent",1,true) then
-                score=-999
-            else
-                if lower:find("stone",1,true) then score=score+140 end
-                if lower:find("brick",1,true) then score=score+110 end
-                if lower:find("solid",1,true) then score=score+100 end
-                if lower:find("plaster",1,true) then score=score+90 end
-                if lower:find("plain",1,true) then score=score+80 end
-                if lower:find("wood",1,true) then score=score+65 end
-                if lower:find("wall",1,true) then score=score+35 end
+        if type(name)~="string" or name=="" or
+            (type(id)~="string" and type(id)~="number") then
+            skipped=skipped+1
+            return
+        end
+        id=tostring(id)
+        if id=="" then skipped=skipped+1;return end
+        local key=category.."|"..id
+        if byId[key] then return end
+        local row={id=id,name=name,category=category,source=source or "Furniture"}
+        entries[#entries+1]=row
+        byId[key]=row
+        byCategory[category]=byCategory[category] or {}
+        table.insert(byCategory[category],row)
+        discoveredSources[source or "Furniture"]=true
+    end
+    local traversed={}
+    local traversedCount=0
+    local function walk(data,depth,hint,source,fallback)
+        if type(data)~="table" or traversed[data] or depth>4
+            or traversedCount>20000 then return end
+        traversed[data]=true
+        traversedCount=traversedCount+1
+        if type(data.Name or data.DisplayName or data.Label or data.Title)=="string"
+            and type(data.Category or data.BuildCategory or hint)=="string" then
+            register(data,fallback,source,hint)
+            return
+        end
+        for key,value in pairs(data) do
+            if type(value)=="table" then
+                local nextHint=hint
+                if type(key)=="string" and BUILD_CATEGORY_SET[key] then
+                    nextHint=key
+                end
+                local nextFallback=nil
+                if type(key)=="number" or
+                    (type(key)=="string" and key:match("^%d+$")) then
+                    nextFallback=key
+                end
+                walk(value,depth+1,nextHint,source,nextFallback)
             end
-            walls[#walls+1]={id=id,name=label,score=score,data=data}
         end
     end
-    -- The game furniture module exposes GetById. Scan candidate catalog IDs.
-    for i=1,2400 do
-        local okItem,data=pcall(function() return registry:GetById(tostring(i)) end)
-        if okItem then inspect(data,i) end
-        if i%250==0 then task.wait() end
+    -- Prefer complete exported collections if a game update supplies them.
+    for _,method in ipairs({
+        "GetAll","GetAllItems","GetAllFurniture","GetCatalog",
+        "GetItems","GetFurniture","ListAll","GetItemList"
+    }) do
+        local fn=registry[method]
+        if type(fn)=="function" then
+            local got,result=pcall(fn,registry)
+            if got and type(result)=="table" then
+                walk(result,0,nil,method,nil)
+            end
+        end
     end
-    table.sort(models,function(x,y)return x.name<y.name end)
-    table.sort(shapes,function(x,y)
-        local function rank(v)
-            local n=v.name:lower()
+    for _,category in ipairs(BUILD_CATEGORIES) do
+        -- Category APIs sometimes expose non-numeric or non-contiguous IDs.
+        for _,method in ipairs({
+            "GetByCategory","GetAllByCategory","GetCategoryItems",
+            "GetItemsByCategory","GetCategory"
+        }) do
+            local fn=registry[method]
+            if type(fn)=="function" then
+                local got,result=pcall(fn,registry,category)
+                if got and type(result)=="table" then
+                    walk(result,0,category,method,nil)
+                end
+            end
+        end
+        if type(registry[category])=="table" then
+            walk(registry[category],0,category,"Furniture."..category,nil)
+        end
+    end
+    for _,key in ipairs({
+        "All","AllItems","Items","Data","Definitions","Catalog","ById",
+        "ItemsById","Furniture","FurnitureItems","ItemList","Entries","List"
+    }) do
+        if type(registry[key])=="table" then
+            walk(registry[key],0,nil,"Furniture."..key,nil)
+        end
+    end
+    -- Fallback for the GetById interface exposed by BuildState.
+    -- Bounded scan; nonnumeric IDs can still be found by exports above.
+    if type(registry.GetById)=="function" then
+        for i=1,4500 do
+            if not alive then break end
+            local resultOK,data=pcall(registry.GetById,registry,tostring(i))
+            if resultOK then register(data,i,"GetById",nil) end
+            if i%175==0 then
+                buildCatalog.status="Scanning item IDs... "..i.."/4500"
+                task.wait()
+            end
+        end
+    end
+    for _,rows in pairs(byCategory) do
+        table.sort(rows,function(a,b)
+            if a.name~=b.name then return a.name:lower()<b.name:lower() end
+            return a.id<b.id
+        end)
+    end
+    table.sort(entries,function(a,b)
+        if a.category~=b.category then return a.category<b.category end
+        if a.name~=b.name then return a.name:lower()<b.name:lower() end
+        return a.id<b.id
+    end)
+    local stairs,shapes,walls={},{},{}
+    for _,entry in ipairs(entries) do
+        local low=entry.name:lower()
+        if low:find("stair",1,true) or low:find("steps",1,true) then
+            if entry.category=="Structural" or entry.category=="Shapes"
+                or entry.category=="Outdoor" then
+                stairs[#stairs+1]=entry
+            end
+        end
+        if entry.category=="Shapes" and
+            (low:find("block",1,true) or low:find("cube",1,true)
+                or low:find("box",1,true)) then
+            shapes[#shapes+1]=entry
+        end
+        if entry.category=="Walls" then
+            local wall={
+                id=entry.id,name=entry.name,category=entry.category,
+                score=scoreWall(entry.name)
+            }
+            walls[#walls+1]=wall
+        end
+    end
+    table.sort(stairs,function(a,b)return a.name:lower()<b.name:lower() end)
+    table.sort(shapes,function(a,b)
+        local function score(row)
+            local n=row.name:lower()
             return (n:find("cube",1,true) and 20 or 0)
                 +(n:find("block",1,true) and 10 or 0)
         end
-        return rank(x)>rank(y)
+        if score(a)~=score(b) then return score(a)>score(b) end
+        return a.name:lower()<b.name:lower()
     end)
-    table.sort(walls,function(x,y)
-        if x.score~=y.score then return x.score>y.score end
-        return x.name<y.name
+    table.sort(walls,function(a,b)
+        if a.score~=b.score then return a.score>b.score end
+        return a.name:lower()<b.name:lower()
     end)
-    stairCatalog.models=models
-    stairCatalog.shape=shapes[1]
+    -- Preserve a selected wall/shape when still present after a rescan.
+    local previousWall=stairCatalog.wall and stairCatalog.wall.id
+    local previousShape=stairCatalog.shape and stairCatalog.shape.id
+    stairCatalog.wall=nil
+    for _,entry in ipairs(walls) do
+        if entry.id==previousWall and entry.score>=0 then
+            stairCatalog.wall=entry;break
+        end
+    end
+    if not stairCatalog.wall and walls[1] and walls[1].score>=0 then
+        stairCatalog.wall=walls[1]
+    end
+    stairCatalog.shape=nil
+    for _,entry in ipairs(shapes) do
+        if entry.id==previousShape then stairCatalog.shape=entry;break end
+    end
+    stairCatalog.shape=stairCatalog.shape or shapes[1]
+    stairCatalog.models=stairs
     stairCatalog.walls=walls
-    stairCatalog.wall=walls[1] and walls[1].score>=0 and walls[1] or nil
     stairCatalog.scanned=true
     stairCatalog.scanning=false
     stairCatalog.error=nil
-    stairStatus="Found "..#models.." stairs / "..#shapes.." block shapes / "..#walls.." wall styles"
-    notify(stairStatus)
+    buildCatalog.entries=entries
+    buildCatalog.byCategory=byCategory
+    buildCatalog.byId=byId
+    buildCatalog.scanned=true
+    buildCatalog.scanning=false
+    buildCatalog.total=#entries
+    buildCatalog.skipped=skipped
+    buildCatalog.sources=discoveredSources
+    buildCatalog.scanNumber=buildCatalog.scanNumber+1
+    buildCatalog.status="Found "..#entries.." building items in "..
+        tostring(#BUILD_CATEGORIES).." eligible categories"
+    stairStatus=#stairs.." stair models | "..#shapes..
+        " shapes | "..#walls.." walls (auto-detected)"
+    notify("Build Catalog: "..#entries.." build items / stock & inventory excluded")
     return true
 end
 local function ensureCatalog()
     if stairCatalog.scanned then return true end
+    if stairCatalog.scanning then
+        notify("Build catalog scan is still running")
+        return false
+    end
     return scanStairs()
 end
 local function isGlassModel(model)
@@ -2009,6 +2186,14 @@ modal = function(title,body,confirmText,callback)
 end
 
 local function updateSidebar()
+    local compactNav=win.AbsoluteSize.Y<460
+    for i,nav in ipairs(navSpecs) do
+        local item=navButtons[nav[1]]
+        if item then
+            item.button.Position=UDim2.fromOffset(9,compactNav and (37+(i-1)*39) or (48+(i-1)*47))
+            item.button.Size=UDim2.new(1,-18,0,compactNav and 35 or 41)
+        end
+    end
     local sidebarW = (state.compact or win.AbsoluteSize.X < 620) and 116 or 185
     sidebar.Size = UDim2.new(0,sidebarW,1,-102)
     content.Position = UDim2.fromOffset(sidebarW,69)
@@ -2023,10 +2208,12 @@ end
 
 switchPage = function(page)
     state.page = page
-    if page=="Builder" and not stairCatalog.scanned and not stairCatalog.scanning then
+    if (page=="Builder" or page=="Catalog") and not stairCatalog.scanned and not stairCatalog.scanning then
         task.spawn(function()
             scanStairs()
-            if alive and state.page=="Builder" then switchPage("Builder") end
+            if alive and (state.page=="Builder" or state.page=="Catalog") then
+                switchPage(state.page)
+            end
         end)
     end
     for name, entry in pairs(navButtons) do
@@ -2482,4 +2669,13 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v1.4 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+task.spawn(function()
+    task.wait(.15)
+    if alive and not stairCatalog.scanned and not stairCatalog.scanning then
+        scanStairs()
+        if alive and (state.page=="Catalog" or state.page=="Builder") then
+            switchPage(state.page)
+        end
+    end
+end)
+print("[Plot Studio] v1.5 loaded. Preview is local; confirmed builder actions may place permanent structures.")
