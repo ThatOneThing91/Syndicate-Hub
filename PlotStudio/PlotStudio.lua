@@ -1,6 +1,6 @@
 --[[
     PLOT STUDIO | Storage Hunters
-    Standalone GUI v0.4 with plot-sized ornate previews and gated structural shell build
+    Standalone GUI v0.5 with plot-sized ornate previews and adjustable fast construction pacing
     Previews are local; confirmed build actions can place permanent parts.
     The blueprint library is a catalog mockup, not loaded models.
 ]]
@@ -135,6 +135,7 @@ local state = {
     page = "Overview", filter = "ALL", design = 1,
     material = "Cobblestone", color = swatches[1][1], colorName = "Amethyst",
     floors = 5, grid = true, confirm = true, notifications = true, compact = false,
+    buildSpeed = "Fast",
 }
 
 local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
@@ -624,7 +625,20 @@ local function beginPreview()
 end
 
 -- Build engine v0.3. The first real action is always a one-wall test.
-local build={busy=false,cancel=false,passed=false,signature=nil,firstIndex=nil,status="Not started"}
+local build={busy=false,cancel=false,passed=false,signature=nil,firstIndex=nil,status="Not started",sent=0,total=0}
+-- Timing presets apply only to actual construction requests.
+-- Delays are intentionally bounded to avoid an unbounded remote spam loop.
+local BUILD_SPEEDS={
+    Steady={interval=.24,burst=12,cooldown=.12},
+    Fast={interval=.08,burst=18,cooldown=.12},
+    Turbo={interval=.045,burst=20,cooldown=.10},
+}
+local buildStatusText=nil
+local function refreshBuildStatus()
+    if buildStatusText and buildStatusText.Parent then
+        buildStatusText.Text=build.status
+    end
+end
 local function buildSignature(plot,origin)
     return plot.Name.."|"..tostring(state.design).."|"..tostring(state.floors).."|"..tostring(origin.Position)
 end
@@ -725,6 +739,7 @@ local function testWall()
     build.signature=buildSignature(plot,origin)
     build.passed=false;build.firstIndex=index;build.cancel=false;build.busy=true
     build.status="Testing one wall"
+    refreshBuildStatus()
     local before={}
     local folder=plot:FindFirstChild("Structures")
     if folder then for _,child in ipairs(folder:GetChildren()) do before[child]=true end end
@@ -747,6 +762,7 @@ local function testWall()
             build.status=ok and "Wall not confirmed; inspect your plot" or "Wall remote error"
             notify(build.status..(ok and "" or ": "..tostring(err):sub(1,90)))
         end
+        refreshBuildStatus()
         if alive and state.page=="Builder" then switchPage("Builder") end
     end)
 end
@@ -763,33 +779,55 @@ local function startBuild()
     for _,kind in ipairs({"Wall","Floor","Roof"}) do
         if not eventFor(kind) then notify("Place"..kind.." remote missing");return end
     end
+    local pace=BUILD_SPEEDS[state.buildSpeed] or BUILD_SPEEDS.Fast
+    local selectedSpeed=state.buildSpeed
     build.busy=true;build.cancel=false
-    build.status="Building..."
+    build.total=math.max(0,#units-1)
+    build.sent=0
+    build.status="Building ("..selectedSpeed..") 0 / "..build.total
+    refreshBuildStatus()
+    notify("Build started / "..selectedSpeed.." mode / "..build.total.." requests")
     task.spawn(function()
-        local sent=0;local failures=0
+        local sent=0
+        local failures=0
         for i,u in ipairs(units) do
             if build.cancel or not alive then break end
             if i~=build.firstIndex then
                 local ok,err=pcall(function() fireUnit(u) end)
-                if not ok then failures=failures+1;notify(tostring(err):sub(1,100));break end
-                sent=sent+1
-                if sent%10==0 then
-                    build.status="Submitted "..sent.." / "..(#units-1)
-                    notify(build.status)
+                if not ok then
+                    failures=failures+1
+                    notify(tostring(err):sub(1,100))
+                    break
                 end
-                task.wait(.35)
+                sent=sent+1
+                build.sent=sent
+                -- Update the status in place without rebuilding the whole GUI.
+                if sent%12==0 or sent==build.total then
+                    build.status="Building ("..selectedSpeed..") "..sent.." / "..build.total
+                    refreshBuildStatus()
+                end
+                -- A short rest after each burst keeps STOP BUILD responsive and
+                -- avoids dumping hundreds of remotes into the server at once.
+                local rest=(sent%pace.burst==0) and pace.cooldown or 0
+                task.wait(pace.interval+rest)
             end
         end
-        build.busy=false;build.passed=false
-        if build.cancel then build.status="Stopped after "..sent.." sends"
-        elseif failures>0 then build.status="Stopped: placement error"
-        else build.status="Sent "..sent.." requests; inspect plot" end
-        notify(build.status..". Existing placed pieces remain.")
+        build.busy=false
+        build.passed=false
+        if build.cancel then build.status="Stopped after "..sent.." requests"
+        elseif failures>0 then build.status="Stopped due to a placement error"
+        else build.status="Sent "..sent.." requests; inspect your plot" end
+        refreshBuildStatus()
+        notify(build.status..". Already placed pieces remain.")
         if alive and state.page=="Builder" then switchPage("Builder") end
     end)
 end
 local function stopBuild()
-    if build.busy then build.cancel=true;notify("Stopping remaining build requests")
+    if build.busy then
+        build.cancel=true
+        build.status="Stopping after current request..."
+        refreshBuildStatus()
+        notify("Stopping remaining build requests")
     else notify("No build is running") end
 end
 
@@ -1021,6 +1059,27 @@ renderPage = function(page)
         plusF.TextSize=19
         text(opts,"MAX 5  •  DEMO ONLY",16,132,240,18,10,C.muted,true)
 
+        local speedBox=block(scroll,120)
+        text(speedBox,"CONSTRUCTION SPEED",16,10,400,25,15,C.white,true)
+        local speedModes={"Steady","Fast","Turbo"}
+        for i,mode in ipairs(speedModes) do
+            local selected=state.buildSpeed==mode
+            local b=button(speedBox,mode:upper(),0,42,100,31,selected,function()
+                if build.busy then
+                    notify("Finish or stop the current build before changing speed")
+                    return
+                end
+                state.buildSpeed=mode
+                notify("Build speed set to "..mode)
+                switchPage("Builder")
+            end)
+            b.Position=UDim2.new((i-1)/3,6,0,42)
+            b.Size=UDim2.new(1/3,-12,0,31)
+        end
+        text(speedBox,"Fast: ~0.08s/request  ·  Turbo: ~0.045s/request  ·  Server limits may apply",16,82,470,29,10,C.dim,false,{
+            Size=UDim2.new(1,-32,0,29),TextWrapped=true
+        })
+
         local choice=block(scroll,111)
         sectionNote(choice,"BUILD FINISH",
             "Material: "..state.material.."     /     Accent: "..state.colorName,10)
@@ -1039,7 +1098,7 @@ renderPage = function(page)
 
         local builderPanel=block(scroll,194,C.raised)
         text(builderPanel,"BUILD THIS DESIGN",16,10,425,26,15,C.white,true)
-        text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
+        buildStatusText=text(builderPanel,build.status,16,37,435,23,11,C.mint,false,{Size=UDim2.new(1,-32,0,23)})
         text(builderPanel,"The build test supports only basic walls and floors. Decorative spires, arches and windows are visual concepts for now.",16,63,435,47,12,C.dim,false,{
             Size=UDim2.new(1,-32,0,47),TextWrapped=true
         })
@@ -1159,7 +1218,7 @@ renderPage = function(page)
         settingsRow("Toast notifications","Show in-studio messages","notifications")
         settingsRow("Compact navigation","Make more room for content","compact")
         local about=block(scroll,119,C.raised)
-        sectionNote(about,"PLOT STUDIO  •  VERSION 0.4",
+        sectionNote(about,"PLOT STUDIO  •  VERSION 0.5",
             "Independent of Syndicate Hub. Local previews are harmless. Confirmed build actions can permanently place structures.",12)
         button(about,"ABOUT THE PROJECT",16,83,174,27,false,function()
             modal("About Plot Studio",
@@ -1247,4 +1306,4 @@ end)
 
 updateSidebar()
 switchPage("Overview")
-print("[Plot Studio] v0.4 loaded. Preview is local; confirmed builder actions may place permanent structures.")
+print("[Plot Studio] v0.5 loaded. Preview is local; confirmed builder actions may place permanent structures.")
