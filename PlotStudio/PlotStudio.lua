@@ -508,7 +508,7 @@ local function stat(bp)
 end
 local panelW=math.floor((W-44)/2)
 local panelY=91
-local panelH=math.max(153,H-297)
+local panelH=math.max(118,H-344)
 local left=round(make("Frame",{Position=UDim2.fromOffset(14,panelY),
     Size=UDim2.fromOffset(panelW,panelH),BackgroundColor3=COLORS.side,
     BorderSizePixel=0},win),9)
@@ -809,7 +809,7 @@ end
 -- Spatial index makes validation close to O(n) on large furnished plots;
 -- scanning every source piece against every model caused avoidable lag.
 local function reconcile(bp,origin,physical)
-    local used,matched={},{}
+    local used,matched,links={},{},{}
     local count=0
     local buckets={}
     local function bucketKey(x,y,z)
@@ -853,10 +853,11 @@ local function reconcile(bp,origin,physical)
         if best then
             used[best]=true
             matched[i]=true
+            links[i]=physical[best].object
             count=count+1
         end
     end
-    return matched,count
+    return matched,count,links
 end
 local function remote(name)
     local e=RS:FindFirstChild("Events")
@@ -915,6 +916,167 @@ local function placeOne(part,origin,storey)
     end
     return true
 end
+
+-- Controlled finish transfer. The archived builder knows a possible
+-- MaterialItem(GUID, material-name) call. ColorItem may not be present.
+-- Test ONE actual destination item and verify its appearance before batch
+-- requests; otherwise stop and print exact diagnostics.
+local function finishDistance(rgb,other)
+    if type(rgb)~="table" or type(other)~="table" then return math.huge end
+    return math.max(math.abs((tonumber(rgb[1]) or 0)-(tonumber(other[1]) or 0)),
+        math.abs((tonumber(rgb[2]) or 0)-(tonumber(other[2]) or 0)),
+        math.abs((tonumber(rgb[3]) or 0)-(tonumber(other[3]) or 0)))
+end
+local function finishRemotes()
+    local parent=RS:FindFirstChild("Events")
+    parent=parent and parent:FindFirstChild("Plot")
+    local result={}
+    if parent then
+        for _,entry in ipairs(parent:GetChildren()) do
+            if entry:IsA("RemoteEvent") and
+                (entry.Name:lower():find("color",1,true) or
+                entry.Name:lower():find("paint",1,true) or
+                entry.Name:lower():find("material",1,true) or
+                entry.Name:lower():find("roof",1,true) or
+                entry.Name:lower():find("shelf",1,true)) then
+                result[#result+1]=entry.Name
+            end
+        end
+    end
+    table.sort(result)
+    return table.concat(result,", ")
+end
+local function syncFinishes()
+    if busy then inform("Stop the active build before syncing finishes",true);return end
+    local bp,err=chooseBase()
+    if not bp then inform(err or "Select a saved base",true);return end
+    local hasFinishes=0
+    for _,piece in ipairs(bp.parts) do
+        if piece.color or piece.material then hasFinishes=hasFinishes+1 end
+    end
+    if hasFinishes==0 then
+        inform("This old JSON did not save colors. Recapture the source plot with V3.4.",true)
+        return
+    end
+    local plot=ownPlot()
+    local origin=plot and plotFrame(plot)
+    if not origin then inform("Your owned plot is unavailable",true);return end
+    local _,confirmed,links=reconcile(bp,origin,scene(plot))
+    local colorRemote=remote("ColorItem")
+    local materialRemote=remote("MaterialItem")
+    log("Finish remotes available: "..finishRemotes())
+    log("Finish data: "..hasFinishes.."/"..#bp.parts..
+        " source pieces; "..confirmed.." matched to destination.")
+    local jobs={color={},material={}}
+    local withoutGuid=0
+    for i,p in ipairs(bp.parts) do
+        local obj=links[i]
+        if obj then
+            local guid=obj:GetAttribute("GUID")
+            if guid==nil then
+                withoutGuid=withoutGuid+1
+            else
+                local color,material=extractFinish(obj)
+                if p.color and finishDistance(p.color,color)>.08 then
+                    jobs.color[#jobs.color+1]={object=obj,
+                        guid=tostring(guid),rgb=p.color,kind=p.kind,index=i}
+                end
+                if p.material and material~=p.material then
+                    jobs.material[#jobs.material+1]={object=obj,
+                        guid=tostring(guid),material=p.material,
+                        kind=p.kind,index=i}
+                end
+            end
+        end
+    end
+    log("Finish work: "..#jobs.color.." colors, "..#jobs.material..
+        " materials, "..withoutGuid.." matched objects without GUID.")
+    if #jobs.color==0 and #jobs.material==0 then
+        inform("No verifiable color/material changes needed for matched objects.")
+        return
+    end
+    if #jobs.color>0 and not colorRemote then
+        log("ColorItem remote not found; need a Cobalt capture from manually recoloring ONE object.")
+    end
+    if #jobs.material>0 and not materialRemote then
+        log("MaterialItem remote not found; need a Cobalt capture from manually changing ONE material.")
+    end
+    if not colorRemote and not materialRemote then
+        inform("Paint remotes unknown. COPY LOG and send a Cobalt color-change capture.",true)
+        return
+    end
+    busy=true;cancel=false
+    task.spawn(function()
+        local runOk,problem=pcall(function()
+            local finished,unconfirmed,testsFailed=0,0,0
+            for _,category in ipairs({"color","material"}) do
+                local list=jobs[category]
+                local r=category=="color" and colorRemote or materialRemote
+                if #list>0 and r and alive and not cancel then
+                    local function check(job)
+                        if not job.object.Parent then return false end
+                        local actualColor,actualMaterial=extractFinish(job.object)
+                        if category=="color" then
+                            return finishDistance(job.rgb,actualColor)<.065
+                        end
+                        return actualMaterial==job.material
+                    end
+                    local function send(job)
+                        if category=="color" then
+                            local v=job.rgb
+                            r:FireServer(job.guid,Color3.new(
+                                tonumber(v[1]) or 1,tonumber(v[2]) or 1,tonumber(v[3]) or 1))
+                        else
+                            r:FireServer(job.guid,job.material)
+                        end
+                    end
+                    local probe=list[1]
+                    local ok,reason=pcall(send,probe)
+                    local passed=false
+                    if ok then
+                        for attempt=1,9 do
+                            if not alive or cancel then break end
+                            if check(probe) then passed=true;break end
+                            task.wait(.2)
+                        end
+                    end
+                    if passed then
+                        finished=finished+1
+                        log(category.." finish probe verified on #"..
+                            tostring(probe.index).."; applying matched finishes.")
+                        for j=2,#list do
+                            if cancel or not alive then break end
+                            local job=list[j]
+                            local succeed,why=pcall(send,job)
+                            if not succeed then
+                                unconfirmed=unconfirmed+1
+                                if unconfirmed<6 then log(category.." #"..job.index..
+                                    " rejected: "..tostring(why)) end
+                            else
+                                finished=finished+1
+                            end
+                            task.wait(.10)
+                        end
+                    else
+                        testsFailed=testsFailed+1
+                        log(category.." probe NOT verified: "..
+                            tostring(ok and "server did not change finish" or reason)..
+                            ". No bulk "..category.." requests sent.")
+                    end
+                end
+            end
+            log("Finish requests sent after verified probe: "..finished..
+                ", immediate send errors: "..unconfirmed..
+                ", unsupported/failed probe stages: "..testsFailed)
+            inform("FINISH SYNC: "..finished..
+                " requests after probe; inspect colors. COPY LOG for unsupported types.",
+                testsFailed>0)
+        end)
+        busy=false
+        if not runOk then inform("Finish sync error: "..tostring(problem),true) end
+    end)
+end
+
 local function progressPath(bp,plot)
     local identity=safeName(bp.name or "SavedBase")
     return folder.."/_progress_"..identity.."_"..
@@ -1158,8 +1320,9 @@ action(2,2,"STOP",function()
 end)
 action(3,2,"READ GITHUB",downloadLibrary)
 local extraY=buttonY+81
-local l0=txt(win,"Save JSON locally, or publish files via SavedBases/index.json.",16,extraY,W-30,19,11,COLORS.dim,false)
-local logBtn=btn(win,"COPY LOG",W-109,extraY+1,93,20,function()
+local finishBtn=btn(win,"SYNC FINISHES",14,extraY+1,125,22,syncFinishes,true)
+local l0=txt(win,"Source colors -> own plot",147,extraY+1,230,20,10,COLORS.dim,false)
+local logBtn=btn(win,"COPY LOG",W-109,extraY+1,93,22,function()
     local payload=table.concat(logs,"\n")
     local clip=setclipboard or toclipboard
     if type(clip)=="function" then pcall(clip,payload) end
