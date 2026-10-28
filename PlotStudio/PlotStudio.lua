@@ -135,7 +135,7 @@ local state = {
     page = "Overview", filter = "ALL", design = 1,
     material = "Cobblestone", color = swatches[1][1], colorName = "Amethyst",
     floors = 5, grid = true, confirm = true, notifications = true, compact = false,
-    buildSpeed = "Fast", autoStyle = true, advancedBuilder = false,
+    buildSpeed = "Steady", autoStyle = true, advancedBuilder = false,
 }
 
 local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
@@ -2942,7 +2942,14 @@ local function startBuild()
     -- Stair gaps are handled in an independent optional repair operation.
     notify("STRUCTURAL PASS: walls + floors only. No stair verification required.")
 
-    if #units>900 then notify("Blueprint exceeds 900-piece limit");return end
+    if #units>400 then
+        -- Long layouts are built in small, independently audited batches.
+        -- Re-run BUILD / REPAIR SHELL to continue after actual models appear.
+        local batch={}
+        for i=1,400 do batch[#batch+1]=units[i] end
+        notify("Large blueprint: doing the first 400 structural pieces. Re-run to continue after auditing.")
+        units=batch
+    end
     notify("Occupancy scan: "..(stats and stats.skipped or 0)..
         " occupied skipped; "..(stats and stats.trimmed or 0).." walls trimmed.")
     if #units==0 then notify("All planned positions occupied; no work needed");return end
@@ -3037,7 +3044,7 @@ local function startBuild()
                     serverConflicts=serverConflicts+1
                 end
             end
-            local maximumRetry=math.min(#retryable,30)
+            local maximumRetry=math.min(#retryable,8)
             if maximumRetry>0 then
                 notify("Construction audit: "..#missing..
                     " pieces not confirmed / rechecking up to "..maximumRetry)
