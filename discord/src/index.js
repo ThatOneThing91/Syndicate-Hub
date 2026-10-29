@@ -247,14 +247,6 @@ async function refreshExecutorStatus(env) {
 }
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-const COMMANDS=[
- {name:"getkey",description:"Get your lifetime Syndicate Hub key",options:[{type:3,name:"roblox_id",description:"Your numeric Roblox User ID",required:true}]},
- {name:"online",description:"Show currently active Syndicate Hub users (admins only)",default_member_permissions:"8"},
- {name:"executions",description:"Show recent Syndicate Hub executions (admins only)",default_member_permissions:"8"},
- {name:"keys",description:"List active Syndicate Hub keys (admins only)",default_member_permissions:"8"},
- {name:"panel",description:"Post the permanent key generation panel (admins only)",default_member_permissions:"8"},
- {name:"revoke",description:"Revoke a Roblox User ID's key (admins only)",default_member_permissions:"8",options:[{type:3,name:"roblox_id",description:"Roblox User ID to revoke",required:true}]}
-];
 // Syndicate Hub Discord interactions Worker. Deploy separately with D1 binding DB,
 // KEY_ISSUER service binding, DISCORD_BOT_TOKEN secret and the public key below.
 // Do not place tokens in this source or a public repository.
@@ -917,11 +909,11 @@ function needsBetaAccess(i) {
  if(i.type===5)return ["syndicate_key_modal","syndicate_free_modal"].includes(i.data?.custom_id);
  return i.type===3&&["syndicate_generate_key","syndicate_free_generate","syndicate_free_view","syndicate_get_script","syndicate_revoke_own_key","syndicate_confirm_self_revoke"].includes(i.data?.custom_id);
 }
-function betaOverwrites(channel,roles,botId) {
+function betaOverwrites(channel,roles,botId,accessRoleId=BETA_TESTER_ROLE_ID) {
  const VIEW=1024n;
  const allowedRoles=new Set(roles.filter(r=>r.tags?.bot_id||(BigInt(r.permissions||"0")&8n)!==0n
    ||["Sovereign","Enforcer"].includes(r.name)).map(r=>r.id));
- allowedRoles.add(BETA_TESTER_ROLE_ID);
+ allowedRoles.add(accessRoleId);
  const overwrites=(channel.permission_overwrites||[]).map(o=>({...o,allow:String(o.allow||"0"),deny:String(o.deny||"0")}));
  for(const o of overwrites){
   if(o.id===GUILD_ID&&o.type===0){o.allow=String(BigInt(o.allow)&~VIEW);o.deny=String(BigInt(o.deny)|VIEW);}
@@ -929,7 +921,7 @@ function betaOverwrites(channel,roles,botId) {
   else {o.allow=String(BigInt(o.allow)&~VIEW);}
  }
  if(!overwrites.some(o=>o.type===0&&o.id===GUILD_ID))overwrites.push({id:GUILD_ID,type:0,allow:"0",deny:"1024"});
- if(!overwrites.some(o=>o.type===0&&o.id===BETA_TESTER_ROLE_ID))overwrites.push({id:BETA_TESTER_ROLE_ID,type:0,allow:"1024",deny:"0"});
+ if(!overwrites.some(o=>o.type===0&&o.id===accessRoleId))overwrites.push({id:accessRoleId,type:0,allow:"1024",deny:"0"});
  if(!overwrites.some(o=>o.type===1&&o.id===botId))overwrites.push({id:botId,type:1,allow:"1024",deny:"0"});
  return overwrites;
 }
@@ -955,10 +947,11 @@ async function ensureBetaHubAccess(env) {
   await env.DB.prepare("UPDATE beta_hub_access SET backup=COALESCE(backup,?),updated_at=? WHERE id=1").bind(JSON.stringify(affected),new Date().toISOString()).run();
   const modified=[];
   for(const channel of affected) {
-   const overwrites=betaOverwrites(channel,roles,me.id);
+   const requiredRole=channel.id==="1563145457910153319"?PREMIUM_ROLE_ID:BETA_TESTER_ROLE_ID;
+   const overwrites=betaOverwrites(channel,roles,me.id,requiredRole);
    const changed=(await platformDiscord(env,"/channels/"+channel.id,"PATCH",{permission_overwrites:overwrites})).data;
    const everyone=changed.permission_overwrites?.find(o=>o.id===GUILD_ID&&o.type===0);
-   const betaOverwrite=changed.permission_overwrites?.find(o=>o.id===BETA_TESTER_ROLE_ID&&o.type===0);
+   const betaOverwrite=changed.permission_overwrites?.find(o=>o.id===requiredRole&&o.type===0);
    if(!(BigInt(everyone?.deny||"0")&1024n)||!(BigInt(betaOverwrite?.allow||"0")&1024n))throw Error("Could not confirm channel visibility for "+channel.id);
    modified.push({id:channel.id,name:channel.name});
   }
@@ -970,9 +963,50 @@ async function ensureBetaHubAccess(env) {
  }
 }
 
+
+async function ensurePremiumChannelAndRemoveCommands(env) {
+ const revision="premium-only-buttons-v1";
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
+ const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
+ if(!claim.meta?.changes)return;
+ try {
+  // Only this application's commands are removed; panel components do not
+  // depend on slash command registration.
+  const paths=["/applications/"+APPLICATION_ID+"/commands","/applications/"+APPLICATION_ID+"/guilds/"+GUILD_ID+"/commands"];
+  for(const path of paths)await platformDiscord(env,path,"PUT",[]);
+  const counts=[];
+  for(const path of paths){
+   const commands=(await platformDiscord(env,path)).data;
+   if(!Array.isArray(commands)||commands.length)throw Error("Slash command removal was not confirmed.");
+   counts.push(commands.length);
+  }
+  const channel=(await platformDiscord(env,"/channels/1563145457910153319")).data;
+  if(channel.guild_id!==GUILD_ID)throw Error("Premium channel is not in this server.");
+  const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
+  const premium=roles.find(r=>r.id===PREMIUM_ROLE_ID);
+  if(!premium||premium.managed||premium.name.toLowerCase()!=="premium")throw Error("Premium role could not be verified.");
+  const me=(await platformDiscord(env,"/users/@me")).data;
+  await env.DB.prepare("UPDATE premium_channel_setup SET backup=COALESCE(backup,?),updated_at=? WHERE id=1").bind(JSON.stringify(channel.permission_overwrites||[]),new Date().toISOString()).run();
+  const overwrites=betaOverwrites(channel,roles,me.id,PREMIUM_ROLE_ID);
+  const changed=(await platformDiscord(env,"/channels/"+channel.id,"PATCH",{permission_overwrites:overwrites})).data;
+  const everyone=changed.permission_overwrites?.find(o=>o.type===0&&o.id===GUILD_ID);
+  const premiumOverwrite=changed.permission_overwrites?.find(o=>o.type===0&&o.id===PREMIUM_ROLE_ID);
+  const beta=changed.permission_overwrites?.find(o=>o.type===0&&o.id===BETA_TESTER_ROLE_ID);
+  if(!(BigInt(everyone?.deny||"0")&1024n)||!(BigInt(premiumOverwrite?.allow||"0")&1024n)
+   ||BigInt(beta?.allow||"0")&1024n)throw Error("Premium-only channel visibility was not confirmed.");
+  const details={channel_id:channel.id,channel_name:channel.name,required_role:premium.id,global_commands:counts[0],guild_commands:counts[1]};
+  await env.DB.prepare("UPDATE premium_channel_setup SET revision=?,status='ready',details=?,last_error=NULL,lease_until=0,updated_at=? WHERE id=1").bind(revision,JSON.stringify(details),new Date().toISOString()).run();
+ }catch(e){
+  await env.DB.prepare("UPDATE premium_channel_setup SET status='error',last_error=?,lease_until=?,updated_at=? WHERE id=1").bind(String(e).slice(0,1500),Date.now()+60000,new Date().toISOString()).run();
+  throw e;
+ }
+}
+
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
+  ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium channel setup",String(e))));
   ctx.waitUntil(ensureBetaHubAccess(env).catch(e=>console.error("beta hub access",String(e))));
   ctx.waitUntil(ensurePlatformPanel(env).catch(e=>console.error("platform panel",String(e))));
   ctx.waitUntil(sendScriptUpdates(env).catch(e=>console.error("script updates",String(e))));
@@ -982,15 +1016,7 @@ export default {
   try{await managementPost(env)}catch(e){console.error("management panel",e)}
   try{await postFreePanel(env)}catch(e){console.error("free panel",e)}
   try{await checkDepartedIssuances(env);await backfillMemberRoles(env);await syncMemberRoles(env)}catch(e){console.error("role maintenance",e)}
-  const r=await fetch("https://discord.com/api/v10/applications/"+APPLICATION_ID+"/guilds/"+GUILD_ID+"/commands",{
-   method:"PUT",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},
-   body:JSON.stringify(COMMANDS)
-  });
-  console.log("Discord command registration status",r.status);
-  const resultText=(await r.clone().text()).slice(0,1200);
-  await env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_setup_status (id INTEGER PRIMARY KEY, status INTEGER, response TEXT, checked_at TEXT)").run();
-  await env.DB.prepare("INSERT OR REPLACE INTO discord_setup_status (id,status,response,checked_at) VALUES (1,?,?,?)").bind(r.status,resultText,new Date().toISOString()).run();
-  if(!r.ok)console.error("Discord command registration failed",r.status,(await r.text()).slice(0,500));
+
  },
  async fetch(req,env,ctx) {
   const url=new URL(req.url);
@@ -1011,6 +1037,7 @@ export default {
   let i;try{i=JSON.parse(raw)}catch{return new Response("Invalid JSON",{status:400})}
   if(i.type===1)return new Response(JSON.stringify({type:1}),{headers:{"content-type":"application/json"}});
   if(![2,3,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
+  if(i.type===2)return reply("Slash commands have been removed. Please use the server panels and buttons.");
   if(needsBetaAccess(i)&&!hasBetaAccess(i))return reply("🔒 The Beta Tester role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
   try {
@@ -1036,15 +1063,7 @@ export default {
     const id=i.data.components?.flatMap(x=>x.components||[]).find(x=>x.custom_id==="roblox_id")?.value;
     return delayedReply(i,env,ctx,()=>getkey(i,env,id,ctx));
    }
-   switch(i.data?.name){
-    case "getkey":return hasPremiumRole(i)?delayedReply(i,env,ctx,()=>getkey(i,env,undefined,ctx)):premiumRequired();
-    case "panel":return isAdmin(i)?await postPanel(i,env):reply("Administrator permission required.");
-    case "online":return isAdmin(i)?delayedReply(i,env,ctx,()=>onlineUsers(env)):reply("Administrator permission required.");
-    case "executions":return isAdmin(i)?delayedReply(i,env,ctx,()=>recentExecutions(env)):reply("Administrator permission required.");
-    case "keys":return isAdmin(i)?delayedReply(i,env,ctx,()=>listKeys(env)):reply("Administrator permission required.");
-    case "revoke":return isAdmin(i)?await revoke(i,env):reply("Administrator permission required.");
-    default:return reply("Unknown command.");
-   }
+   return reply("Please use the server panels and buttons.");
   }catch(e){console.error("interaction",e);return reply("An internal error occurred. Please try again.")}
  }
 };
