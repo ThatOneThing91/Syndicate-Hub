@@ -802,9 +802,116 @@ async function sendScriptUpdates(env) {
  }
 }
 
+
+const PLATFORM_CHANNEL = "1564527127276290098";
+const PLATFORM_CHOICES = Object.freeze([
+ {key:"ios",name:"iOS",emoji:"🍎",color:0xB48AE0},
+ {key:"android",name:"Android",emoji:"🤖",color:0x57C785},
+ {key:"pc",name:"PC",emoji:"🖥️",color:0x6EA8FE}
+]);
+function platformPayload() {
+ return {allowed_mentions:{parse:[]},embeds:[{
+  author:{name:"SYNDICATE HUB  /  COMMUNITY"},
+  title:"💜 Choose Your Platform",
+  description:"Make yourself at home. Choose the platforms you play on using the buttons below.\n\n**Play on more than one?** Pick as many as you like.\n**Changed your mind?** Tap the same button again to remove that role.",
+  color:0x9966CC,
+  fields:PLATFORM_CHOICES.map(p=>({name:p.emoji+" "+p.name,value:"Tap below to add or remove your role.",inline:true})),
+  footer:{text:"Syndicate Hub • Your platforms, your choice"}
+ }],components:[{type:1,components:PLATFORM_CHOICES.map(p=>({
+  type:2,style:2,label:p.name,emoji:{name:p.emoji},custom_id:"syndicate_platform_"+p.key
+ }))}]};
+}
+async function platformDiscord(env,path,method="GET",body) {
+ const r=await fetch("https://discord.com/api/v10"+path,{
+  method,headers:{Authorization:"Bot "+env.DISCORD_BOT_TOKEN,...(body?{"Content-Type":"application/json"}:{})},
+  ...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(10000)
+ });
+ const data=r.status===204?null:await r.json().catch(()=>null);
+ if(!r.ok)throw Error("Platform roles Discord HTTP "+r.status+": "+String(data?.message||"Request failed"));
+ return {status:r.status,data};
+}
+async function ensurePlatformPanel(env) {
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS platform_role_panel(channel_id TEXT PRIMARY KEY,message_id TEXT,role_map TEXT NOT NULL DEFAULT '{}',status TEXT NOT NULL DEFAULT 'pending',lease_until INTEGER NOT NULL DEFAULT 0,last_error TEXT,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO platform_role_panel(channel_id,updated_at) VALUES(?,?)").bind(PLATFORM_CHANNEL,new Date().toISOString()).run();
+ const claim=await env.DB.prepare("UPDATE platform_role_panel SET lease_until=? WHERE channel_id=? AND status!='ready' AND lease_until<=?").bind(Date.now()+180000,PLATFORM_CHANNEL,Date.now()).run();
+ if(!claim.meta?.changes)return;
+ try {
+  const channel=(await platformDiscord(env,"/channels/"+PLATFORM_CHANNEL)).data;
+  if(channel.guild_id!==GUILD_ID||![0,5].includes(channel.type))throw Error("Platform channel is not a text channel in this server.");
+  const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
+  const me=(await platformDiscord(env,"/users/@me")).data;
+  const bot=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/members/"+me.id)).data;
+  const botRoles=roles.filter(r=>bot.roles.includes(r.id));
+  const botTop=Math.max(0,...botRoles.map(r=>r.position));
+  const permissions=botRoles.reduce((bits,r)=>bits|BigInt(r.permissions||"0"),0n);
+  if(!(permissions&8n)&&!(permissions&268435456n))throw Error("Bot needs Manage Roles.");
+  const mapping={};
+  for(const platform of PLATFORM_CHOICES) {
+   const matches=roles.filter(r=>r.name.toLowerCase()===platform.name.toLowerCase());
+   if(matches.length>1)throw Error("Multiple "+platform.name+" roles exist; cannot select one.");
+   let role=matches[0];
+   if(role&&(role.managed||BigInt(role.permissions||"0")!==0n||role.position>=botTop))throw Error(platform.name+" must be a permission-free role below the bot's highest role.");
+   if(!role) {
+    role=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles","POST",{
+     name:platform.name,color:platform.color,permissions:"0",hoist:false,mentionable:false
+    })).data;
+   }
+   mapping[platform.key]=role.id;
+  }
+  await env.DB.prepare("UPDATE platform_role_panel SET role_map=?,updated_at=? WHERE channel_id=?").bind(JSON.stringify(mapping),new Date().toISOString(),PLATFORM_CHANNEL).run();
+  const prior=await env.DB.prepare("SELECT message_id FROM platform_role_panel WHERE channel_id=?").bind(PLATFORM_CHANNEL).first();
+  let messageId=prior?.message_id;
+  if(!messageId) {
+   // Recover a prior panel if Discord accepted it before a database write failed.
+   const recent=(await platformDiscord(env,"/channels/"+PLATFORM_CHANNEL+"/messages?limit=100")).data;
+   const previous=recent.find(m=>m.author?.id===me.id&&m.components?.some(row=>row.components?.some(b=>b.custom_id==="syndicate_platform_ios")));
+   if(previous)messageId=previous.id;
+  }
+  if(messageId)await platformDiscord(env,"/channels/"+PLATFORM_CHANNEL+"/messages/"+messageId,"PATCH",platformPayload());
+  else {
+   const digest=await sha("platform-panel:"+GUILD_ID+":"+PLATFORM_CHANNEL);
+   const message=await platformDiscord(env,"/channels/"+PLATFORM_CHANNEL+"/messages","POST",{
+    ...platformPayload(),nonce:BigInt("0x"+digest.slice(0,18)).toString(),enforce_nonce:true
+   });
+   messageId=message.data.id;
+  }
+  await env.DB.prepare("UPDATE platform_role_panel SET message_id=?,status='ready',last_error=NULL,lease_until=0,updated_at=? WHERE channel_id=?").bind(messageId,new Date().toISOString(),PLATFORM_CHANNEL).run();
+ }catch(e){
+  await env.DB.prepare("UPDATE platform_role_panel SET status='error',last_error=?,lease_until=?,updated_at=? WHERE channel_id=?").bind(String(e).slice(0,1000),Date.now()+60000,new Date().toISOString(),PLATFORM_CHANNEL).run();
+  throw e;
+ }
+}
+async function togglePlatformRole(i,env) {
+ const platform=PLATFORM_CHOICES.find(p=>"syndicate_platform_"+p.key===i.data?.custom_id);
+ if(!platform||i.guild_id!==GUILD_ID||i.channel_id!==PLATFORM_CHANNEL||!/^\d{15,22}$/.test(i.member?.user?.id||""))return reply("This platform button is not available here.");
+ const panel=await env.DB.prepare("SELECT message_id,role_map,status FROM platform_role_panel WHERE channel_id=?").bind(PLATFORM_CHANNEL).first();
+ if(panel?.status!=="ready"||panel.message_id!==i.message?.id)return reply("Please use the current platform role panel.");
+ const roleId=JSON.parse(panel.role_map)[platform.key];
+ if(!/^\d{15,22}$/.test(roleId||""))return reply("This platform role is not configured yet.");
+ const lock=i.member.user.id+":"+roleId, ticket=crypto.randomUUID();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS platform_role_locks(lock_key TEXT PRIMARY KEY,ticket TEXT NOT NULL,expires_at INTEGER NOT NULL)").run();
+ const claim=await env.DB.prepare("INSERT INTO platform_role_locks(lock_key,ticket,expires_at) VALUES(?,?,?) ON CONFLICT(lock_key) DO UPDATE SET ticket=excluded.ticket,expires_at=excluded.expires_at WHERE platform_role_locks.expires_at<=?").bind(lock,ticket,Date.now()+45000,Date.now()).run();
+ if(!claim.meta?.changes)return reply("Your platform role is already being updated. Give it a moment.");
+ try {
+  const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
+  const role=roles.find(r=>r.id===roleId);
+  if(!role||role.managed||BigInt(role.permissions||"0")!==0n||role.name.toLowerCase()!==platform.name.toLowerCase())return reply("This platform role changed. Ask an administrator to check the panel.");
+  const member=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/members/"+i.member.user.id)).data;
+  const remove=member.roles.includes(roleId);
+  await platformDiscord(env,"/guilds/"+GUILD_ID+"/members/"+i.member.user.id+"/roles/"+roleId,remove?"DELETE":"PUT");
+  return reply(platform.emoji+" **"+platform.name+"** role "+(remove?"removed":"added")+". You can select multiple platforms.");
+ }catch(e){
+  console.error("platform role toggle",String(e));
+  return reply("I couldn't update that role. Please try again; if it continues, an administrator should check my Manage Roles permission and role position.");
+ }finally{
+  await env.DB.prepare("DELETE FROM platform_role_locks WHERE lock_key=? AND ticket=?").bind(lock,ticket).run();
+ }
+}
+
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
+  ctx.waitUntil(ensurePlatformPanel(env).catch(e=>console.error("platform panel",String(e))));
   ctx.waitUntil(sendScriptUpdates(env).catch(e=>console.error("script updates",String(e))));
   ctx.waitUntil(syncExistingKeyAccessPanel(env).catch(e=>console.error("key panel layout sync",String(e))));
   ctx.waitUntil(refreshExecutorStatus(env).catch(async e=>{console.error("executor status refresh",String(e));await env.DB.prepare("UPDATE executor_feed_state SET last_error=?,next_run=? WHERE id=1").bind("Panel delivery: "+String(e).slice(0,1400),Date.now()+60000).run();}));
@@ -843,6 +950,7 @@ export default {
   if(![2,3,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
   try {
+   if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_platform_"))return delayedReply(i,env,ctx,()=>togglePlatformRole(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("mg_"))return discordResponse(await deferredManagement(i,env,ctx));
    if(i.type===5&&i.data?.custom_id==="mg_revoke_modal")return discordResponse(await managementModal(i));
    if(i.type===3&&i.data?.custom_id==="syndicate_free_generate"){const did=i.member?.user?.id;if(!did)return reply("Discord member unavailable.");const active=await env.DB.prepare("SELECT 1 FROM discord_key_issuance d JOIN member_keys m ON m.key_hash=d.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(did,GUILD_ID,new Date().toISOString()).first();return active?delayedReply(i,env,ctx,()=>viewKey(i,env)):freeModal();}
