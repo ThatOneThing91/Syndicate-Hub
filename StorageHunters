@@ -8032,39 +8032,40 @@ do
         end
         return found
     end
-    local function padFor(plot)
+    local function padFor(plot, humanoid, vehicle)
         local zone = plot:FindFirstChild("UnpackZone", true)
         local pad = zone and zone:FindFirstChild("Pad")
         if pad and pad:IsA("BasePart") then return pad end
         zone = workspace:FindFirstChild("UnpackZone")
         pad = zone and zone:FindFirstChild("Pad")
-        if not pad or not pad:IsA("BasePart") then
-            error("Your UnpackZone.Pad is not available.")
+        if not pad or not pad:IsA("BasePart") then return nil end
+        local zoneOwner = tonumber(zone:GetAttribute("OwnerUserId"))
+        local padOwner = tonumber(pad:GetAttribute("OwnerUserId"))
+        if (zoneOwner and zoneOwner ~= 0 and zoneOwner ~= LocalPlayer.UserId)
+            or (padOwner and padOwner ~= 0 and padOwner ~= LocalPlayer.UserId) then
+            error("The unpack zone explicitly belongs to another player.")
         end
-        -- A workspace-level zone must be explicitly owned, or closest to
-        -- the verified plot. Never choose another player's unloading pad.
-        local owner = tonumber(zone:GetAttribute("OwnerUserId") or pad:GetAttribute("OwnerUserId"))
-        if owner and owner ~= 0 then
-            if owner == LocalPlayer.UserId then return pad end
-            error("The unpack zone belongs to another player.")
+        -- This pad lives outside _Plots and can be created by the local
+        -- vehicle UI. Resolve it only in our equipped vehicle's driver seat.
+        -- Its distance from plot geometry is not an ownership signal.
+        local seat = humanoid.SeatPart
+        if ownPlot() == plot and seat and vehicle
+            and seat:IsA("VehicleSeat") and seat:IsDescendantOf(vehicle) then
+            return pad
         end
-        local nearest, nearestDistance, secondDistance = nil, math.huge, math.huge
-        for _, candidate in ipairs(workspace._Plots:GetChildren()) do
-            local ok, cf = pcall(function()
-                if candidate:IsA("Model") then return candidate:GetBoundingBox() end
-                if candidate:IsA("BasePart") then return candidate.CFrame end
-            end)
-            if ok and cf then
-                local offset = cf.Position - pad.Position
-                local distance = Vector2.new(offset.X, offset.Z).Magnitude
-                if distance < nearestDistance then
-                    secondDistance = nearestDistance
-                    nearest, nearestDistance = candidate, distance
-                elseif distance < secondDistance then secondDistance = distance end
+        return nil
+    end
+    local function plotArrival(plot)
+        for _, name in ipairs({"VehicleSpawn", "Driveway", "SpawnLocation"}) do
+            local part = plot:FindFirstChild(name, true)
+            if part and part:IsA("BasePart") then
+                return part.CFrame * CFrame.new(0, part.Size.Y / 2 + 4, 0)
             end
         end
-        if nearest == plot and secondDistance - nearestDistance > 1 then return pad end
-        error("Cannot verify that workspace.UnpackZone.Pad belongs to your plot.")
+        if plot:IsA("Model") or plot:IsA("BasePart") then
+            return plot:GetPivot() * CFrame.new(0, 5, 0)
+        end
+        error("Your plot has no usable arrival position.")
     end
     local function equippedVehicle(guid)
         for _, object in ipairs(workspace:GetDescendants()) do
@@ -8086,7 +8087,7 @@ do
         local ok, failure = pcall(function()
             local plot = ownPlot()
             if not plot then error("Could not verify your plot ownership.") end
-            local pad = padFor(plot)
+            local pad
             local guid = LocalPlayer:GetAttribute("EquippedVehicle")
             if type(guid) ~= "string" or guid == "" then error("Equip your vehicle first.") end
             local character = LocalPlayer.Character
@@ -8096,7 +8097,8 @@ do
             local function check()
                 if not active() then error("Unload cancelled.") end
                 if LocalPlayer.Character ~= character or humanoid.Health <= 0 then error("Character changed; tap again.") end
-                if ownPlot() ~= plot or not pad.Parent then error("Your plot changed; unload stopped.") end
+                if ownPlot() ~= plot then error("Your plot changed; unload stopped.") end
+                if LocalPlayer:GetAttribute("EquippedVehicle") ~= guid then error("Your equipped vehicle changed; unload stopped.") end
             end
             local events = ReplicatedStorage:FindFirstChild("Events")
             local vehicles = events and events:FindFirstChild("Vehicles")
@@ -8116,46 +8118,53 @@ do
                 RunIds.Unload += 1
                 if ToggleObjects.InstantUnload then ToggleObjects.InstantUnload(false) end
             end
-            local deadline = os.clock() + 3
-            while humanoid.SeatPart do
-                check()
-                humanoid.Sit = false
-                humanoid.Jump = true
-                task.wait(0.1)
-                if os.clock() >= deadline then error("Could not leave your current seat.") end
-            end
-            check()
-            root.CFrame = pad.CFrame * CFrame.new(0, pad.Size.Y / 2 + 4, 0)
-            root.AssemblyLinearVelocity = Vector3.zero
-            task.wait(0.5)
-            check()
-            local spawnFailure
-            local connection
-            local result = vehicles:FindFirstChild("SpawnResult")
-            if result and result:IsA("RemoteEvent") then
-                connection = result.OnClientEvent:Connect(function(success, message)
-                    if success == false then spawnFailure = tostring(message or "Spawn rejected.") end
-                end)
-            end
-            local requested, spawnError = pcall(function() spawn:FireServer(guid) end)
-            local vehicle, seat
-            deadline = os.clock() + 12
-            repeat
-                if not active() or LocalPlayer.Character ~= character or ownPlot() ~= plot then break end
-                if spawnFailure or not requested then break end
-                vehicle = equippedVehicle(guid)
-                if vehicle then
-                    seat = vehicle:FindFirstChildWhichIsA("VehicleSeat", true)
-                    if seat and (seat.Position - pad.Position).Magnitude <= 70 then break end
-                    seat = nil
+            local vehicle = equippedVehicle(guid)
+            local seat = vehicle and vehicle:FindFirstChildWhichIsA("VehicleSeat", true)
+            local alreadySeated = seat and humanoid.SeatPart == seat
+            local deadline
+            if not alreadySeated then
+                deadline = os.clock() + 3
+                while humanoid.SeatPart do
+                    check()
+                    humanoid.Sit = false
+                    humanoid.Jump = true
+                    task.wait(0.1)
+                    if os.clock() >= deadline then error("Could not leave your current seat.") end
                 end
-                task.wait(0.15)
-            until os.clock() >= deadline
-            if connection then connection:Disconnect() end
-            check()
-            if not requested then error(tostring(spawnError)) end
-            if spawnFailure then error("Vehicle spawn failed: " .. spawnFailure) end
-            if not seat then error("Your vehicle did not spawn near the pad with a driver seat.") end
+                check()
+                root.CFrame = plotArrival(plot)
+                root.AssemblyLinearVelocity = Vector3.zero
+                local arrival = root.Position
+                task.wait(0.5)
+                check()
+                local spawnFailure
+                local connection
+                local result = vehicles:FindFirstChild("SpawnResult")
+                if result and result:IsA("RemoteEvent") then
+                    connection = result.OnClientEvent:Connect(function(success, message)
+                        if success == false then spawnFailure = tostring(message or "Spawn rejected.") end
+                    end)
+                end
+                local requested, spawnError = pcall(function() spawn:FireServer(guid) end)
+                vehicle, seat = nil, nil
+                deadline = os.clock() + 12
+                repeat
+                    if not active() or LocalPlayer.Character ~= character or ownPlot() ~= plot then break end
+                    if spawnFailure or not requested then break end
+                    vehicle = equippedVehicle(guid)
+                    if vehicle then
+                        seat = vehicle:FindFirstChildWhichIsA("VehicleSeat", true)
+                        if seat and (seat.Position - arrival).Magnitude <= 70 then break end
+                        seat = nil
+                    end
+                    task.wait(0.15)
+                until os.clock() >= deadline
+                if connection then connection:Disconnect() end
+                check()
+                if not requested then error(tostring(spawnError)) end
+                if spawnFailure then error("Vehicle spawn failed: " .. spawnFailure) end
+                if not seat then error("Your vehicle did not spawn near your plot with a driver seat.") end
+            end
             deadline = os.clock() + 5
             repeat
                 check()
@@ -8169,6 +8178,17 @@ do
             until os.clock() >= deadline
             check()
             if humanoid.SeatPart ~= seat then error("Could not sit in your vehicle; tap again.") end
+            -- Wait for the zone to appear AFTER seating. Do not retain a
+            -- pre-seat pad instance; the game can replace it on entry.
+            deadline = os.clock() + 8
+            repeat
+                check()
+                if humanoid.SeatPart ~= seat then error("You left the driver seat; tap again.") end
+                pad = padFor(plot, humanoid, vehicle)
+                if pad then break end
+                task.wait(0.15)
+            until os.clock() >= deadline
+            if not pad then error("Seated in your vehicle, but workspace.UnpackZone.Pad did not appear.") end
             local bounds, size = vehicle:GetBoundingBox()
             local target = pad.Position + Vector3.new(0, pad.Size.Y / 2 + size.Y / 2 + 0.25, 0)
             vehicle:PivotTo(vehicle:GetPivot() + (target - bounds.Position))
