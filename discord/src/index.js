@@ -906,9 +906,74 @@ async function togglePlatformRole(i,env) {
  }
 }
 
+
+const BETA_TESTER_ROLE_ID = "1563210797780303983";
+const BETA_HUB_CATEGORY_ID = "1563112370950246440";
+const BETA_INVITE_CODE = "6K2qGPpuEH";
+const hasBetaAccess = i => i.guild_id===GUILD_ID &&
+ (isAdmin(i)||Array.isArray(i.member?.roles)&&i.member.roles.includes(BETA_TESTER_ROLE_ID));
+function needsBetaAccess(i) {
+ if(i.type===2)return i.data?.name==="getkey";
+ if(i.type===5)return ["syndicate_key_modal","syndicate_free_modal"].includes(i.data?.custom_id);
+ return i.type===3&&["syndicate_generate_key","syndicate_free_generate","syndicate_free_view","syndicate_get_script","syndicate_revoke_own_key","syndicate_confirm_self_revoke"].includes(i.data?.custom_id);
+}
+function betaOverwrites(channel,roles,botId) {
+ const VIEW=1024n;
+ const allowedRoles=new Set(roles.filter(r=>r.tags?.bot_id||(BigInt(r.permissions||"0")&8n)!==0n
+   ||["Sovereign","Enforcer"].includes(r.name)).map(r=>r.id));
+ allowedRoles.add(BETA_TESTER_ROLE_ID);
+ const overwrites=(channel.permission_overwrites||[]).map(o=>({...o,allow:String(o.allow||"0"),deny:String(o.deny||"0")}));
+ for(const o of overwrites){
+  if(o.id===GUILD_ID&&o.type===0){o.allow=String(BigInt(o.allow)&~VIEW);o.deny=String(BigInt(o.deny)|VIEW);}
+  else if(o.type===0&&allowedRoles.has(o.id)||o.type===1&&o.id===botId){o.allow=String(BigInt(o.allow)|VIEW);o.deny=String(BigInt(o.deny)&~VIEW);}
+  else {o.allow=String(BigInt(o.allow)&~VIEW);}
+ }
+ if(!overwrites.some(o=>o.type===0&&o.id===GUILD_ID))overwrites.push({id:GUILD_ID,type:0,allow:"0",deny:"1024"});
+ if(!overwrites.some(o=>o.type===0&&o.id===BETA_TESTER_ROLE_ID))overwrites.push({id:BETA_TESTER_ROLE_ID,type:0,allow:"1024",deny:"0"});
+ if(!overwrites.some(o=>o.type===1&&o.id===botId))overwrites.push({id:botId,type:1,allow:"1024",deny:"0"});
+ return overwrites;
+}
+async function ensureBetaHubAccess(env) {
+ const revision="beta-hub-access-v1";
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS beta_hub_access(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO beta_hub_access(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
+ const claim=await env.DB.prepare("UPDATE beta_hub_access SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
+ if(!claim.meta?.changes)return;
+ try {
+  const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
+  const beta=roles.find(r=>r.id===BETA_TESTER_ROLE_ID);
+  if(!beta||beta.managed||beta.name.toLowerCase()!=="beta tester")throw Error("Beta Tester role could not be verified.");
+  const me=(await platformDiscord(env,"/users/@me")).data;
+  const channels=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/channels")).data;
+  const category=channels.find(c=>c.id===BETA_HUB_CATEGORY_ID);
+  if(!category||category.type!==4||!category.name.toLowerCase().includes("syndicate"))throw Error("Syndicate Hub category could not be verified.");
+  const affected=channels.filter(c=>c.id===BETA_HUB_CATEGORY_ID||c.parent_id===BETA_HUB_CATEGORY_ID);
+  const invite=(await platformDiscord(env,"/invites/"+BETA_INVITE_CODE+"?with_counts=true")).data;
+  if(invite.guild?.id!==GUILD_ID)throw Error("The supplied invite is for another server.");
+  const inviteRoles=invite.roles||[];
+  const grantsBeta=inviteRoles.some(r=>r.id===BETA_TESTER_ROLE_ID)||(invite.role_ids||[]).includes(BETA_TESTER_ROLE_ID);
+  await env.DB.prepare("UPDATE beta_hub_access SET backup=COALESCE(backup,?),updated_at=? WHERE id=1").bind(JSON.stringify(affected),new Date().toISOString()).run();
+  const modified=[];
+  for(const channel of affected) {
+   const overwrites=betaOverwrites(channel,roles,me.id);
+   const changed=(await platformDiscord(env,"/channels/"+channel.id,"PATCH",{permission_overwrites:overwrites})).data;
+   const everyone=changed.permission_overwrites?.find(o=>o.id===GUILD_ID&&o.type===0);
+   const betaOverwrite=changed.permission_overwrites?.find(o=>o.id===BETA_TESTER_ROLE_ID&&o.type===0);
+   if(!(BigInt(everyone?.deny||"0")&1024n)||!(BigInt(betaOverwrite?.allow||"0")&1024n))throw Error("Could not confirm channel visibility for "+channel.id);
+   modified.push({id:channel.id,name:channel.name});
+  }
+  const details={invite:BETA_INVITE_CODE,invite_roles:inviteRoles.map(r=>({id:r.id,name:r.name})),grants_beta:grantsBeta,beta_role_id:beta.id,channels:modified};
+  await env.DB.prepare("UPDATE beta_hub_access SET revision=?,status='ready',details=?,last_error=NULL,lease_until=0,updated_at=? WHERE id=1").bind(revision,JSON.stringify(details),new Date().toISOString()).run();
+ }catch(e){
+  await env.DB.prepare("UPDATE beta_hub_access SET status='error',last_error=?,lease_until=?,updated_at=? WHERE id=1").bind(String(e).slice(0,1500),Date.now()+60000,new Date().toISOString()).run();
+  throw e;
+ }
+}
+
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
+  ctx.waitUntil(ensureBetaHubAccess(env).catch(e=>console.error("beta hub access",String(e))));
   ctx.waitUntil(ensurePlatformPanel(env).catch(e=>console.error("platform panel",String(e))));
   ctx.waitUntil(sendScriptUpdates(env).catch(e=>console.error("script updates",String(e))));
   ctx.waitUntil(syncExistingKeyAccessPanel(env).catch(e=>console.error("key panel layout sync",String(e))));
@@ -946,6 +1011,7 @@ export default {
   let i;try{i=JSON.parse(raw)}catch{return new Response("Invalid JSON",{status:400})}
   if(i.type===1)return new Response(JSON.stringify({type:1}),{headers:{"content-type":"application/json"}});
   if(![2,3,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
+  if(needsBetaAccess(i)&&!hasBetaAccess(i))return reply("🔒 The Beta Tester role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
   try {
    if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_platform_"))return delayedReply(i,env,ctx,()=>togglePlatformRole(i,env));
