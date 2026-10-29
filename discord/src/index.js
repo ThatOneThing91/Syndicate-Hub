@@ -813,7 +813,7 @@ function platformPayload() {
  return {allowed_mentions:{parse:[]},embeds:[{
   author:{name:"SYNDICATE HUB  /  COMMUNITY"},
   title:"💜 Choose Your Platform",
-  description:"Make yourself at home. Choose the platforms you play on using the buttons below.\n\n**Play on more than one?** Pick as many as you like.\n**Changed your mind?** Tap the same button again to remove that role.",
+  description:"Choose your platform below.",
   color:0x9966CC,
   fields:PLATFORM_CHOICES.map(p=>({name:p.emoji+" "+p.name,value:"Tap below to add or remove your role.",inline:true})),
   footer:{text:"Syndicate Hub • Your platforms, your choice"}
