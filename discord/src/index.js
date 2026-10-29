@@ -136,24 +136,12 @@ function executorSourceLine(source) {
  return (source.fresh?"🟢 ":"🟠 ")+source.label+(source.fresh?" · checked":" · offline, last success")+stamp;
 }
 
-// Visibility is recalculated from the full catalog on every refresh.
-function executorVisible(row) {
- const ev=row.evidence;
- if(!ev || row.updated!==true || ev.sameReleaseGroups<2 || ev.detection!==false || !ev.detectionFresh ||
-    ev.conflict || ev.updateConflict || ev.versionConflict || ev.detectionConflict || ev.buildConflict || ev.detectionBanwave ||
-    executorVersionKey(ev.detectionVersion)!==executorVersionKey(row.version))return false;
- const live=(ev.reports||[]).filter(r=>r.fresh);
- if(new Set(live.map(r=>r.group)).size<2 || live.some(r=>r.updated!==true || r.detected===true || r.unknown===true || r.possibleBanwave===true))return false;
- if(["Windows","macOS"].includes(row.platform) && ev.roblox?.matches!==true)return false;
- return true;
-}
-
 function executorBoards(rows,successAt,stale,checkedAt,sources=[]) {
  const trackedCount=rows.length;
- rows=rows.filter(executorVisible);
+ // Show every monitored executor, not only those passing the former undetected-only filter.
  const groups=new Map(),icons={Windows:"🖥️",Android:"📱",iOS:"🍎",macOS:"💻"};
  for(const row of rows){if(!groups.has(row.platform))groups.set(row.platform,[]);groups.get(row.platform).push(row);}
- if(!rows.length)groups.set("Working executors",[]);
+ if(!rows.length)groups.set("Executor status",[]);
  const boards=[];
  for(const [platform,entries] of groups){
   const sorted=[...entries].sort((a,b)=>Number(b.updated===true)-Number(a.updated===true)||a.title.localeCompare(b.title));
@@ -186,7 +174,7 @@ function executorBoards(rows,successAt,stale,checkedAt,sources=[]) {
    return {title:x.title,...(x.website?{url:x.website}:{}),description,color:!ev.currentGroups?0x747F8D:ev.conflict||ev.detectionConflict?0xF0B232:ev.detection===true?0xED4245:x.updated===false?0xF0B232:0x9B72CF,...(x.logo?{thumbnail:{url:x.logo}}:{})};
   });
   const health=sources.map(executorSourceLine).join("\n");
-  const headerText=(stale?"⚠️ **Primary tracker unavailable · saved data may be stale**\n":"")+"**"+entries.length+" qualifying executors shown**  ·  **"+trackedCount+" monitored**  ·  Every 5 min\n\n"+(entries.length?"":"**No executors currently meet all confirmation checks.**\n\n")+"Only working releases with two-family agreement and a current no-detection report are shown. Broken, detected, uncertain, conflicting and ban-wave entries are hidden. Hidden entries return automatically when they qualify.\n\n"+health+"\n*Detection: WEAO only; mirror is the same source. Other checks cover compatibility. Retrieval time is not detection assessment time. No report guarantees safety.*";
+  const headerText=(stale?"⚠️ **Primary tracker unavailable · saved data may be stale**\n":"")+"**"+entries.length+" executors listed**  ·  **"+trackedCount+" monitored**  ·  Every 5 min\n\n"+(entries.length?"":"**No executor data currently available from the trackers.**\n\n")+"The complete monitored catalog is shown, including reported working, detected, outdated, uncertain and conflicting entries. These are source reports, not guarantees of safety.\n\n"+health+"\n*Detection: WEAO only; mirror is the same source. Other checks cover compatibility. Retrieval time is not detection assessment time. No report guarantees safety.*";
   const pages=[[]];let pageChars=0;
   const reserve=headerText.length+400;
   for(const card of cards){const chars=card.title.length+card.description.length;if(chars+reserve>5800)throw Error("Executor card exceeds Discord size budget");if(pages.at(-1).length>=7||pageChars+chars+reserve>5800){pages.push([]);pageChars=0;}pages.at(-1).push(card);pageChars+=chars;}
@@ -455,24 +443,48 @@ function confirmOwnRevoke(){
 function modal(i){if(!hasPremiumRole(i))return premiumRequired();return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_key_modal",title:"Generate Syndicate Hub Key",components:[{type:1,components:[{type:4,custom_id:"roblox_id",label:"Roblox Username or User ID",style:1,min_length:1,max_length:20,required:true,placeholder:"Username (not display name) or numeric ID"}]}]}}),{headers:{"content-type":"application/json"}})}
 function keyAccessPanelPayload(){
  return {
-  embeds:[{title:"🔑 SYNDICATE HUB | KEY ACCESS",
-   description:"Choose your key type below.\n\n**24-Hour Key** — available to everyone. Expires after 24 hours.\n**Lifetime Key** — requires the **Premium** role. Valid until revoked.\n\nUse **View Key** to retrieve your active key privately. One active key per member and Roblox ID.",
-   color:8073395,footer:{text:"Syndicate Hub • Private key delivery"}}],
-  components:[{type:1,components:[
-   {type:2,style:1,label:"24-Hour Key",custom_id:"syndicate_free_generate",emoji:{name:"⏱️"}},
-   {type:2,style:3,label:"Lifetime Key",custom_id:"syndicate_generate_key",emoji:{name:"💎"}},
-   {type:2,style:2,label:"View Key",custom_id:"syndicate_free_view",emoji:{name:"🔑"}},
-   {type:2,style:2,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}},
-   {type:2,style:4,label:"Revoke My Key",custom_id:"syndicate_revoke_own_key",emoji:{name:"🚫"}}
-  ]}],allowed_mentions:{parse:[]}
+  embeds:[{
+   author:{name:"✦ SHADOW SYNDICATES  •  ELITE ACCESS"},
+   title:"👑  THE PREMIUM VAULT",
+   description:"**SYNDICATE HUB**  ·  Private Member Access\n\nWelcome to the Inner Circle. Choose your access tier below to unlock your private key.\n\n**━━━━━━━━━━  ✦  ━━━━━━━━━━**",
+   color:0xE4B65D,
+   fields:[
+    {name:"💎  PREMIUM  ·  LIFETIME",value:"<@&1564481287710974062> members\n**♾️ No expiration**",inline:true},
+    {name:"⏳  FREE  ·  24 HOURS",value:"Available to everyone\n**One-day access**",inline:true},
+    {name:"🔐  YOUR ACCESS, SECURED",value:"One active key per Discord member and Roblox ID. Delivered **privately** — never share it.",inline:false}
+   ],
+   footer:{text:"SHADOW SYNDICATES  ✦  AUTHORIZED MEMBERS ONLY"}
+  }],
+  components:[
+   {type:1,components:[
+    {type:2,style:1,label:"Premium Lifetime",custom_id:"syndicate_generate_key",emoji:{name:"👑"}},
+    {type:2,style:2,label:"Free 24-Hour Key",custom_id:"syndicate_free_generate",emoji:{name:"⏳"}}
+   ]},
+   {type:1,components:[
+    {type:2,style:2,label:"View My Key",custom_id:"syndicate_free_view",emoji:{name:"🔑"}},
+    {type:2,style:2,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}},
+    {type:2,style:4,label:"Revoke Key",custom_id:"syndicate_revoke_own_key",emoji:{name:"🚫"}}
+   ]}
+  ],
+  allowed_mentions:{parse:[]}
  };
 }
 // Upgrade the existing bot-owned lifetime panel once, without posting duplicates.
 async function syncExistingKeyAccessPanel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS key_access_panel_layout(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,channel_id TEXT,message_id TEXT,checked_at TEXT NOT NULL)").run();
- const revision="dual-key-buttons-v1";
- const current=await env.DB.prepare("SELECT revision,status FROM key_access_panel_layout WHERE id=1").first();
+ const revision="premium-vault-minimal-v3";
+ const current=await env.DB.prepare("SELECT revision,status,channel_id,message_id FROM key_access_panel_layout WHERE id=1").first();
  if(current?.revision===revision&&current.status==="updated")return;
+ const panelId = current?.message_id;
+ if(current?.channel_id==="1563145457910153319" && panelId){
+  const direct=await discordApi(env,"/channels/"+current.channel_id+"/messages/"+panelId,"PATCH",keyAccessPanelPayload());
+  if(direct.status===200){
+   await env.DB.prepare("UPDATE key_access_panel_layout SET revision=?,status='updated',checked_at=? WHERE id=1").bind(revision,new Date().toISOString()).run();
+   return;
+  }
+  if(direct.status!==404)throw Error("Premium panel edit failed: "+direct.status);
+ }
+
  const listed=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
  if(listed.status!==200||!Array.isArray(listed.data))throw Error("Cannot find key panel channels: "+listed.status);
  const channels=listed.data.filter(c=>[0,5].includes(c.type)&&c.id!==FREE_PANEL_CHANNEL);
@@ -688,7 +700,7 @@ async function backfillMemberRoles(env){
 
 
 
-const FREE_PANEL_CHANNEL="1563748059064696883";
+const FREE_PANEL_CHANNEL="1564527144330334258";
 function freeModal(){return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_free_modal",title:"Get 24-Hour Free Key",components:[{type:1,components:[{type:4,custom_id:"roblox_id",label:"Roblox Username or User ID",style:1,min_length:1,max_length:20,required:true}]}]}}),{headers:{"content-type":"application/json"}})}
 async function freeAccessKey(i,env,input,ctx){
  const did=i.member?.user?.id;
@@ -726,9 +738,74 @@ async function postFreePanel(env){
  await env.DB.prepare("INSERT OR IGNORE INTO syndicate_free_panel(id,message_id,created_at) VALUES(1,?,?)").bind(message.id,new Date().toISOString()).run();
 }
 
+
+
+const SCRIPT_UPDATES_CHANNEL = "1564527146922410136";
+function scriptUpdatePayload(release) {
+ if (!release || !/^[a-zA-Z0-9._-]{1,100}$/.test(release.id) ||
+     typeof release.title !== "string" || !release.title.trim() || release.title.length > 180 ||
+     typeof release.summary !== "string" || release.summary.length > 700 ||
+     !/^[a-f0-9]{40}$/.test(release.commit) || !Number.isFinite(Date.parse(release.published_at))) {
+  throw Error("Invalid script release");
+ }
+ const fields=[];
+ for (const [key,label] of [["added","✨ NEW FEATURES"],["fixed","🛠️ FIXES"],["improved","⚡ IMPROVEMENTS"]]) {
+  const items=release[key] ?? [];
+  if (!Array.isArray(items) || items.length>8 || items.some(x=>typeof x!=="string"||!x.trim()||x.length>450)) throw Error("Invalid release section");
+  if(items.length) {
+   const value=items.map(x=>"• "+x).join("\n");
+   if(value.length>1024) throw Error("Release section too long");
+   fields.push({name:label,value,inline:false});
+  }
+ }
+ if(!fields.length)throw Error("Empty release");
+ fields.push({name:"↻ GET THE UPDATE",value:"Re-execute Syndicate Hub to load the latest script. Use **Get Script** below to copy the loader.",inline:false});
+ return {
+  allowed_mentions:{parse:[]},
+  embeds:[{
+   author:{name:"SYNDICATE HUB  •  OFFICIAL CHANGELOG"},
+   title:"💜 "+release.title,
+   description:"**STORAGE HUNTERS**  ·  `SCRIPT UPDATE`\n\n"+release.summary,
+   color:0x9B59F6,fields,
+   footer:{text:"Syndicate Hub • "+release.id+" • Build "+release.commit.slice(0,7)},
+   timestamp:release.published_at
+  }],
+  components:[{type:1,components:[
+   {type:2,style:1,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}}
+  ]}]
+ };
+}
+async function sendScriptUpdates(env) {
+ // A durable outbox lets release summaries be queued after a verified script update.
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS script_update_announcements(release_id TEXT PRIMARY KEY,commit_sha TEXT NOT NULL UNIQUE,release_json TEXT NOT NULL,created_at TEXT NOT NULL,sent_at TEXT,message_id TEXT,lease_until INTEGER NOT NULL DEFAULT 0,last_error TEXT)").run();
+ const pending=await env.DB.prepare("SELECT * FROM script_update_announcements WHERE sent_at IS NULL AND lease_until<=? ORDER BY created_at LIMIT 3").bind(Date.now()).all();
+ for(const row of pending.results||[]) {
+  const claim=await env.DB.prepare("UPDATE script_update_announcements SET lease_until=? WHERE release_id=? AND sent_at IS NULL AND lease_until<=?").bind(Date.now()+180000,row.release_id,Date.now()).run();
+  if(!claim.meta?.changes)continue;
+  try {
+   const release=JSON.parse(row.release_json);
+   if(release.id!==row.release_id||release.commit!==row.commit_sha)throw Error("Release identity mismatch");
+   const payload=scriptUpdatePayload(release);
+   // Verify the destination belongs to this guild before sending.
+   const channel=await executorDiscord(env,"/channels/"+SCRIPT_UPDATES_CHANNEL,"GET");
+   if(channel.status!==200||channel.data.guild_id!==GUILD_ID)throw Error("Script updates channel unavailable or wrong server");
+   const digest=await sha("script-update:"+row.release_id);
+   const nonce=BigInt("0x"+digest.slice(0,18)).toString();
+   const result=await executorDiscord(env,"/channels/"+SCRIPT_UPDATES_CHANNEL+"/messages","POST",{...payload,nonce,enforce_nonce:true});
+   if(!result.data?.id)throw Error("Script update delivery failed: "+result.status);
+   await env.DB.prepare("UPDATE script_update_announcements SET sent_at=?,message_id=?,last_error=NULL,lease_until=0 WHERE release_id=?").bind(new Date().toISOString(),result.data.id,row.release_id).run();
+   console.log("Script update delivered",row.release_id,result.data.id);
+  }catch(e) {
+   await env.DB.prepare("UPDATE script_update_announcements SET last_error=?,lease_until=? WHERE release_id=? AND sent_at IS NULL").bind(String(e).slice(0,1000),Date.now()+60000,row.release_id).run();
+   console.error("script update delivery",row.release_id,String(e));
+  }
+ }
+}
+
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
+  ctx.waitUntil(sendScriptUpdates(env).catch(e=>console.error("script updates",String(e))));
   ctx.waitUntil(syncExistingKeyAccessPanel(env).catch(e=>console.error("key panel layout sync",String(e))));
   ctx.waitUntil(refreshExecutorStatus(env).catch(async e=>{console.error("executor status refresh",String(e));await env.DB.prepare("UPDATE executor_feed_state SET last_error=?,next_run=? WHERE id=1").bind("Panel delivery: "+String(e).slice(0,1400),Date.now()+60000).run();}));
   try{await sendExecutionLogs(env)}catch(e){console.error("execution logging",e)}
