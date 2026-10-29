@@ -8007,30 +8007,41 @@ end
 do
     State.AutoUnloadWhenFull = false
     local serial, busy, fullLatched = 0, false, nil
+    ThisHubInstance.UnloadBuild = "U3"
+    local function cleanName(value)
+        return tostring(value or ""):gsub("<[^>]*>", ""):gsub("^%s*@?", ""):gsub("%s*$", ""):lower()
+    end
     local function ownPlot()
         local plots = workspace:FindFirstChild("_Plots")
-        local found
-        if not plots then return nil end
+        if not plots then return nil, "_Plots is missing" end
+        local found, named, count = nil, nil, 0
+        local displayMatches = 0
         for _, plot in ipairs(plots:GetChildren()) do
-            local owner = tonumber(plot:GetAttribute("OwnerUserId"))
-            local matches = owner == LocalPlayer.UserId
-            if not owner or owner == 0 then
-                local head = plot:FindFirstChild("OwnerHeadshot")
-                local label = head and head:FindFirstChild("OwnerName", true)
-                local name = ""
-                if label then
-                    if label:IsA("StringValue") then name = label.Value
-                    elseif label:IsA("TextLabel") or label:IsA("TextButton") then name = label.Text end
-                end
-                matches = name:lower() == LocalPlayer.Name:lower()
-                    or name:lower() == ("@" .. LocalPlayer.Name):lower()
+            count = count + 1
+            local owner = tonumber(plot:GetAttribute("OwnerUserId") or plot:GetAttribute("OwnerUserID"))
+            local head = plot:FindFirstChild("OwnerHeadshot")
+            local label = head and head:FindFirstChild("OwnerName", true)
+            local name = ""
+            if label then
+                if label:IsA("StringValue") then name = label.Value
+                elseif label:IsA("TextLabel") or label:IsA("TextButton") then name = label.Text end
             end
+            name = cleanName(name)
+            local matches = owner == LocalPlayer.UserId
+                or ((not owner or owner == 0) and name == cleanName(LocalPlayer.Name))
             if matches then
-                if found then return nil end
+                if found then return nil, "multiple plots match your account" end
                 found = plot
+            elseif (not owner or owner == 0) and name ~= ""
+                and name == cleanName(LocalPlayer.DisplayName) then
+                named = plot
+                displayMatches = displayMatches + 1
             end
         end
-        return found
+        if found then return found end
+        -- A display name is accepted only when it uniquely identifies a plot.
+        if displayMatches == 1 then return named end
+        return nil, tostring(count) .. " plots checked; no unique owner match for @" .. LocalPlayer.Name
     end
     local function padFor(plot, humanoid, vehicle)
         local zone = plot:FindFirstChild("UnpackZone", true)
@@ -8056,16 +8067,28 @@ do
         return nil
     end
     local function plotArrival(plot)
-        for _, name in ipairs({"VehicleSpawn", "Driveway", "SpawnLocation"}) do
+        for _, name in ipairs({"VehicleSpawn", "Driveway", "SpawnLocation", "PlotBase", "Ground", "Floor", "Base"}) do
             local part = plot:FindFirstChild(name, true)
-            if part and part:IsA("BasePart") then
+            if part and part:IsA("BasePart") and part.Size.X >= 6 and part.Size.Z >= 6 then
                 return part.CFrame * CFrame.new(0, part.Size.Y / 2 + 4, 0)
             end
         end
+        -- Plots may be Folders, which have no GetPivot method.
+        local floor
+        for _, part in ipairs(plot:GetDescendants()) do
+            if part:IsA("BasePart") and part.Anchored and part.CanCollide
+                and part.Size.X >= 12 and part.Size.Z >= 12
+                and part.Size.Y <= math.min(part.Size.X, part.Size.Z) / 2
+                and not part:GetAttribute("IsStockDecor") then
+                if not floor or part.Position.Y - part.Size.Y / 2
+                    < floor.Position.Y - floor.Size.Y / 2 then floor = part end
+            end
+        end
+        if floor then return floor.CFrame * CFrame.new(0, floor.Size.Y / 2 + 4, 0) end
         if plot:IsA("Model") or plot:IsA("BasePart") then
             return plot:GetPivot() * CFrame.new(0, 5, 0)
         end
-        error("Your plot has no usable arrival position.")
+        error("No floor or spawn position found in your " .. plot.ClassName .. " plot.")
     end
     local function equippedVehicle(guid)
         for _, object in ipairs(workspace:GetDescendants()) do
@@ -8076,7 +8099,8 @@ do
         end
     end
     ThisHubInstance.GoToUnload = function(automatic)
-        if HubDestroyed or busy then return end
+        if HubDestroyed then return false end
+        if busy then Notify("Unload U3", "An unload trip is already running.", 3); return false end
         busy = true
         serial = serial + 1
         local run = serial
@@ -8084,9 +8108,19 @@ do
             return not HubDestroyed and serial == run
                 and (not automatic or State.AutoUnloadWhenFull)
         end
+        local step = "1/6 Find your plot"
+        local function progress(value)
+            step = value
+            print("[Syndicate Unload U3] " .. value)
+            if ThisHubInstance.UnloadStatusLabel and ThisHubInstance.UnloadStatusLabel.Parent then
+                ThisHubInstance.UnloadStatusLabel.Text = "U3 · " .. value
+            end
+        end
+        progress(step)
+        Notify("Unload U3", "Starting unload trip: finding your plot.", 3)
         local ok, failure = pcall(function()
-            local plot = ownPlot()
-            if not plot then error("Could not verify your plot ownership.") end
+            local plot, reason = ownPlot()
+            if not plot then error("Plot detection failed: " .. tostring(reason)) end
             local pad
             local guid = LocalPlayer:GetAttribute("EquippedVehicle")
             if type(guid) ~= "string" or guid == "" then error("Equip your vehicle first.") end
@@ -8118,6 +8152,7 @@ do
                 RunIds.Unload += 1
                 if ToggleObjects.InstantUnload then ToggleObjects.InstantUnload(false) end
             end
+            progress("2/6 Prepare your vehicle")
             local vehicle = equippedVehicle(guid)
             local seat = vehicle and vehicle:FindFirstChildWhichIsA("VehicleSeat", true)
             local alreadySeated = seat and humanoid.SeatPart == seat
@@ -8132,6 +8167,7 @@ do
                     if os.clock() >= deadline then error("Could not leave your current seat.") end
                 end
                 check()
+                progress("3/6 Travel to " .. plot.Name)
                 root.CFrame = plotArrival(plot)
                 root.AssemblyLinearVelocity = Vector3.zero
                 local arrival = root.Position
@@ -8145,6 +8181,8 @@ do
                         if success == false then spawnFailure = tostring(message or "Spawn rejected.") end
                     end)
                 end
+                progress("4/6 Request vehicle spawn")
+                Notify("Unload U3", "At your plot; requesting your vehicle.", 3)
                 local requested, spawnError = pcall(function() spawn:FireServer(guid) end)
                 vehicle, seat = nil, nil
                 deadline = os.clock() + 12
@@ -8165,6 +8203,7 @@ do
                 if spawnFailure then error("Vehicle spawn failed: " .. spawnFailure) end
                 if not seat then error("Your vehicle did not spawn near your plot with a driver seat.") end
             end
+            progress("5/6 Sit in your vehicle")
             deadline = os.clock() + 5
             repeat
                 check()
@@ -8180,6 +8219,7 @@ do
             if humanoid.SeatPart ~= seat then error("Could not sit in your vehicle; tap again.") end
             -- Wait for the zone to appear AFTER seating. Do not retain a
             -- pre-seat pad instance; the game can replace it on entry.
+            progress("6/6 Wait for UnpackZone.Pad")
             deadline = os.clock() + 8
             repeat
                 check()
@@ -8198,10 +8238,19 @@ do
                     part.AssemblyAngularVelocity = Vector3.zero
                 end
             end
-            Notify("Unload", "Seated at your unloading pad. Use the game's unload menu.", 4)
+            progress("Ready at unloading pad")
+            Notify("Unload U3", "Seated at the unloading pad. Check the game's unload menu.", 4)
         end)
         busy = false
-        if not ok and active() then Notify("Unload", tostring(failure), 5) end
+        if not ok and active() then
+            local message = step .. ": " .. tostring(failure)
+            warn("[Syndicate Unload U3] " .. message)
+            if ThisHubInstance.UnloadStatusLabel and ThisHubInstance.UnloadStatusLabel.Parent then
+                ThisHubInstance.UnloadStatusLabel.Text = "U3 · " .. message
+            end
+            Notify("Unload U3 stopped", message, 10)
+        end
+        return ok
     end
     ThisHubInstance.StartAutoUnloadWhenFull = function(enabled)
         serial = serial + 1
@@ -8481,12 +8530,27 @@ CreateToggle(
 
 CreateToggle(
     FarmingPage,
-    "Auto Unload When Full",
+    "Auto Unload When Full [U3]",
     "AutoUnloadWhenFull",
     function(enabled)
         ThisHubInstance.StartAutoUnloadWhenFull(enabled)
     end
 )
+
+do
+    local label = New("TextLabel", {
+        Name = "UnloadBuildStatus",
+        Size = UDim2.new(1, -8, 0, 44),
+        BackgroundTransparency = 1,
+        Text = "Unload U3 · Tap the % icon to start",
+        TextColor3 = MutedText,
+        TextSize = 12,
+        Font = Enum.Font.Gotham,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, FarmingPage)
+    ThisHubInstance.UnloadStatusLabel = label
+end
 
 CreateToggle(
     FarmingPage,
@@ -14048,3 +14112,9 @@ end)
 
 
 
+
+-- Visible marker for the installed unload revision.
+if not HubDestroyed then
+    Notify("Syndicate Hub · Unload U3", "U3 installed. Tap the % icon for an unload trip.", 6)
+    print("[Syndicate Unload U3] Build loaded")
+end
