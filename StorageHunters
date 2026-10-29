@@ -1030,6 +1030,53 @@ local Main = New("\070\114\097\109\101", {
 
 Corner(Main, 10)
 
+-- Fit the window inside the usable ScreenGui area, including on mobile.
+do
+    local bounds = New("Frame", {
+        Name = "WindowBounds",
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Active = false,
+    }, Gui)
+    Main.Parent = bounds
+    local initialized = false
+    ThisHubInstance.FitHubWindow = function(reset)
+        if HubDestroyed then return end
+        local available = bounds.AbsoluteSize
+        if available.X < 1 or available.Y < 1 then return end
+        local margin = math.min(12, (available.X - 1) / 2, (available.Y - 1) / 2)
+        local maxWidth = math.max(1, math.floor(available.X - margin * 2))
+        local maxHeight = math.max(1, math.floor(available.Y - margin * 2))
+        local width, height
+        if reset or not initialized then
+            width = math.min(380, maxWidth)
+            height = math.max(1, math.min(400, maxHeight, math.floor(available.Y * 0.82)))
+        else
+            width = math.clamp(Main.Size.X.Offset, math.min(270, maxWidth), maxWidth)
+            height = math.clamp(Main.Size.Y.Offset, math.min(210, maxHeight), maxHeight)
+        end
+        local x, y
+        if reset or not initialized then
+            x = (available.X - width) / 2
+            y = (available.Y - height) / 2
+        else
+            x = Main.Position.X.Scale * available.X + Main.Position.X.Offset
+            y = Main.Position.Y.Scale * available.Y + Main.Position.Y.Offset
+        end
+        Main.Size = UDim2.fromOffset(width, height)
+        Main.Position = UDim2.fromOffset(
+            math.clamp(x, margin, available.X - width - margin),
+            math.clamp(y, margin, available.Y - height - margin)
+        )
+        initialized = true
+    end
+    TrackConnection(bounds:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+        ThisHubInstance.FitHubWindow(false)
+    end))
+    ThisHubInstance.FitHubWindow(true)
+end
+
                                                                 
                                                        
 do
@@ -1073,6 +1120,7 @@ do
                 math.max(270, math.floor(sizeStart.X + delta.X)),
                 math.max(210, math.floor(sizeStart.Y + delta.Y))
             )
+            ThisHubInstance.FitHubWindow(false)
         end
     end))
 
@@ -1247,6 +1295,7 @@ do
                     startPosition.Y.Scale,
                     startPosition.Y.Offset + delta.Y
                 )
+                ThisHubInstance.FitHubWindow(false)
             end
         end)
     )
