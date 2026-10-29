@@ -8007,7 +8007,6 @@ end
 do
     State.AutoUnloadWhenFull = false
     local serial, busy, fullLatched = 0, false, nil
-    ThisHubInstance.UnloadBuild = "U3"
     local function cleanName(value)
         return tostring(value or ""):gsub("<[^>]*>", ""):gsub("^%s*@?", ""):gsub("%s*$", ""):lower()
     end
@@ -8100,7 +8099,7 @@ do
     end
     ThisHubInstance.GoToUnload = function(automatic)
         if HubDestroyed then return false end
-        if busy then Notify("Unload U3", "An unload trip is already running.", 3); return false end
+        if busy then Notify("Unload", "An unload trip is already running.", 3); return false end
         busy = true
         serial = serial + 1
         local run = serial
@@ -8111,13 +8110,13 @@ do
         local step = "1/6 Find your plot"
         local function progress(value)
             step = value
-            print("[Syndicate Unload U3] " .. value)
+            print("[Syndicate Unload] " .. value)
             if ThisHubInstance.UnloadStatusLabel and ThisHubInstance.UnloadStatusLabel.Parent then
-                ThisHubInstance.UnloadStatusLabel.Text = "U3 · " .. value
+                ThisHubInstance.UnloadStatusLabel.Text = "" .. value
             end
         end
         progress(step)
-        Notify("Unload U3", "Starting unload trip: finding your plot.", 3)
+        Notify("Unload", "Starting unload trip: finding your plot.", 3)
         local ok, failure = pcall(function()
             local plot, reason = ownPlot()
             if not plot then error("Plot detection failed: " .. tostring(reason)) end
@@ -8182,7 +8181,7 @@ do
                     end)
                 end
                 progress("4/6 Request vehicle spawn")
-                Notify("Unload U3", "At your plot; requesting your vehicle.", 3)
+                Notify("Unload", "At your plot; requesting your vehicle.", 3)
                 local requested, spawnError = pcall(function() spawn:FireServer(guid) end)
                 vehicle, seat = nil, nil
                 deadline = os.clock() + 12
@@ -8239,16 +8238,16 @@ do
                 end
             end
             progress("Ready at unloading pad")
-            Notify("Unload U3", "Seated at the unloading pad. Check the game's unload menu.", 4)
+            Notify("Unload", "Seated at the unloading pad. Check the game's unload menu.", 4)
         end)
         busy = false
         if not ok and active() then
             local message = step .. ": " .. tostring(failure)
-            warn("[Syndicate Unload U3] " .. message)
+            warn("[Syndicate Unload] " .. message)
             if ThisHubInstance.UnloadStatusLabel and ThisHubInstance.UnloadStatusLabel.Parent then
-                ThisHubInstance.UnloadStatusLabel.Text = "U3 · " .. message
+                ThisHubInstance.UnloadStatusLabel.Text = "" .. message
             end
-            Notify("Unload U3 stopped", message, 10)
+            Notify("Unload stopped", message, 10)
         end
         return ok
     end
@@ -8530,7 +8529,7 @@ CreateToggle(
 
 CreateToggle(
     FarmingPage,
-    "Auto Unload When Full [U3]",
+    "Auto Unload When Full",
     "AutoUnloadWhenFull",
     function(enabled)
         ThisHubInstance.StartAutoUnloadWhenFull(enabled)
@@ -8539,10 +8538,10 @@ CreateToggle(
 
 do
     local label = New("TextLabel", {
-        Name = "UnloadBuildStatus",
+        Name = "UnloadStatus",
         Size = UDim2.new(1, -8, 0, 44),
         BackgroundTransparency = 1,
-        Text = "Unload U3 · Tap the % icon to start",
+        Text = "Unload · Tap the % icon to start",
         TextColor3 = MutedText,
         TextSize = 12,
         Font = Enum.Font.Gotham,
@@ -14113,8 +14112,3 @@ end)
 
 
 
--- Visible marker for the installed unload revision.
-if not HubDestroyed then
-    Notify("Syndicate Hub · Unload U3", "U3 installed. Tap the % icon for an unload trip.", 6)
-    print("[Syndicate Unload U3] Build loaded")
-end
