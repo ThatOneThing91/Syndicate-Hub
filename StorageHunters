@@ -1065,10 +1065,8 @@ do
             y = Main.Position.Y.Scale * available.Y + Main.Position.Y.Offset
         end
         Main.Size = UDim2.fromOffset(width, height)
-        Main.Position = UDim2.fromOffset(
-            math.clamp(x, margin, available.X - width - margin),
-            math.clamp(y, margin, available.Y - height - margin)
-        )
+        -- Fit the default size without restricting where the user drags it.
+        Main.Position = UDim2.fromOffset(x, y)
         initialized = true
     end
     TrackConnection(bounds:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
@@ -1295,7 +1293,6 @@ do
                     startPosition.Y.Scale,
                     startPosition.Y.Offset + delta.Y
                 )
-                ThisHubInstance.FitHubWindow(false)
             end
         end)
     )
@@ -1698,17 +1695,29 @@ local function CreateDropdown(parent, title, initialValue, initialOptions, callb
             if object.BeforeOpen then object.BeforeOpen() end
             CloseDropdown()
 
-            local frameHeight = math.min(280, (#options * 32) + 8)
+            -- Place the popup in overlay coordinates and open upward
+            -- when there is more room above the dropdown button.
+            local area = DropdownOverlay.AbsoluteSize
+            local origin = DropdownOverlay.AbsolutePosition
+            local margin = math.min(8, math.max(0, (math.min(area.X, area.Y) - 1) / 2))
+            local maxWidth = math.max(1, area.X - margin * 2)
+            local width = math.min(math.max(180, holder.AbsoluteSize.X), maxWidth)
+            local x = holder.AbsolutePosition.X - origin.X
+            x = math.clamp(x, margin, math.max(margin, area.X - width - margin))
+            local below = button.AbsolutePosition.Y - origin.Y + button.AbsoluteSize.Y + 3
+            local above = button.AbsolutePosition.Y - origin.Y - 3
+            local belowSpace = math.max(0, area.Y - margin - below)
+            local aboveSpace = math.max(0, above - margin)
+            local desiredHeight = math.min(280, (#options * 32) + 8)
+            local openBelow = belowSpace >= desiredHeight or belowSpace >= aboveSpace
+            local frameHeight = math.max(1, math.min(desiredHeight,
+                openBelow and belowSpace or aboveSpace, math.max(1, area.Y - margin * 2)))
+            local y = openBelow and below or (above - frameHeight)
+            y = math.clamp(y, margin, math.max(margin, area.Y - frameHeight - margin))
 
-            local optionsFrame = New("\083\099\114\111\108\108\105\110\103\070\114\097\109\101", {
-                Size = UDim2.fromOffset(
-                    math.max(180, holder.AbsoluteSize.X),
-                    frameHeight
-                ),
-                Position = UDim2.fromOffset(
-                    holder.AbsolutePosition.X,
-                    holder.AbsolutePosition.Y + holder.AbsoluteSize.Y + 3
-                ),
+            local optionsFrame = New("ScrollingFrame", {
+                Size = UDim2.fromOffset(width, frameHeight),
+                Position = UDim2.fromOffset(x, y),
                 BackgroundColor3 = DarkerBackground,
                 BorderSizePixel = 0,
                 ZIndex = 210,
