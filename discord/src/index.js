@@ -446,19 +446,17 @@ function keyAccessPanelPayload(){
   embeds:[{
    author:{name:"✦ SHADOW SYNDICATES  •  ELITE ACCESS"},
    title:"👑  THE PREMIUM VAULT",
-   description:"**SYNDICATE HUB**  ·  Private Member Access\n\nWelcome to the Inner Circle. Choose your access tier below to unlock your private key.\n\n**━━━━━━━━━━  ✦  ━━━━━━━━━━**",
+   description:"**SYNDICATE HUB**  ·  Private Member Access\n\nWelcome to the Inner Circle. Generate your private lifetime key below.\n\n**━━━━━━━━━━  ✦  ━━━━━━━━━━**",
    color:0xE4B65D,
    fields:[
     {name:"💎  PREMIUM  ·  LIFETIME",value:"<@&1564481287710974062> members\n**♾️ No expiration**",inline:true},
-    {name:"⏳  FREE  ·  24 HOURS",value:"Available to everyone\n**One-day access**",inline:true},
     {name:"🔐  YOUR ACCESS, SECURED",value:"One active key per Discord member and Roblox ID. Delivered **privately** — never share it.",inline:false}
    ],
    footer:{text:"SHADOW SYNDICATES  ✦  AUTHORIZED MEMBERS ONLY"}
   }],
   components:[
    {type:1,components:[
-    {type:2,style:1,label:"Premium Lifetime",custom_id:"syndicate_generate_key",emoji:{name:"👑"}},
-    {type:2,style:2,label:"Free 24-Hour Key",custom_id:"syndicate_free_generate",emoji:{name:"⏳"}}
+    {type:2,style:1,label:"Premium Lifetime",custom_id:"syndicate_generate_key",emoji:{name:"👑"}}
    ]},
    {type:1,components:[
     {type:2,style:2,label:"View My Key",custom_id:"syndicate_free_view",emoji:{name:"🔑"}},
@@ -472,7 +470,7 @@ function keyAccessPanelPayload(){
 // Upgrade the existing bot-owned lifetime panel once, without posting duplicates.
 async function syncExistingKeyAccessPanel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS key_access_panel_layout(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,channel_id TEXT,message_id TEXT,checked_at TEXT NOT NULL)").run();
- const revision="premium-vault-minimal-v3";
+ const revision="premium-vault-lifetime-v4";
  const current=await env.DB.prepare("SELECT revision,status,channel_id,message_id FROM key_access_panel_layout WHERE id=1").first();
  if(current?.revision===revision&&current.status==="updated")return;
  const panelId = current?.message_id;
