@@ -8002,6 +8002,214 @@ local function InstantUnloadVehicle(targetVehicle)
     end)
 end
 
+
+-- Manual unload uses the rate badge; automatic unload uses actual cargo weight.
+do
+    State.AutoUnloadWhenFull = false
+    local serial, busy, fullLatched = 0, false, nil
+    local function ownPlot()
+        local plots = workspace:FindFirstChild("_Plots")
+        local found
+        if not plots then return nil end
+        for _, plot in ipairs(plots:GetChildren()) do
+            local owner = tonumber(plot:GetAttribute("OwnerUserId"))
+            local matches = owner == LocalPlayer.UserId
+            if not owner or owner == 0 then
+                local head = plot:FindFirstChild("OwnerHeadshot")
+                local label = head and head:FindFirstChild("OwnerName", true)
+                local name = ""
+                if label then
+                    if label:IsA("StringValue") then name = label.Value
+                    elseif label:IsA("TextLabel") or label:IsA("TextButton") then name = label.Text end
+                end
+                matches = name:lower() == LocalPlayer.Name:lower()
+                    or name:lower() == ("@" .. LocalPlayer.Name):lower()
+            end
+            if matches then
+                if found then return nil end
+                found = plot
+            end
+        end
+        return found
+    end
+    local function padFor(plot)
+        local zone = plot:FindFirstChild("UnpackZone", true)
+        local pad = zone and zone:FindFirstChild("Pad")
+        if pad and pad:IsA("BasePart") then return pad end
+        zone = workspace:FindFirstChild("UnpackZone")
+        pad = zone and zone:FindFirstChild("Pad")
+        if not pad or not pad:IsA("BasePart") then
+            error("Your UnpackZone.Pad is not available.")
+        end
+        -- A workspace-level zone must be explicitly owned, or closest to
+        -- the verified plot. Never choose another player's unloading pad.
+        local owner = tonumber(zone:GetAttribute("OwnerUserId") or pad:GetAttribute("OwnerUserId"))
+        if owner and owner ~= 0 then
+            if owner == LocalPlayer.UserId then return pad end
+            error("The unpack zone belongs to another player.")
+        end
+        local nearest, nearestDistance, secondDistance = nil, math.huge, math.huge
+        for _, candidate in ipairs(workspace._Plots:GetChildren()) do
+            local ok, cf = pcall(function()
+                if candidate:IsA("Model") then return candidate:GetBoundingBox() end
+                if candidate:IsA("BasePart") then return candidate.CFrame end
+            end)
+            if ok and cf then
+                local offset = cf.Position - pad.Position
+                local distance = Vector2.new(offset.X, offset.Z).Magnitude
+                if distance < nearestDistance then
+                    secondDistance = nearestDistance
+                    nearest, nearestDistance = candidate, distance
+                elseif distance < secondDistance then secondDistance = distance end
+            end
+        end
+        if nearest == plot and secondDistance - nearestDistance > 1 then return pad end
+        error("Cannot verify that workspace.UnpackZone.Pad belongs to your plot.")
+    end
+    local function equippedVehicle(guid)
+        for _, object in ipairs(workspace:GetDescendants()) do
+            if object:IsA("Model") and
+                tostring(object:GetAttribute("VehicleGUID") or object:GetAttribute("GUID") or "") == guid then
+                return object
+            end
+        end
+    end
+    ThisHubInstance.GoToUnload = function(automatic)
+        if HubDestroyed or busy then return end
+        busy = true
+        serial = serial + 1
+        local run = serial
+        local function active()
+            return not HubDestroyed and serial == run
+                and (not automatic or State.AutoUnloadWhenFull)
+        end
+        local ok, failure = pcall(function()
+            local plot = ownPlot()
+            if not plot then error("Could not verify your plot ownership.") end
+            local pad = padFor(plot)
+            local guid = LocalPlayer:GetAttribute("EquippedVehicle")
+            if type(guid) ~= "string" or guid == "" then error("Equip your vehicle first.") end
+            local character = LocalPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            if not humanoid or not root or humanoid.Health <= 0 then error("Wait for your character to load.") end
+            local function check()
+                if not active() then error("Unload cancelled.") end
+                if LocalPlayer.Character ~= character or humanoid.Health <= 0 then error("Character changed; tap again.") end
+                if ownPlot() ~= plot or not pad.Parent then error("Your plot changed; unload stopped.") end
+            end
+            local events = ReplicatedStorage:FindFirstChild("Events")
+            local vehicles = events and events:FindFirstChild("Vehicles")
+            local spawn = vehicles and vehicles:FindFirstChild("RequestSpawn")
+            if not spawn or not spawn:IsA("RemoteEvent") then error("Vehicle spawn remote unavailable.") end
+            check()
+            -- Stop auction teleports before moving to the unloading pad.
+            if State.Farming then
+                State.Farming = false
+                RunIds.Farming += 1
+                ThisHubInstance.StopFarmingWorkers()
+                if ToggleObjects.Farming then ToggleObjects.Farming(false) end
+            end
+            -- Instant Unload would empty the truck before its menu opens.
+            if State.InstantUnload then
+                State.InstantUnload = false
+                RunIds.Unload += 1
+                if ToggleObjects.InstantUnload then ToggleObjects.InstantUnload(false) end
+            end
+            local deadline = os.clock() + 3
+            while humanoid.SeatPart do
+                check()
+                humanoid.Sit = false
+                humanoid.Jump = true
+                task.wait(0.1)
+                if os.clock() >= deadline then error("Could not leave your current seat.") end
+            end
+            check()
+            root.CFrame = pad.CFrame * CFrame.new(0, pad.Size.Y / 2 + 4, 0)
+            root.AssemblyLinearVelocity = Vector3.zero
+            task.wait(0.5)
+            check()
+            local spawnFailure
+            local connection
+            local result = vehicles:FindFirstChild("SpawnResult")
+            if result and result:IsA("RemoteEvent") then
+                connection = result.OnClientEvent:Connect(function(success, message)
+                    if success == false then spawnFailure = tostring(message or "Spawn rejected.") end
+                end)
+            end
+            local requested, spawnError = pcall(function() spawn:FireServer(guid) end)
+            local vehicle, seat
+            deadline = os.clock() + 12
+            repeat
+                if not active() or LocalPlayer.Character ~= character or ownPlot() ~= plot then break end
+                if spawnFailure or not requested then break end
+                vehicle = equippedVehicle(guid)
+                if vehicle then
+                    seat = vehicle:FindFirstChildWhichIsA("VehicleSeat", true)
+                    if seat and (seat.Position - pad.Position).Magnitude <= 70 then break end
+                    seat = nil
+                end
+                task.wait(0.15)
+            until os.clock() >= deadline
+            if connection then connection:Disconnect() end
+            check()
+            if not requested then error(tostring(spawnError)) end
+            if spawnFailure then error("Vehicle spawn failed: " .. spawnFailure) end
+            if not seat then error("Your vehicle did not spawn near the pad with a driver seat.") end
+            deadline = os.clock() + 5
+            repeat
+                check()
+                if not seat.Parent then error("Vehicle disappeared; tap again.") end
+                if seat.Occupant and seat.Occupant ~= humanoid then error("Your driver seat is occupied.") end
+                if humanoid.SeatPart == seat then break end
+                root.CFrame = seat.CFrame * CFrame.new(0, 2, 0)
+                root.AssemblyLinearVelocity = Vector3.zero
+                seat:Sit(humanoid)
+                task.wait(0.25)
+            until os.clock() >= deadline
+            check()
+            if humanoid.SeatPart ~= seat then error("Could not sit in your vehicle; tap again.") end
+            local bounds, size = vehicle:GetBoundingBox()
+            local target = pad.Position + Vector3.new(0, pad.Size.Y / 2 + size.Y / 2 + 0.25, 0)
+            vehicle:PivotTo(vehicle:GetPivot() + (target - bounds.Position))
+            for _, part in ipairs(vehicle:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.AssemblyLinearVelocity = Vector3.zero
+                    part.AssemblyAngularVelocity = Vector3.zero
+                end
+            end
+            Notify("Unload", "Seated at your unloading pad. Use the game's unload menu.", 4)
+        end)
+        busy = false
+        if not ok and active() then Notify("Unload", tostring(failure), 5) end
+    end
+    ThisHubInstance.StartAutoUnloadWhenFull = function(enabled)
+        serial = serial + 1
+        fullLatched = nil
+        if not enabled then return end
+        local monitor = serial
+        ThisHubInstance.AutoUnloadMonitor = monitor
+        task.spawn(function()
+            while not HubDestroyed and State.AutoUnloadWhenFull do
+                -- GoToUnload changes serial; toggling OFF ends this worker.
+                if ThisHubInstance.AutoUnloadMonitor ~= monitor then return end
+                local guid = LocalPlayer:GetAttribute("EquippedVehicle")
+                local vehicle = type(guid) == "string" and equippedVehicle(guid)
+                local weight = vehicle and tonumber(vehicle:GetAttribute("CargoWeight"))
+                local limit = vehicle and tonumber(vehicle:GetAttribute("CargoWeightLimit"))
+                if weight and limit and limit > 0 then
+                    if weight < limit then fullLatched = nil
+                    elseif fullLatched ~= guid and not busy then
+                        fullLatched = guid
+                        ThisHubInstance.GoToUnload(true)
+                    end
+                end
+                task.wait(1)
+            end
+        end)
+    end
+end
+
 local function StartInstantUnload(runId)
     task.spawn(function()
         while not HubDestroyed
@@ -8248,6 +8456,15 @@ CreateToggle(
         if enabled then
             StartInstantUnload(RunIds.Unload)
         end
+    end
+)
+
+CreateToggle(
+    FarmingPage,
+    "Auto Unload When Full",
+    "AutoUnloadWhenFull",
+    function(enabled)
+        ThisHubInstance.StartAutoUnloadWhenFull(enabled)
     end
 )
 
@@ -9179,7 +9396,7 @@ local function SetupTestsRuleBuilder()
     local RateLabel
 
                                                                  
-    local PersistentSaleRate = New("\084\101\120\116\076\097\098\101\108", {
+    local PersistentSaleRate = New("TextButton", {
         Name = "\080\101\114\115\105\115\116\101\110\116\083\097\108\101\082\097\116\101",
         AnchorPoint = Vector2.new(0.5, 0),
         Position = UDim2.new(0.43, 0, 0, 12 - game:GetService("\071\117\105\083\101\114\118\105\099\101"):GetGuiInset().Y),
@@ -9196,34 +9413,40 @@ local function SetupTestsRuleBuilder()
     }, Gui)
     Corner(PersistentSaleRate, 6)
 
+
     do
-        local dragInput
-        local dragStart
-        local dragPosition
+        local dragInput, dragStart, dragPosition
+        local dragged, suppressUntil = false, 0
         TrackConnection(PersistentSaleRate.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1
-                or input.UserInputType == Enum.UserInputType.Touch then
-                dragInput = input
-                dragStart = input.Position
-                dragPosition = PersistentSaleRate.Position
+            if not dragInput and (input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch) then
+                dragInput, dragStart, dragPosition = input, input.Position, PersistentSaleRate.Position
+                dragged = false
             end
         end))
         TrackConnection(UserInputService.InputChanged:Connect(function(input)
             if HubDestroyed or not dragInput then return end
-            if input == dragInput
-                or (dragInput.UserInputType == Enum.UserInputType.MouseButton1
-                    and input.UserInputType == Enum.UserInputType.MouseMovement) then
+            if input == dragInput or (dragInput.UserInputType == Enum.UserInputType.MouseButton1
+                and input.UserInputType == Enum.UserInputType.MouseMovement) then
                 local delta = input.Position - dragStart
-                PersistentSaleRate.Position = UDim2.new(
-                    dragPosition.X.Scale, dragPosition.X.Offset + delta.X,
-                    dragPosition.Y.Scale, dragPosition.Y.Offset + delta.Y
-                )
+                if Vector2.new(delta.X, delta.Y).Magnitude > 8 then dragged = true end
+                if dragged then
+                    suppressUntil = os.clock() + 0.4
+                    PersistentSaleRate.Position = UDim2.new(
+                        dragPosition.X.Scale, dragPosition.X.Offset + delta.X,
+                        dragPosition.Y.Scale, dragPosition.Y.Offset + delta.Y)
+                end
             end
         end))
         TrackConnection(UserInputService.InputEnded:Connect(function(input)
             if input == dragInput then
+                if dragged then suppressUntil = os.clock() + 0.4 end
                 dragInput = nil
             end
+        end))
+        TrackConnection(PersistentSaleRate.Activated:Connect(function()
+            if HubDestroyed or os.clock() < suppressUntil or (dragInput and dragged) then return end
+            task.spawn(function() ThisHubInstance.GoToUnload(false) end)
         end))
     end
     local InventoryLabel
