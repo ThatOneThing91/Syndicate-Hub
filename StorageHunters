@@ -8145,12 +8145,7 @@ do
                 ThisHubInstance.StopFarmingWorkers()
                 if ToggleObjects.Farming then ToggleObjects.Farming(false) end
             end
-            -- Instant Unload would empty the truck before its menu opens.
-            if State.InstantUnload then
-                State.InstantUnload = false
-                RunIds.Unload += 1
-                if ToggleObjects.InstantUnload then ToggleObjects.InstantUnload(false) end
-            end
+            -- Preserve Instant Unload and its running worker during unload trips.
             progress("2/6 Prepare your vehicle")
             local vehicle = equippedVehicle(guid)
             local seat = vehicle and vehicle:FindFirstChildWhichIsA("VehicleSeat", true)
