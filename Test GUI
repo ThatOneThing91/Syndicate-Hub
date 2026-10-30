@@ -476,35 +476,96 @@ local function slider(p,name,desc,lo,hi,value,callback)
  end)
  return set
 end
-local function cycle(p,name,desc,options,callback,initial)
+local openDropdownClose
+local function closeDropdown()
+ if openDropdownClose then
+  local close=openDropdownClose
+  openDropdownClose=nil
+  close()
+ end
+end
+local function dropdown(p,name,desc,options,callback,initial)
  local values={}
  for _,value in ipairs(options or {}) do values[#values+1]=value end
- local index=1; local r=row(p,name,desc)
- local b=button(r,'',{Position=UDim2.new(1,-152,0,20),Size=UDim2.fromOffset(136,28),TextSize=10,TextTruncate=Enum.TextTruncate.AtEnd})
+ local current=initial
+ if current==nil or not table.find(values,current) then current=values[1] end
+ local r=row(p,name,desc,78)
+ local b=button(r,'',{Position=UDim2.new(1,-176,0,24),Size=UDim2.fromOffset(160,30),TextSize=10,TextTruncate=Enum.TextTruncate.AtEnd})
  rowSpecs[r].control=b
  local object={}
- local function find(value)
-  for i,item in ipairs(values) do if item==value then return i end end
+ local function draw(open)
+  b.Text=tostring(current or 'None')..(open and '  ^' or '  v')
  end
- local function draw()
-  b.Text=(values[index] and tostring(values[index]) or 'None')..' >'
+ local function selectValue(value,fire)
+  if not table.find(values,value) then return false end
+  current=value
+  draw(false)
+  if fire and callback then callback(value) end
+  return true
  end
- function object:Get() return values[index] end
- function object:Set(value,fire)
-  local found=find(value); if not found then return false end
-  index=found; draw(); if fire and callback then callback(values[index]) end; return true
- end
+ function object:Get() return current end
+ function object:Set(value,fire) return selectValue(value,fire) end
  function object:SetOptions(newOptions,selected)
-  values={}; for _,value in ipairs(newOptions or {}) do values[#values+1]=value end
-  index=find(selected) or math.min(index,math.max(1,#values))
-  if #values==0 then index=1 end
-  draw()
+  values={}
+  for _,value in ipairs(newOptions or {}) do values[#values+1]=value end
+  if selected~=nil and table.find(values,selected) then current=selected
+  elseif not table.find(values,current) then current=values[1] end
+  draw(false)
  end
- if initial then index=find(initial) or 1 end
- draw()
+ draw(false)
  connect(b.Activated,function()
   if #values==0 then return end
-  index=index%#values+1; draw(); if callback then callback(values[index]) end
+  closeDropdown()
+  draw(true)
+
+  local blocker=button(gui,'',{Position=UDim2.fromScale(0,0),Size=UDim2.fromScale(1,1),
+   BackgroundTransparency=1,Text='',AutoButtonColor=false,ZIndex=190})
+  local viewport=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920,1080)
+  local width=math.max(190,b.AbsoluteSize.X)
+  local desired=math.min(260,#values*31+8)
+  local x=math.clamp(b.AbsolutePosition.X,8,math.max(8,viewport.X-width-8))
+  local below=b.AbsolutePosition.Y+b.AbsoluteSize.Y+4
+  local above=b.AbsolutePosition.Y-4
+  local belowSpace=viewport.Y-below-8
+  local aboveSpace=above-8
+  local height=math.max(38,math.min(desired,math.max(belowSpace,aboveSpace)))
+  local y
+  if belowSpace>=math.min(desired,110) or belowSpace>=aboveSpace then
+   y=math.clamp(below,8,math.max(8,viewport.Y-height-8))
+  else
+   y=math.clamp(above-height,8,math.max(8,viewport.Y-height-8))
+  end
+
+  local popup=make('ScrollingFrame',{Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(width,height),
+   BackgroundColor3=Color3.fromRGB(24,18,35),BackgroundTransparency=0.03,BorderSizePixel=0,
+   CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollBarThickness=4,
+   ScrollBarImageColor3=accent,ScrollingDirection=Enum.ScrollingDirection.Y,ZIndex=200},gui)
+  make('UIStroke',{Color=accent,Thickness=1,Transparency=0.25},popup)
+  make('UIPadding',{PaddingTop=UDim.new(0,4),PaddingBottom=UDim.new(0,4),
+   PaddingLeft=UDim.new(0,4),PaddingRight=UDim.new(0,4)},popup)
+  make('UIListLayout',{Padding=UDim.new(0,3),SortOrder=Enum.SortOrder.LayoutOrder},popup)
+
+  local closed=false
+  local function close()
+   if closed then return end
+   closed=true
+   if popup then popup:Destroy() end
+   if blocker then blocker:Destroy() end
+   draw(false)
+   if openDropdownClose==close then openDropdownClose=nil end
+  end
+  openDropdownClose=close
+  connect(blocker.Activated,close)
+
+  for index,value in ipairs(values) do
+   local option=button(popup,tostring(value),{LayoutOrder=index,Size=UDim2.new(1,-8,0,28),
+    BackgroundColor3=value==current and accent:Lerp(Color3.fromRGB(24,18,35),0.55) or Color3.fromRGB(39,29,55),
+    TextXAlignment=Enum.TextXAlignment.Left,TextSize=10,ZIndex=210})
+   connect(option.Activated,function()
+    selectValue(value,true)
+    close()
+   end)
+  end
  end)
  return object
 end
@@ -569,7 +630,7 @@ local fallbackAreas={'Halloween','The Mines','Back Alley','Business Bay','Farmya
 local areas=Backend and type(Backend.GetFarmAreas)=='function' and Backend.GetFarmAreas() or fallbackAreas
 local selectedArea=backendState('SelectedArea',areas[1])
 local auctionControl
-local areaControl=cycle(farming,'Area','Choose which auction area the farmer should work in.',areas,function(value)
+local areaControl=dropdown(farming,'Area','Choose which auction area the farmer should work in.',areas,function(value)
  if Backend and type(Backend.SetFarmArea)=='function' then
   local ok,result=pcall(Backend.SetFarmArea,value)
   if not ok or result==false then notify('Could not select farming area.'); return end
@@ -580,7 +641,7 @@ local areaControl=cycle(farming,'Area','Choose which auction area the farmer sho
 end,selectedArea)
 local initialAuctions=Backend and type(Backend.GetFarmAuctions)=='function' and Backend.GetFarmAuctions(selectedArea) or {}
 local selectedAuction=backendState('SelectedAuction',initialAuctions[1])
-auctionControl=cycle(farming,'Priority auction','The preferred garage/tier. Existing strict priority, affordability, retry, and no-mid-start-switch logic stays unchanged.',initialAuctions,function(value)
+auctionControl=dropdown(farming,'Priority auction','The preferred garage/tier. Existing strict priority, affordability, retry, and no-mid-start-switch logic stays unchanged.',initialAuctions,function(value)
  if Backend and type(Backend.SetFarmAuction)=='function' then
   local ok,result=pcall(Backend.SetFarmAuction,value)
   if not ok or result==false then notify('Could not select priority auction.') end
@@ -956,8 +1017,26 @@ SetupInventoryFilter(grading,'Grading')
 end
 
 local event=page('Event','06')
-section(event,'EVENT')
-row(event,'Event controls','Ready for your event features to be added.')
+section(event,'HALLOWEEN EVENT')
+row(event,Backend and 'Halloween automation connected' or 'Halloween automation unavailable',Backend and 'These controls use the same Halloween routines from Syndicate Hub.' or ('Backend error: '..tostring(backendError or 'unknown error')),78)
+
+section(event,'COLLECTION')
+toggle(event,'Auto Trick or Treat','Visits active Halloween houses, retries available prompts, returns to your starting point, and stops if inventory fills.',backendState('AutoTrickOrTreat',false),function(value) backendToggle('AutoTrickOrTreat',value) end)
+toggle(event,'Grave Digger','Runs the existing grave prompt/cooldown tracker and retries failed digs.',backendState('GraveDigger',false),function(value) backendToggle('GraveDigger',value) end)
+
+section(event,'ZOMBIES')
+toggle(event,'Zombie Collector','Finds live zombies, handles combat and carryable pickup with the existing vehicle/fullness checks.',backendState('ZombieCollector',false),function(value) backendToggle('ZombieCollector',value) end)
+action(event,'Turn In Zombies','Uses the existing Halloween turn-in routine, then returns you to your previous position.','TURN IN',function()
+ if Backend and type(Backend.TurnInZombies)=='function' then
+  Backend.TurnInZombies()
+ else
+  notify('Zombie turn-in backend unavailable.')
+ end
+end)
+
+section(event,'HALLOWEEN MARKET')
+toggle(event,'Auto Market Rolling','Continuously uses the normal Halloween market roll.',backendState('AutoMarketRolling',false),function(value) backendToggle('AutoMarketRolling',value) end)
+toggle(event,'Auto Market Rolling x5','Continuously uses the five-roll Halloween market option.',backendState('AutoMarketRollingFive',false),function(value) backendToggle('AutoMarketRollingFive',value) end)
 local appearance=page('Appearance','05')
 section(appearance,'MAKE IT YOURS / LIVE CONTROLS')
 slider(appearance,'Transparency','Higher values reveal more of the world.',0,65,18,function(v)
