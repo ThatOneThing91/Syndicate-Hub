@@ -1,6 +1,6 @@
 -- SYNDICATE HUB / STORAGE HUNTERS UI
 -- Syndicate Hub interface for Storage Hunters.
-local HUB_VERSION='2.9'
+local HUB_VERSION='3.0'
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
@@ -398,12 +398,11 @@ end)
 
 local saleBadge=button(gui,'—%',{
  Position=UDim2.new(0.5,-29,0,76),Size=UDim2.fromOffset(58,30),
- BackgroundColor3=Color3.fromRGB(18,18,22),BackgroundTransparency=0.04,
- TextSize=12,Font=Enum.Font.GothamMedium,TextColor3=Color3.fromRGB(242,242,247),
+ BackgroundColor3=Color3.fromRGB(10,10,13),BackgroundTransparency=0.58,
+ TextSize=12,Font=Enum.Font.GothamMedium,TextColor3=Color3.fromRGB(255,255,255),
  ZIndex=240,AutoButtonColor=false})
 make('UICorner',{CornerRadius=UDim.new(0,7)},saleBadge)
-make('UIStroke',{Thickness=1,Transparency=0.48,Color=Color3.fromRGB(210,210,220)},saleBadge)
-make('UIGradient',{Color=ColorSequence.new(Color3.fromRGB(28,28,34),Color3.fromRGB(14,14,18)),Rotation=90},saleBadge)
+make('UIStroke',{Thickness=1,Transparency=0.72,Color=Color3.fromRGB(255,255,255)},saleBadge)
 local saleGesture,saleSuppress=nil,0
 connect(saleBadge.InputBegan,function(i)
  if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
