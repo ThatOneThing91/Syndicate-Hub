@@ -6605,44 +6605,48 @@ do
         end
     end
     local turnInBusy, lastTurnIn = false, -math.huge
-    local turnInButton = CreateActionButton(halloweenContent, "\084\117\114\110\032\073\110\032\090\111\109\098\105\101\115", function()
+    local function TurnInZombiesAction()
         if HubDestroyed or turnInBusy or os.clock() - lastTurnIn < 1 then return end
         turnInBusy, lastTurnIn = true, os.clock()
         task.spawn(function()
             local root = GetRoot()
             local originalCFrame = root and root.CFrame
             local ok, err = pcall(function()
-                if not root then error("\067\104\097\114\097\099\116\101\114\032\114\111\111\116\032\105\115\032\117\110\097\118\097\105\108\097\098\108\101\046") end
-                local graveDigger = workspace:WaitForChild("\065\114\101\097\115"):WaitForChild("\072\097\108\108\111\119\101\101\110"):WaitForChild("\071\114\097\118\101\032\068\105\103\103\101\114")
-                local torso = graveDigger:FindFirstChild("\085\112\112\101\114\084\111\114\115\111")
-                if not torso or not torso:IsA("\066\097\115\101\080\097\114\116") then error("\071\114\097\118\101\032\068\105\103\103\101\114\032\085\112\112\101\114\084\111\114\115\111\032\110\111\116\032\102\111\117\110\100\046") end
-                local trade = ReplicatedStorage:WaitForChild("\069\118\101\110\116\115"):WaitForChild("\090\111\109\098\105\101\084\117\114\110\073\110"):WaitForChild("\084\114\097\100\101")
+                if not root then error("Character root is unavailable.") end
+                local graveDigger = workspace:WaitForChild("Areas"):WaitForChild("Halloween"):WaitForChild("Grave Digger")
+                local torso = graveDigger:FindFirstChild("UpperTorso")
+                if not torso or not torso:IsA("BasePart") then error("Grave Digger UpperTorso not found.") end
+                local trade = ReplicatedStorage:WaitForChild("Events"):WaitForChild("ZombieTurnIn"):WaitForChild("Trade")
                 root.CFrame = torso.CFrame * CFrame.new(0, 0, -3)
                 task.wait(0.35)
                 if HubDestroyed then return end
-                if trade:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") then
+                if trade:IsA("RemoteFunction") then
                     local result = trade:InvokeServer(graveDigger)
-                    if result == false or (type(result) == "\116\097\098\108\101" and result.success == false) then
-                        error(tostring(type(result) == "\116\097\098\108\101" and (result.message or result.error or result.line) or "\084\117\114\110\045\105\110\032\100\101\099\108\105\110\101\100\046"))
+                    if result == false or (type(result) == "table" and result.success == false) then
+                        error(tostring(type(result) == "table" and (result.message or result.error or result.line) or "Turn-in declined."))
                     end
                     if not HubDestroyed then
-                        local message = type(result) == "\116\097\098\108\101" and (result.line or ("\084\117\114\110\101\100\032\105\110\032\122\111\109\098\105\101\115\033\032\067\097\110\100\121\058\032" .. tostring(result.candy or "\063"))) or "\084\117\114\110\045\105\110\032\099\111\109\112\108\101\116\101\100\046"
-                        Notify("\084\117\114\110\032\073\110\032\090\111\109\098\105\101\115", message, 4)
+                        local message = type(result) == "table"
+                            and (result.line or ("Turned in zombies! Candy: " .. tostring(result.candy or "?")))
+                            or "Turn-in completed."
+                        Notify("Turn In Zombies", message, 4)
                     end
-                elseif trade:IsA("\082\101\109\111\116\101\069\118\101\110\116") then
+                elseif trade:IsA("RemoteEvent") then
                     trade:FireServer(graveDigger)
-                    if not HubDestroyed then Notify("\084\117\114\110\032\073\110\032\090\111\109\098\105\101\115", "\084\117\114\110\045\105\110\032\114\101\113\117\101\115\116\032\115\101\110\116\046", 3) end
+                    if not HubDestroyed then Notify("Turn In Zombies", "Turn-in request sent.", 3) end
                 else
-                    error("\085\110\115\117\112\112\111\114\116\101\100\032\116\117\114\110\045\105\110\032\114\101\109\111\116\101\046")
+                    error("Unsupported turn-in remote.")
                 end
             end)
             if root and root.Parent and originalCFrame then
                 pcall(function() root.CFrame = originalCFrame end)
             end
             turnInBusy = false
-            if not ok and not HubDestroyed then Notify("\084\117\114\110\032\073\110\032\090\111\109\098\105\101\115", tostring(err), 5) end
+            if not ok and not HubDestroyed then Notify("Turn In Zombies", tostring(err), 5) end
         end)
-    end)
+    end
+    ThisHubInstance.TurnInZombies = TurnInZombiesAction
+    local turnInButton = CreateActionButton(halloweenContent, "Turn In Zombies", TurnInZombiesAction)
     turnInButton.LayoutOrder = halloweenOrder + 1
     TrackConnection(halloweenHeader.Activated:Connect(function()
         halloweenContent.Visible = not halloweenContent.Visible
