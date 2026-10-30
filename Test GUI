@@ -1,6 +1,6 @@
 -- SYNDICATE HUB / STORAGE HUNTERS UI
 -- Syndicate Hub interface for Storage Hunters.
-local HUB_VERSION='3.4'
+local HUB_VERSION='3.5'
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
@@ -1081,7 +1081,7 @@ local function SetupInventoryFilter(target,filterName)
  end
  local intro=newBlock(92)
  label(intro,filterName:upper()..' FILTER',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=15})
- local introText=label(intro,isQuickSell and 'Live Quick Sell filter. Nothing sells unless it matches your current rules. Favorites, protected utility items, worn accessories, and unverified accessories stay protected.' or 'Use Grade All for every gradable item, or Grade Selected to grade only items matching your selected filters.',{
+ local introText=label(intro,isQuickSell and 'Automatic protections: favorites, equipped items, Seeds, Fishing Rods/Pole items, Storage Crates/Boxes, Luck Drinks, and Safes. Accessories are protected unless accessory sales are enabled; worn or unverified accessories are always protected. Only items matching your selected sell rules can be sold.' or 'Use Grade All for every gradable item, or Grade Selected to grade only items matching your selected filters.',{
   Position=UDim2.fromOffset(12,36),Size=UDim2.new(1,-24,0,48),TextSize=11,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
  local modeBlock=newBlock(86)
  local modeButton=button(modeBlock,isGrading and gradingMode or settings.Mode,{Position=UDim2.fromOffset(12,12),Size=UDim2.new(1,-24,0,30),TextSize=11})
