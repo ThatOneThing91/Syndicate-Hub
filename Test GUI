@@ -1,4 +1,4 @@
--- AMETHYST / PIXEL UI 2.7
+-- AMETHYST / PIXEL UI 2.8
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
@@ -174,7 +174,7 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  2.7',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  2.8',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 -- Slim vertical text navigation, with the original stacked layout.
@@ -516,6 +516,7 @@ local shop=page('Shop','03')
 section(shop,'SHOP')
 row(shop,'Shop controls','Ready for your shop features to be added.')
 local quickSell=page('Quick Sell','04')
+local grading=page('Grading','05')
 do
 local Engine={}
 local function normalize(value)
@@ -523,11 +524,19 @@ local function normalize(value)
  if type(value)~='string' then return nil end
  return value:match('^%s*(.-)%s*$'):lower()
 end
-function Engine.Evaluate(data,catalog,settings)
+function Engine.Evaluate(data,catalog,settings,guid)
  if type(data)~='table' then return 'Unknown','Invalid item data' end
  local id=tostring(data.ItemId or '')
  local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
  if type(conf)~='table' then return 'Unknown','Item definition unavailable' end
+ local isAccessory=conf.Category=='Accessories'
+ if isAccessory then
+  if not settings.AllowAccessories then return 'Protected','Accessory sales disabled' end
+  if settings.WornItems[id] or settings.AccessoryState[tostring(guid)]==true then return 'Protected','Currently worn accessory' end
+  local state=settings.AccessoryState[tostring(guid)]
+  if data.Equipped==false or data.IsEquipped==false then state=state==true and true or false end
+  if state~=false then return 'Protected','Accessory equipment status unverified' end
+ end
  local name=tostring(conf.Name or id)
  local lower=name:lower()
  if data.Favorite==true or data.Favorited==true or data.IsFavorite==true or data.Equipped==true or data.IsEquipped==true then
@@ -556,9 +565,7 @@ function Engine.Evaluate(data,catalog,settings)
  local selections=settings.Selected
  local checks={}
  local function selected(group) return next(selections[group])~=nil end
- if selected('Consumables') or selected('Accessories') then
-  checks[#checks+1]=selections.Consumables[id]==true or selections.Accessories[id]==true
- end
+ if selected('Consumables') then checks[#checks+1]=selections.Consumables[id]==true end
  for _,group in ipairs({'Event Mutations','Mutations'}) do
   if selected(group) then
    local found=false
@@ -581,9 +588,9 @@ function Engine.Evaluate(data,catalog,settings)
  return sell and 'Would sell' or 'Keep',match and 'Matches selection' or 'Does not match selection'
 end
 
-local function SetupQuickSellFilter()
- local groups={'Consumables','Accessories','Event Mutations','Mutations','Rarity'}
- local settings={Mode='Keep Selected',Match='Any',Selected={}}
+local function SetupInventoryFilter(target,filterName)
+ local groups={'Consumables','Event Mutations','Mutations','Rarity'}
+ local settings={Mode='Keep Selected',Match='Any',Selected={},AllowAccessories=false,AccessoryState={},WornItems={}}
  for _,name in ipairs(groups) do settings.Selected[name]={} end
  local catalog={Items={},EventNames={},MutationNames={}}
  local options,blocks={},{}
@@ -595,27 +602,33 @@ local function SetupQuickSellFilter()
  local refreshPreview,layoutFilter,buildOptions
  local function newBlock(height)
   order=order+1
-  local block=frame(quickSell,{Size=UDim2.new(1,0,0,height),LayoutOrder=order,
+  local block=frame(target,{Size=UDim2.new(1,0,0,height),LayoutOrder=order,
    BackgroundColor3=Color3.fromRGB(36,26,50),BackgroundTransparency=math.min(0.85,opacity+0.2)})
   table.insert(surfaces,block)
   return block
  end
  local intro=newBlock(92)
- label(intro,'INVENTORY FILTER',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=15})
- local introText=label(intro,'Preview only. No items are sold. Favorite/equipped protection still needs verification.',{
+ label(intro,filterName:upper()..' FILTER',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=15})
+ local introText=label(intro,'Independent preview. Worn and unverified accessories stay protected. No items are sold or graded.',{
   Position=UDim2.fromOffset(12,36),Size=UDim2.new(1,-24,0,48),TextSize=11,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
  local modeBlock=newBlock(86)
- local modeButton=button(modeBlock,'Keep Selected',{Position=UDim2.fromOffset(12,12),Size=UDim2.new(0.56,-18,0,30),TextSize=11})
- local matchButton=button(modeBlock,'Match Any',{Position=UDim2.new(0.56,0,0,12),Size=UDim2.new(0.44,-12,0,30),TextSize=11})
- local modeHint=label(modeBlock,'Keep matching items; other eligible items would sell.',{Position=UDim2.fromOffset(12,48),Size=UDim2.new(1,-24,0,30),TextSize=10,TextColor3=muted,TextWrapped=true})
+ local modeButton=button(modeBlock,'Keep Selected',{Position=UDim2.fromOffset(12,12),Size=UDim2.new(1,-24,0,30),TextSize=11})
+ local modeHint=label(modeBlock,'Keep anything selected; other eligible items would sell.',{Position=UDim2.fromOffset(12,48),Size=UDim2.new(1,-24,0,30),TextSize=10,TextColor3=muted,TextWrapped=true})
  connect(modeButton.Activated,function()
   settings.Mode=settings.Mode=='Keep Selected' and 'Sell Selected' or 'Keep Selected'
   modeButton.Text=settings.Mode
-  modeHint.Text=settings.Mode=='Keep Selected' and 'Keep matching items; other eligible items would sell.' or 'Only matching eligible items would sell.'
+  modeHint.Text=settings.Mode=='Keep Selected' and 'Keep anything selected; other eligible items would sell.' or 'Only items matching a selection would sell.'
   refreshPreview()
  end)
- connect(matchButton.Activated,function()
-  settings.Match=settings.Match=='Any' and 'All' or 'Any'; matchButton.Text='Match '..settings.Match; refreshPreview()
+ local accessoriesBlock=newBlock(96)
+ label(accessoriesBlock,'Allow accessory sales',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=12})
+ local accessoriesHint=label(accessoriesBlock,'Worn accessories always stay protected.',{Position=UDim2.fromOffset(12,34),Size=UDim2.new(1,-24,0,25),TextSize=10,TextColor3=muted,TextWrapped=true})
+ local accessoryToggle=button(accessoriesBlock,'OFF',{Position=UDim2.new(1,-70,0,64),Size=UDim2.fromOffset(58,24),TextSize=11})
+ connect(accessoryToggle.Activated,function()
+  settings.AllowAccessories=not settings.AllowAccessories
+  accessoryToggle.Text=settings.AllowAccessories and 'ON' or 'OFF'
+  accessoryToggle.BackgroundColor3=settings.AllowAccessories and accent:Lerp(Color3.fromRGB(24,18,35),0.5) or Color3.fromRGB(43,33,62)
+  refreshPreview()
  end)
  for _,group in ipairs(groups) do
   local block=newBlock(52)
@@ -671,14 +684,14 @@ local function SetupQuickSellFilter()
  refreshPreview=function()
   results={};local counts={['Would sell']=0,Keep=0,Protected=0,Unknown=0}
   for guid,data in pairs(inventory) do
-   local state,reason=Engine.Evaluate(data,catalog,settings)
+   local state,reason=Engine.Evaluate(data,catalog,settings,guid)
    counts[state]=counts[state]+1
    local id=type(data)=='table' and tostring(data.ItemId or '') or ''
    local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
    results[#results+1]={status=state,reason=reason,name=type(conf)=='table' and tostring(conf.Name or id) or ('Unknown item '..id),guid=tostring(guid)}
   end
   table.sort(results,function(a,b) if a.status~=b.status then return a.status<b.status end; if a.name~=b.name then return a.name<b.name end;return a.guid<b.guid end)
-  summaryLabel.Text=string.format('WOULD SELL %d  /  KEEP %d\nPROTECTED %d  /  UNKNOWN %d\nPreview only; protections not yet verified.',counts['Would sell'],counts.Keep,counts.Protected,counts.Unknown)
+  summaryLabel.Text=string.format('WOULD SELL %d  /  KEEP %d\nPROTECTED %d  /  UNKNOWN %d\nPreview only; worn/unverified accessories protected.',counts['Would sell'],counts.Keep,counts.Protected,counts.Unknown)
   for _,group in ipairs(groups) do
    local selected=0;for _ in pairs(settings.Selected[group]) do selected=selected+1 end
    blocks[group].caption.Text=(blocks[group].expanded and '- ' or '+ ')..group..'  ('..selected..'/'..#(options[group] or {})..')'
@@ -738,18 +751,12 @@ local function SetupQuickSellFilter()
     for id,conf in pairs(items) do
      if type(conf)=='table' then
       if type(conf.Rarity)=='string' then add('Rarity',conf.Rarity:lower(),conf.Rarity) end
-      if conf.Category=='Accessories' then add('Accessories',tostring(id),tostring(conf.Name or id)) end
+      
       if conf.EnergyDrinkId~=nil then add('Consumables',tostring(id),tostring(conf.Name or id)) end
      end
     end
     for _,conf in pairs(drinks) do
      if type(conf)=='table' and conf.ItemId then add('Consumables',tostring(conf.ItemId),tostring(conf.Name or conf.ItemId)) end
-    end
-    if type(accessories.GetAllIds)=='function' then
-     for _,id in ipairs(accessories:GetAllIds()) do
-      local conf=items[id] or items[tostring(id)]
-      if type(conf)=='table' then add('Accessories',tostring(id),tostring(conf.Name or id)) end
-     end
     end
     local function mutationGroup(field,destination)
      local entries=mutations[field]
@@ -779,6 +786,57 @@ local function SetupQuickSellFilter()
   end)
  end
  connect(refreshButton.Activated,loadCatalog)
+ local function readAccessoryState()
+  local states,worn={},{}
+  local character=player.Character
+  if character then
+   for _,object in ipairs(character:GetDescendants()) do
+    if object:IsA('Accessory') then
+     for _,key in ipairs({'UUID','Guid','GUID'}) do
+      local id=object:GetAttribute(key);if id then states[tostring(id)]=true end
+     end
+     for _,key in ipairs({'ItemId','ItemID'}) do
+      local id=object:GetAttribute(key);if id then worn[tostring(id)]=true end
+     end
+    end
+   end
+  end
+  local ok,full=pcall(function()
+   return game:GetService('ReplicatedStorage').Events.Inventory.GetPlayerInventory:InvokeServer()
+  end)
+  if ok and type(full)=='table' then
+   local visited={}
+   local function flag(entry)
+    local explicitFalse=false
+    for _,key in ipairs({'Equipped','equipped','IsEquipped','isEquipped','Wearing','wearing','Worn','worn','IsWorn','isWorn','IsWearing','isWearing'}) do
+     local value=entry[key]
+     if value==true or value==1 or value=='true' or value=='equipped' or value=='worn' or value=='wearing' then return true end
+     if value==false or value==0 or value=='false' then explicitFalse=true end
+    end
+    local slot=entry.EquippedSlot or entry.equippedSlot or entry.WearSlot or entry.wearSlot
+    if slot~=nil and tostring(slot)~='' and tostring(slot)~='0' then return true end
+    if explicitFalse then return false end
+    return nil
+   end
+   local function scan(entry,depth)
+    if type(entry)~='table' or visited[entry] or depth>12 then return end
+    visited[entry]=true
+    for key,value in pairs(entry) do
+     if type(value)=='table' then
+      local id=value.UUID or value.Guid or value.GUID or value.UniqueId
+      if not id and type(key)=='string' and #key==36 and key:find('-',1,true) then id=key end
+      local state=flag(value)
+      if id and state~=nil then
+       id=tostring(id);if state or states[id]~=true then states[id]=state end
+      end
+      scan(value,depth+1)
+     end
+    end
+   end
+   scan(full,0)
+  end
+  return states,worn
+ end
  local reading=false
  connect(inventoryButton.Activated,function()
   if reading then return end
@@ -790,7 +848,11 @@ local function SetupQuickSellFilter()
     return RS.Events.Pawn.GetSellableItems:InvokeServer()
    end)
    if gui.Parent then
-    if ok and type(data)=='table' then inventory=data;pageNumber=1;refreshPreview()
+    if ok and type(data)=='table' then
+     local states,worn=readAccessoryState()
+     if not gui.Parent then return end
+     settings.AccessoryState=states;settings.WornItems=worn
+     inventory=data;pageNumber=1;refreshPreview()
     else notify('Inventory read failed: '..tostring(data)) end
     inventoryButton.Text='Read inventory'
    end
@@ -799,12 +861,11 @@ local function SetupQuickSellFilter()
  end)
  loadCatalog()
 end
-SetupQuickSellFilter()
+SetupInventoryFilter(quickSell,'Quick Sell')
+SetupInventoryFilter(grading,'Grading')
 
 end
-local grading=page('Grading','05')
-section(grading,'GRADING')
-row(grading,'Grading controls','Ready for your grading controls and filters.')
+
 local event=page('Event','06')
 section(event,'EVENT')
 row(event,'Event controls','Ready for your event features to be added.')
@@ -917,7 +978,7 @@ local function reflow()
    r.Size=UDim2.new(1,0,0,compact and bottom+34 or math.max(66,bottom))
   else r.Size=UDim2.new(1,0,0,math.max(66,bottom)) end
  end
- footer.Text=narrow and '  AMETHYST 2.7 / TEST GUI' or '  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED'
+ footer.Text=narrow and '  AMETHYST 2.8 / TEST GUI' or '  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED'
  for _,hook in ipairs(resizeHooks) do hook(width) end
  updateNavScroll()
  reflowing=false
