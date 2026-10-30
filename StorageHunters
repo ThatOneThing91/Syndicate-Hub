@@ -45,6 +45,17 @@ if not (function()
             savedKey = normalizeKey(record.key)
         end
     end
+
+    local verifiedSession = environment.__SyndicateKeySessionVerified
+    if type(verifiedSession) == "table" and tostring(verifiedSession.userId) == userId then
+        local verifiedKey = normalizeKey(verifiedSession.key)
+        if verifiedKey then
+            environment.__SyndicateKeySessionVerified = nil
+            memory[userId] = verifiedKey
+            return true
+        end
+    end
+
     local function rememberKey(key)
         memory[userId] = key
         if type(writefile) == "\102\117\110\099\116\105\111\110" then
