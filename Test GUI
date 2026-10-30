@@ -1,4 +1,4 @@
--- AMETHYST / PIXEL UI 1.1
+-- AMETHYST / PIXEL UI 1.2
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
@@ -14,7 +14,7 @@ local connections, themes, surfaces, rows, tabs = {}, {}, {}, {}, {}
 local accent = Color3.fromRGB(176, 119, 255)
 local ink = Color3.fromRGB(239, 233, 255)
 local muted = Color3.fromRGB(157, 146, 179)
-local opacity, active, notifications = 0.18, 'Overview', true
+local opacity, active, notifications = 0.18, 'Account', true
 local animatedSky, showStars = true, true
 local toggleDraws = {}
 local function connect(event, fn)
@@ -61,11 +61,49 @@ local skyGradient=make('UIGradient',{
  ColorSequenceKeypoint.new(0.5,Color3.fromRGB(47,25,69)),
  ColorSequenceKeypoint.new(1,Color3.fromRGB(15,19,38))}),Rotation=25},root)
 local sky=frame(root,{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,ClipsDescendants=true,ZIndex=1})
+-- Three translucent aurora layers create depth without external textures.
+local nebulae={}
+for i=1,3 do
+ local cloud=frame(sky,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.2+i*0.17,0.2+i*0.15),
+  Size=UDim2.fromScale(1.3,0.36+i*0.06),BackgroundColor3=accent,BackgroundTransparency=0.82+i*0.025,Rotation=-28+i*14})
+ make('UICorner',{CornerRadius=UDim.new(0.5,0)},cloud)
+ make('UIGradient',{Rotation=90,Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),
+  NumberSequenceKeypoint.new(0.3,0.55),NumberSequenceKeypoint.new(0.5,0.2),
+  NumberSequenceKeypoint.new(0.7,0.55),NumberSequenceKeypoint.new(1,1)})},cloud)
+ table.insert(nebulae,cloud)
+end
+local starLayer=frame(sky,{Size=UDim2.fromScale(1,1),BackgroundTransparency=1})
+-- Faint constellation fragments complement the small drifting stars.
+local points={{0.12,0.23},{0.21,0.16},{0.31,0.28},{0.42,0.19},{0.67,0.72},{0.79,0.64},{0.88,0.78}}
+local links={}
+for i,point in ipairs(points) do
+ local dot=frame(starLayer,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(point[1],point[2]),
+  Size=UDim2.fromOffset(3,3),BackgroundColor3=ink,BackgroundTransparency=0.3})
+ if i~=1 and i~=5 then
+  local line=frame(starLayer,{AnchorPoint=Vector2.new(0,0.5),BackgroundColor3=accent,BackgroundTransparency=0.88})
+  table.insert(links,{object=line,a=points[i-1],b=point})
+ end
+end
+local function layoutConstellations()
+ local size=starLayer.AbsoluteSize
+ for _,link in ipairs(links) do
+  local a=Vector2.new(link.a[1]*size.X,link.a[2]*size.Y)
+  local b=Vector2.new(link.b[1]*size.X,link.b[2]*size.Y)
+  local delta=b-a
+  link.object.Position=UDim2.fromOffset(a.X,a.Y)
+  link.object.Size=UDim2.fromOffset(delta.Magnitude,1)
+  link.object.Rotation=math.deg(math.atan2(delta.Y,delta.X))
+ end
+end
+connect(starLayer:GetPropertyChangedSignal('AbsoluteSize'),layoutConstellations)
+layoutConstellations()
+local meteor=frame(starLayer,{Size=UDim2.fromOffset(75,2),BackgroundColor3=ink,Rotation=24,Visible=false})
+make('UIGradient',{Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(1,0.12)})},meteor)
 local random=Random.new(91)
 local stars={}
 for i=1,42 do
  local size=i%9==0 and 3 or (i%3==0 and 2 or 1)
- local star=frame(sky,{Size=UDim2.fromOffset(size,size),
+ local star=frame(starLayer,{Size=UDim2.fromOffset(size,size),
   Position=UDim2.fromScale(random:NextNumber(),random:NextNumber()),
   BackgroundColor3=Color3.fromRGB(211,191,255),BackgroundTransparency=0.6})
  table.insert(stars,{object=star,x=random:NextNumber(),y=random:NextNumber(),
@@ -77,6 +115,13 @@ connect(RunService.Heartbeat,function(dt)
  accumulator=accumulator+dt
  if accumulator<0.05 then return end
  elapsed=elapsed+accumulator; accumulator=0
+ for i,cloud in ipairs(nebulae) do
+  cloud.Position=UDim2.fromScale(0.2+i*0.17+math.sin(elapsed*0.075+i)*0.12,0.2+i*0.15+math.cos(elapsed*0.065+i)*0.09)
+  cloud.Rotation=-28+i*14+math.sin(elapsed*0.04+i)*12
+ end
+ local meteorPhase=elapsed%11
+ meteor.Visible=showStars and meteorPhase<1.15
+ if meteor.Visible then meteor.Position=UDim2.fromScale(-0.16+meteorPhase*1.05,0.08+meteorPhase*0.48) end
  skyGradient.Rotation=25+math.sin(elapsed*0.09)*22
  skyGradient.Offset=Vector2.new(math.sin(elapsed*0.07)*0.17,math.cos(elapsed*0.06)*0.12)
  if showStars then
@@ -94,7 +139,7 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  1.1',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  1.2',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 local sidebar=frame(root,{Position=UDim2.fromOffset(0,56),Size=UDim2.new(0,136,1,-84),BackgroundColor3=Color3.fromRGB(22,16,34),BackgroundTransparency=0.25})
@@ -102,12 +147,47 @@ local nav=make('ScrollingFrame',{Position=UDim2.fromOffset(8,30),Size=UDim2.new(
 make('UIListLayout',{Padding=UDim.new(0,3)},nav)
 label(sidebar,'NAVIGATION',{Position=UDim2.fromOffset(16,10),Size=UDim2.fromOffset(110,14),TextColor3=muted,TextSize=10})
 local body=frame(root,{Position=UDim2.fromOffset(152,72),Size=UDim2.new(1,-168,1,-112),BackgroundTransparency=1})
-local title=label(body,'Overview',{Size=UDim2.new(1,-185,0,26),TextSize=22})
+local title=label(body,'Account',{Size=UDim2.new(1,-185,0,26),TextSize=22})
 local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffset(0,31),Size=UDim2.new(1,0,0,16),TextSize=10,TextColor3=muted})
 local search=make('TextBox',{Position=UDim2.new(1,-177,0,0),Size=UDim2.fromOffset(177,28),BackgroundColor3=Color3.fromRGB(39,29,55),BackgroundTransparency=0.15,BorderSizePixel=0,Text='',PlaceholderText='Search this tab...',PlaceholderColor3=muted,TextColor3=ink,Font=Enum.Font.Code,TextSize=12,ClearTextOnFocus=false},body)
 local footer=label(root,'  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted})
 local grip=button(root,'//',{Position=UDim2.new(1,-27,1,-27),Size=UDim2.fromOffset(26,26),BackgroundTransparency=1,TextColor3=muted})
-local restore=button(gui,'A / OPEN',{Position=UDim2.fromOffset(18,90),Size=UDim2.fromOffset(100,36),Visible=false})
+local restore=button(gui,'♥',{Position=UDim2.fromOffset(18,90),Size=UDim2.fromOffset(48,48),Visible=false,
+ BackgroundColor3=Color3.fromRGB(29,18,44),BackgroundTransparency=0.12,TextSize=27,Font=Enum.Font.Gotham,TextColor3=accent})
+make('UICorner',{CornerRadius=UDim.new(1,0)},restore)
+local restoreRing=tint(make('UIStroke',{Thickness=1.5,Transparency=0.15},restore),'Color')
+tint(restore,'TextColor3')
+make('UIGradient',{Color=ColorSequence.new(Color3.fromRGB(255,255,255),Color3.fromRGB(109,78,151)),Rotation=65},restore)
+local iconGesture, suppressIconUntil = nil, 0
+local function fitIcon()
+ local camera=workspace.CurrentCamera; if not camera then return end
+ local inset=GuiService:GetGuiInset()
+ local size=camera.ViewportSize-Vector2.new(0,inset.Y)
+ restore.Position=UDim2.fromOffset(math.clamp(restore.Position.X.Offset,4,math.max(4,size.X-52)),
+  math.clamp(restore.Position.Y.Offset,4,math.max(4,size.Y-52)))
+end
+connect(restore.InputBegan,function(i)
+ if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+  iconGesture={input=i,start=i.Position,position=restore.Position,dragged=false}
+ end
+end)
+connect(Input.InputChanged,function(i)
+ local g=iconGesture
+ if not g or not (i==g.input or i.UserInputType==Enum.UserInputType.MouseMovement and g.input.UserInputType==Enum.UserInputType.MouseButton1) then return end
+ local delta=i.Position-g.start
+ if delta.Magnitude>6 then g.dragged=true end
+ if g.dragged then
+  suppressIconUntil=os.clock()+0.3
+  restore.Position=UDim2.fromOffset(g.position.X.Offset+delta.X,g.position.Y.Offset+delta.Y)
+  fitIcon()
+ end
+end)
+connect(Input.InputEnded,function(i)
+ if iconGesture and i==iconGesture.input then
+  if iconGesture.dragged then suppressIconUntil=os.clock()+0.3 end
+  iconGesture=nil
+ end
+end)
 local toast=label(gui,'',{AnchorPoint=Vector2.new(1,1),Position=UDim2.new(1,-18,1,-18),Size=UDim2.fromOffset(300,48),BackgroundColor3=Color3.fromRGB(40,25,60),BackgroundTransparency=0.08,TextXAlignment=Enum.TextXAlignment.Center,TextWrapped=true,Visible=false})
 local toastVersion=0
 local function notify(message)
@@ -143,7 +223,7 @@ local function section(p,text)
 end
 local function row(p,name,desc,height)
  order=order+1
- local r=frame(p,{Size=UDim2.new(1,0,0,height or 66),BackgroundColor3=Color3.fromRGB(36,26,50),BackgroundTransparency=opacity,LayoutOrder=order})
+ local r=frame(p,{Size=UDim2.new(1,0,0,height or 66),BackgroundColor3=Color3.fromRGB(36,26,50),BackgroundTransparency=math.min(0.85,opacity+0.2),LayoutOrder=order})
  table.insert(surfaces,r)
  label(r,name,{Position=UDim2.fromOffset(14,12),Size=UDim2.new(1,-140,0,18),TextSize=14})
  label(r,desc,{Position=UDim2.fromOffset(14,34),Size=UDim2.new(1,-140,0,24),TextColor3=muted,TextSize=11,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
@@ -199,14 +279,46 @@ local function cycle(p,name,desc,options,callback)
   index=index%#options+1; b.Text=options[index]..' >'; if callback then callback(options[index]) end
  end)
 end
-local home=page('Overview','01')
-section(home,'WELCOME / AMETHYST 1.1')
-local hero=row(home,'A little glass. A little pixel.','A separate canvas for your next interface.',100)
-label(hero,'6 TABS    /    PIXEL SKY    /    AMETHYST 1.1',{Position=UDim2.fromOffset(14,72),Size=UDim2.new(1,-22,0,15),TextColor3=accent,TextSize=11})
-section(home,'QUICK ACCESS')
-action(home,'Appearance','Tune transparency and accent color.','OPEN',function() choose('Appearance') end)
-action(home,'Control gallery','Try switches, sliders, and selectors.','EXPLORE',function() choose('Controls') end)
-action(home,'Notification preview','Preview the compact toast style.','PREVIEW',function() notify('AMETHYST / Everything in its place.') end)
+local home=page('Account','01')
+section(home,'YOUR ROBLOX ACCOUNT')
+order=order+1
+local account=frame(home,{Size=UDim2.new(1,0,0,128),BackgroundColor3=Color3.fromRGB(36,26,50),BackgroundTransparency=0.38,LayoutOrder=order})
+table.insert(surfaces,account)
+table.insert(rows.Account,{frame=account,text=('account '..player.Name..' '..player.DisplayName):lower()})
+local avatar=make('ImageLabel',{Position=UDim2.fromOffset(16,18),Size=UDim2.fromOffset(88,88),
+ BackgroundColor3=Color3.fromRGB(26,19,39),BackgroundTransparency=0.25,BorderSizePixel=0,Image=''},account)
+make('UICorner',{CornerRadius=UDim.new(0,8)},avatar)
+tint(make('UIStroke',{Thickness=1,Transparency=0.35},avatar),'Color')
+label(account,player.DisplayName,{Position=UDim2.fromOffset(120,22),Size=UDim2.new(1,-134,0,28),TextSize=22,TextTruncate=Enum.TextTruncate.AtEnd})
+label(account,'@'..player.Name,{Position=UDim2.fromOffset(120,56),Size=UDim2.new(1,-134,0,20),TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
+tint(label(account,'●  CONNECTED',{Position=UDim2.fromOffset(120,87),Size=UDim2.new(1,-134,0,16),TextSize=11}),'TextColor3')
+task.spawn(function()
+ for attempt=1,3 do
+  if not gui.Parent then return end
+  local ok,image,ready=pcall(function()
+   return Players:GetUserThumbnailAsync(player.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size180x180)
+  end)
+  if ok and gui.Parent then avatar.Image=image end
+  if ok and ready then return end
+  task.wait(1)
+ end
+end)
+section(home,'ACCOUNT DETAILS')
+row(home,'Roblox user ID',tostring(player.UserId))
+row(home,'Account age',tostring(player.AccountAge)..' days')
+local session=row(home,'Current session','Time since opening this interface.')
+local sessionValue=tint(label(session,'00:00:00',{Position=UDim2.new(1,-112,0,22),Size=UDim2.fromOffset(96,22),TextXAlignment=Enum.TextXAlignment.Right}),'TextColor3')
+local sessionStart=os.clock()
+local lastSessionSecond=-1
+connect(RunService.Heartbeat,function()
+ if not root.Visible or active~='Account' then return end
+ local seconds=math.floor(os.clock()-sessionStart)
+ if seconds==lastSessionSecond then return end
+ lastSessionSecond=seconds
+ sessionValue.Text=string.format('%02d:%02d:%02d',math.floor(seconds/3600),math.floor(seconds/60)%60,seconds%60)
+end)
+section(home,'PERSONALIZE YOUR SPACE')
+action(home,'Appearance','Adjust colors, transparency, and the animated sky.','OPEN',function() choose('Appearance') end)
 local controls=page('Controls','02')
 section(controls,'CONTROL GALLERY / DEMO STATE ONLY')
 toggle(controls,'Primary switch','A crisp, square toggle with touch support.',true,function(v) notify('Primary switch: '..(v and 'ON' or 'OFF')) end)
@@ -223,13 +335,15 @@ local appearance=page('Appearance','05')
 section(appearance,'MAKE IT YOURS / LIVE CONTROLS')
 slider(appearance,'Transparency','Higher values reveal more of the world.',0,65,18,function(v)
  opacity=v/100; root.BackgroundTransparency=opacity
- for _,s in ipairs(surfaces) do s.BackgroundTransparency=opacity end
+ for _,s in ipairs(surfaces) do s.BackgroundTransparency=math.min(0.85,opacity+0.2) end
 end)
 local function applyAccent(color)
  accent=color
  for _,t in ipairs(themes) do t[1][t[2]]=accent end
  for _,t in pairs(tabs) do t.page.ScrollBarImageColor3=accent end
  for _,draw in ipairs(toggleDraws) do draw() end
+ for _,cloud in ipairs(nebulae) do cloud.BackgroundColor3=accent end
+ for _,link in ipairs(links) do link.object.BackgroundColor3=accent end
  for _,star in ipairs(stars) do star.object.BackgroundColor3=ink:Lerp(accent,0.4) end
  skyGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(12,11,25)),
   ColorSequenceKeypoint.new(0.5,Color3.fromRGB(14,12,22):Lerp(accent,0.23)),
@@ -249,8 +363,8 @@ for index,c in ipairs(colors) do
  make('UIStroke',{Color=color,Thickness=1,Transparency=0.5},swatch)
  connect(swatch.Activated,function() applyAccent(color) end)
 end
-toggle(appearance,'Animated sky','Slow color movement and twinkling pixel stars.',true,function(v) animatedSky=v end)
-toggle(appearance,'Pixel stars','Show or hide the star field independently.',true,function(v) showStars=v; sky.Visible=v end)
+toggle(appearance,'Animated sky','Aurora layers, drifting stars, and shooting stars.',true,function(v) animatedSky=v end)
+toggle(appearance,'Pixel stars','Show or hide the star field independently.',true,function(v) showStars=v; starLayer.Visible=v end)
 local status=page('Activity','06')
 section(status,'INTERFACE STATUS')
 row(status,'Standalone mode','No hub files or game systems connected.')
@@ -260,7 +374,7 @@ action(status,'Test toast','Check notification placement and readability.','TEST
 local settings=page('Settings','07')
 section(settings,'WINDOW & PREFERENCES')
 toggle(settings,'Notifications','Show interface toast messages.',true,function(v) notifications=v; if not v then toast.Visible=false end end)
-action(settings,'Minimize window','Restore with the floating A / OPEN button.','HIDE',function() root.Visible=false; restore.Visible=true end)
+action(settings,'Minimize window','Tap the floating heart to reopen; drag to move it.','HIDE',function() root.Visible=false; restore.Visible=true end)
 action(settings,'Reset position','Return the window to its initial position.','RESET',function() root.Position=UDim2.fromOffset(30,35) end)
 action(settings,'Close interface','Destroys this standalone interface.','CLOSE',function() gui:Destroy() end)
 connect(search:GetPropertyChangedSignal('Text'),function()
@@ -301,24 +415,27 @@ connect(Input.InputEnded,function(i)
  if gesture and i==gesture.input then gesture=nil end
  if dragSlider and i==dragSlider.input then dragSlider=nil end
 end)
-local function hide() root.Visible=false; restore.Visible=true end
+local function hide() root.Visible=false; restore.Visible=true; fitIcon() end
 connect(minimize.Activated,hide)
-connect(restore.Activated,function() restore.Visible=false; root.Visible=true; fit() end)
+connect(restore.Activated,function()
+ if os.clock()<suppressIconUntil or iconGesture and iconGesture.dragged then return end
+ restore.Visible=false; root.Visible=true; fit()
+end)
 connect(close.Activated,function() gui:Destroy() end)
 connect(Input.InputBegan,function(i,processed)
  if not processed and i.KeyCode==Enum.KeyCode.RightShift then
-  root.Visible=not root.Visible; restore.Visible=not root.Visible
+  root.Visible=not root.Visible; restore.Visible=not root.Visible; fitIcon()
  end
 end)
 local cameraConnection
 local function watchCamera()
  if cameraConnection then cameraConnection:Disconnect() end
  local camera=workspace.CurrentCamera
- if camera then cameraConnection=connect(camera:GetPropertyChangedSignal('ViewportSize'),fit) end
+ if camera then cameraConnection=connect(camera:GetPropertyChangedSignal('ViewportSize'),function() fit(); fitIcon() end) end
  fit()
 end
 connect(workspace:GetPropertyChangedSignal('CurrentCamera'),watchCamera)
 for _,child in ipairs(root:GetChildren()) do
  if child:IsA('GuiObject') and child~=sky then child.ZIndex=2 end
 end
-choose('Overview'); watchCamera()
+choose('Account'); watchCamera(); fitIcon()
