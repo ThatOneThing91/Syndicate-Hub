@@ -1,4 +1,4 @@
--- AMETHYST / PIXEL UI 2.5
+-- AMETHYST / PIXEL UI 2.6
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
@@ -173,7 +173,7 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  2.5',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  2.6',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 -- Slim vertical text navigation, with the original stacked layout.
@@ -236,22 +236,21 @@ local function drawNavIcon(host,name)
  if name=='Account' then
   outline(7,2,8,8,4); outline(3,13,16,7,3)
  elseif name=='Farming' then
-  -- Two gently curved leaves on one stem.
-  local function curve(x0,y0,x1,y1,x2,y2,x3,y3)
-   local px,py=x0,y0
-   for i=1,8 do
-    local t=i/8; local u=1-t
-    local x=u*u*u*x0+3*u*u*t*x1+3*u*t*t*x2+t*t*t*x3
-    local y=u*u*u*y0+3*u*u*t*y1+3*u*t*t*y2+t*t*t*y3
-    line(px,py,x,y); px,py=x,y
-   end
+  -- A full wheat head: three paired grains, a crown, and a curved stalk.
+  local function grain(cx,cy,angle,w,h)
+   local shape=frame(host,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromOffset(cx,cy),
+    Size=UDim2.fromOffset(w,h),Rotation=angle,BackgroundTransparency=1})
+   make('UICorner',{CornerRadius=UDim.new(0.5,0)},shape)
+   local stroke=make('UIStroke',{Color=muted,Thickness=1.2,ApplyStrokeMode=Enum.ApplyStrokeMode.Border},shape)
+   table.insert(parts,{object=stroke,stroke=true})
   end
-  curve(10.5,12,5,13,2,10,3,5)
-  curve(3,5,9,4,11,7,10.5,12)
-  curve(11,10,10,5,14,2,19,3)
-  curve(19,3,20,8,16,11,11,10)
-  curve(10.5,19,10.7,14,10.3,10,14.5,7)
-  line(7.5,20,14,20)
+  -- Staggered grains leave separation at the small navigation size.
+  grain(7.3,6.2,38,6,3.2); grain(14.4,5.8,-42,6,3.2)
+  grain(6.5,10.5,38,6,3.2); grain(13.6,10.1,-42,6,3.2)
+  grain(5.7,14.8,38,6,3.2); grain(12.8,14.4,-42,6,3.2)
+  grain(11.7,2.6,-78,4.2,2.8)
+  line(11.4,5,10.6,9); line(10.6,9,9.8,13)
+  line(9.8,13,8.8,17); line(8.8,17,7.3,20.5)
  elseif name=='Shop' then
   outline(3,7,16,13,2); outline(7,2,8,8,3)
  elseif name=='Quick Sell' then
@@ -633,7 +632,7 @@ local function reflow()
    r.Size=UDim2.new(1,0,0,compact and bottom+34 or math.max(66,bottom))
   else r.Size=UDim2.new(1,0,0,math.max(66,bottom)) end
  end
- footer.Text=narrow and '  AMETHYST 2.5 / TEST GUI' or '  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED'
+ footer.Text=narrow and '  AMETHYST 2.6 / TEST GUI' or '  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED'
  updateNavScroll()
  reflowing=false
 end
