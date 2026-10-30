@@ -1,6 +1,6 @@
 -- SYNDICATE HUB / STORAGE HUNTERS UI
 -- Syndicate Hub interface for Storage Hunters.
-local HUB_VERSION='3.2'
+local HUB_VERSION='3.3'
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
@@ -395,11 +395,11 @@ local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffse
 local search=make('TextBox',{Position=UDim2.new(1,-177,0,0),Size=UDim2.fromOffset(177,28),BackgroundColor3=Color3.fromRGB(39,29,55),BackgroundTransparency=0.15,BorderSizePixel=0,Text='',PlaceholderText='Search this tab...',PlaceholderColor3=muted,TextColor3=ink,Font=Enum.Font.Code,TextSize=12,ClearTextOnFocus=false},body)
 local footer=label(root,'  [ SYNDICATE HUB ]  /  STORAGE HUNTERS',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
 local grip=button(root,'//',{Position=UDim2.new(1,-27,1,-27),Size=UDim2.fromOffset(26,26),BackgroundTransparency=1,TextColor3=muted})
-local restore=button(gui,'♥',{Position=UDim2.new(0.5,-24,0,14),Size=UDim2.fromOffset(48,48),Visible=false,
- BackgroundColor3=Color3.fromRGB(18,14,24),BackgroundTransparency=0.22,Font=Enum.Font.GothamMedium,
- TextSize=24,TextColor3=Color3.fromRGB(255,255,255),ZIndex=245,AutoButtonColor=false})
-make('UICorner',{CornerRadius=UDim.new(0,12)},restore)
-local restoreRing=tint(make('UIStroke',{Thickness=1.2,Transparency=0.35},restore),'Color')
+local restore=button(gui,'♥',{Position=UDim2.new(0.5,-21,0,14),Size=UDim2.fromOffset(42,42),Visible=false,
+ BackgroundColor3=Color3.fromRGB(18,14,24),BackgroundTransparency=0.18,Font=Enum.Font.GothamMedium,
+ TextSize=25,TextColor3=Color3.fromRGB(255,255,255),ZIndex=245,AutoButtonColor=false})
+make('UICorner',{CornerRadius=UDim.new(1,0)},restore)
+local restoreRing=tint(make('UIStroke',{Thickness=1.2,Transparency=0.3},restore),'Color')
 local iconGesture, suppressIconUntil = nil, 0
 connect(restore.InputBegan,function(i)
  if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
@@ -1749,7 +1749,7 @@ section(settings,'WINDOW & PREFERENCES')
 toggle(settings,'Notifications','Show interface toast messages.',true,function(v) notifications=v; if not v then toast.Visible=false end end)
 action(settings,'Discord Server','Copies the Syndicate Hub Discord invite to your clipboard.','COPY',function()
  local copy=type(setclipboard)=='function' and setclipboard or type(toclipboard)=='function' and toclipboard
- local invite='https://discord.gg/6K2qGPpuEH'
+ local invite='https://discord.gg/ng3d3zY5W9'
  if not copy then notify(invite);return end
  local ok=pcall(copy,invite)
  notify(ok and 'Discord invite copied.' or invite)
