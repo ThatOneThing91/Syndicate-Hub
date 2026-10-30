@@ -7651,7 +7651,10 @@ local function IsVehicleFull()
             if HubDestroyed or RunIds.Farming ~= runId then return end
             local full = false
             if ok and type(result) == "\116\097\098\108\101" then
-                local items = result.Items or result.items or result.Inventory or result
+                full = result.Full == true or result.full == true
+                    or result.IsFull == true or result.isFull == true
+                    or result.InventoryFull == true or result.inventoryFull == true
+                local items = result.Items or result.items or result.Inventory or result.inventory or result
                 local count = 0
                 if type(items) == "\116\097\098\108\101" then
                     for _ in pairs(items) do count += 1 end
@@ -7659,7 +7662,18 @@ local function IsVehicleFull()
                 local capacity = tonumber(vehicle:GetAttribute("\067\097\114\103\111\067\097\112\097\099\105\116\121"))
                     or tonumber(vehicle:GetAttribute("\073\116\101\109\067\097\112\097\099\105\116\121"))
                     or tonumber(vehicle:GetAttribute("\083\116\111\114\097\103\101\067\097\112\097\099\105\116\121"))
-                full = capacity ~= nil and capacity > 0 and count >= capacity
+                    or tonumber(result.Capacity) or tonumber(result.capacity)
+                    or tonumber(result.MaxItems) or tonumber(result.maxItems)
+                    or tonumber(result.ItemCapacity) or tonumber(result.itemCapacity)
+                    or tonumber(result.StorageCapacity) or tonumber(result.storageCapacity)
+                if not full and capacity ~= nil and capacity > 0 then
+                    full = count >= capacity
+                end
+                local resultWeight = tonumber(result.CargoWeight or result.cargoWeight or result.Weight or result.weight)
+                local resultLimit = tonumber(result.CargoWeightLimit or result.cargoWeightLimit or result.WeightLimit or result.weightLimit)
+                if not full and resultWeight and resultLimit and resultLimit > 0 then
+                    full = resultWeight >= resultLimit
+                end
             end
             ThisHubInstance.FarmCapacityCache = {vehicle = vehicle, at = os.clock(), full = full}
         end)
