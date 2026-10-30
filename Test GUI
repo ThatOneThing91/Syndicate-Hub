@@ -1,6 +1,6 @@
 -- SYNDICATE HUB / STORAGE HUNTERS UI
 -- Syndicate Hub interface for Storage Hunters.
-local HUB_VERSION='3.3'
+local HUB_VERSION='3.4'
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
