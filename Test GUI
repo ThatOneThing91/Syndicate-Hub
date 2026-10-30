@@ -1,6 +1,6 @@
 -- SYNDICATE HUB / STORAGE HUNTERS UI
 -- Syndicate Hub interface for Storage Hunters.
-local HUB_VERSION='3.6'
+local HUB_VERSION='3.7'
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
@@ -17,7 +17,7 @@ local backendEnv=getgenv and getgenv() or _G
 local KeySession
 do
  local ok,result=pcall(function()
-  local source=game:HttpGet('https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/KeyGate.lua?v='..tostring(os.time()))
+  local source=game:HttpGet('https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/auth/KeyGate.lua?v='..tostring(os.time()))
   local chunk,compileError=loadstring(source)
   assert(chunk,compileError or 'Syndicate Hub key gate failed to compile')
   return chunk()
