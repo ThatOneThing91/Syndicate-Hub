@@ -1,4 +1,4 @@
--- AMETHYST / PIXEL UI 1.7
+-- AMETHYST / PIXEL UI 1.8
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
@@ -18,7 +18,7 @@ local muted = Color3.fromRGB(157, 146, 179)
 local opacity, active, notifications = 0.18, 'Account', true
 local animatedSky, showStars = true, true
 local toggleDraws = {}
-local skyIntensity=78
+local skyIntensity=30
 local function connect(event, fn)
  local c = event:Connect(fn); table.insert(connections, c); return c
 end
@@ -65,7 +65,7 @@ local skyGradient=make('UIGradient',{
 local sky=frame(root,{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,ClipsDescendants=true,ZIndex=1})
 -- Bright aurora ribbons and layered nebula halos fill the background.
 local nebulae={}
-for i=1,7 do
+for i=1,4 do
  local cloud=frame(sky,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.2+i*0.17,0.2+i*0.15),
   Size=UDim2.fromScale(1.45,0.18+i*0.035),BackgroundColor3=accent:Lerp(Color3.fromRGB(80,145,245),i/12),BackgroundTransparency=0.24+i*0.035,Rotation=-28+i*14})
  make('UICorner',{CornerRadius=UDim.new(0.5,0)},cloud)
@@ -74,44 +74,55 @@ for i=1,7 do
   NumberSequenceKeypoint.new(0.7,0.55),NumberSequenceKeypoint.new(1,1)})},cloud)
  table.insert(nebulae,cloud)
 end
--- Overlapping concentric halos give the nebula a luminous, soft core.
-local nebulaGlows={}
-for i,p in ipairs({{0.30,0.73,0.88,0.9},{0.65,0.42,0.85,0.8},{0.92,0.18,0.72,0.85}}) do
- local glow=frame(sky,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(p[1],p[2]),
-  Size=UDim2.fromScale(p[3],p[4]),BackgroundTransparency=1})
- local layers={}
- for ring=14,1,-1 do
-  local fraction=ring/14
-  local layer=frame(glow,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),
-   Size=UDim2.fromScale(fraction,fraction),BackgroundColor3=accent,BackgroundTransparency=0.94})
-  make('UICorner',{CornerRadius=UDim.new(1,0)},layer)
-  table.insert(layers,layer)
+-- Fine etched contours add structure instead of luminous blobs.
+local contours={}
+for band=1,5 do
+ for segment=1,22 do
+  if segment%7~=0 then
+   local x=(segment-1)/22
+   local x2=segment/22
+   local y=0.42+band*0.065+math.sin(x*5.8+band*0.16)*0.13
+   local y2=0.42+band*0.065+math.sin(x2*5.8+band*0.16)*0.13
+   local line=tint(frame(sky,{AnchorPoint=Vector2.new(0,0.5),BackgroundTransparency=0.88}),'BackgroundColor3')
+   table.insert(contours,{object=line,a=Vector2.new(x,y),b=Vector2.new(x2,y2)})
+  end
  end
- table.insert(nebulaGlows,{object=glow,layers=layers,x=p[1],y=p[2]})
+end
+local function layoutContours()
+ local size=sky.AbsoluteSize
+ for _,c in ipairs(contours) do
+  local a=Vector2.new(c.a.X*size.X,c.a.Y*size.Y)
+  local b=Vector2.new(c.b.X*size.X,c.b.Y*size.Y)
+  local delta=b-a
+  c.object.Position=UDim2.fromOffset(a.X,a.Y)
+  c.object.Size=UDim2.fromOffset(delta.Magnitude,1)
+  c.object.Rotation=math.deg(math.atan2(delta.Y,delta.X))
+ end
+end
+connect(sky:GetPropertyChangedSignal('AbsoluteSize'),layoutContours)
+layoutContours()
+-- Sparse pixel texture breaks up the empty areas without raising the brightness.
+for y=1,9 do
+ for x=1,14 do
+  if (x+y)%3==0 then
+   tint(frame(sky,{Position=UDim2.fromScale(x/15,y/10),Size=UDim2.fromOffset(1,1),BackgroundTransparency=0.86}),'BackgroundColor3')
+  end
+ end
 end
 local function refreshSky()
  local strength=skyIntensity/100
- local violet=accent:Lerp(Color3.fromRGB(135,55,255),0.22)
- local blue=accent:Lerp(Color3.fromRGB(42,146,255),0.68)
- local pink=accent:Lerp(Color3.fromRGB(255,70,190),0.52)
- local dark=Color3.fromRGB(13,10,29)
+ local dark=Color3.fromRGB(13,11,23)
+ local blue=accent:Lerp(Color3.fromRGB(70,110,170),0.45)
  skyGradient.Color=ColorSequence.new({
-  ColorSequenceKeypoint.new(0,dark:Lerp(blue,0.3*strength)),
-  ColorSequenceKeypoint.new(0.27,dark:Lerp(violet,0.65*strength)),
-  ColorSequenceKeypoint.new(0.5,dark:Lerp(pink,0.52*strength)),
-  ColorSequenceKeypoint.new(0.74,dark:Lerp(blue,0.57*strength)),
-  ColorSequenceKeypoint.new(1,dark:Lerp(violet,0.24*strength))})
+  ColorSequenceKeypoint.new(0,dark),
+  ColorSequenceKeypoint.new(0.35,dark:Lerp(accent,0.07+strength*0.05)),
+  ColorSequenceKeypoint.new(0.65,dark:Lerp(blue,0.05+strength*0.05)),
+  ColorSequenceKeypoint.new(1,Color3.fromRGB(16,13,29))})
  for i,cloud in ipairs(nebulae) do
-  cloud.BackgroundColor3=i%2==0 and blue or pink:Lerp(violet,0.4)
-  cloud.BackgroundTransparency=math.clamp(0.8-strength*0.65+i*0.025,0.15,0.95)
+  cloud.BackgroundColor3=i%2==0 and blue or accent
+  cloud.BackgroundTransparency=0.96-strength*0.10+i*0.003
  end
- local glowColors={pink,violet,blue}
- for i,glow in ipairs(nebulaGlows) do
-  for _,layer in ipairs(glow.layers) do
-   layer.BackgroundColor3=glowColors[i]
-   layer.BackgroundTransparency=1-strength*0.095
-  end
- end
+ for _,c in ipairs(contours) do c.object.BackgroundTransparency=0.94-strength*0.20 end
 end
 refreshSky()
 local starLayer=frame(sky,{Size=UDim2.fromScale(1,1),BackgroundTransparency=1})
@@ -139,17 +150,17 @@ local function layoutConstellations()
 end
 connect(starLayer:GetPropertyChangedSignal('AbsoluteSize'),layoutConstellations)
 layoutConstellations()
-local meteor=frame(starLayer,{Size=UDim2.fromOffset(120,3),BackgroundColor3=ink,Rotation=24,Visible=false})
+local meteor=frame(starLayer,{Size=UDim2.fromOffset(75,1),BackgroundColor3=ink,Rotation=24,Visible=false})
 make('UIGradient',{Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(1,0.12)})},meteor)
--- A diagonal galaxy ribbon, luminous starbursts, and an orbital planet.
+-- A restrained diagonal star field and fine starbursts.
 local galaxyRandom=Random.new(151)
 local dust={}
-for i=1,108 do
+for i=1,60 do
  local x=galaxyRandom:NextNumber()
  local y=0.88-x*0.73+math.sin(x*7)*0.055+galaxyRandom:NextNumber(-0.095,0.095)
  local size=i%13==0 and 3 or 1
  local speck=tint(frame(starLayer,{Position=UDim2.fromScale(x,y),
-  Size=UDim2.fromOffset(size,size),BackgroundTransparency=galaxyRandom:NextNumber(0.12,0.55)}),'BackgroundColor3')
+  Size=UDim2.fromOffset(size,size),BackgroundTransparency=galaxyRandom:NextNumber(0.65,0.86)}),'BackgroundColor3')
  table.insert(dust,{object=speck,phase=galaxyRandom:NextNumber(0,6.28)})
 end
 local flares={}
@@ -161,34 +172,10 @@ for _,p in ipairs({{0.21,0.66},{0.56,0.43},{0.82,0.21},{0.91,0.71}}) do
   table.insert(flares,{object=ray,phase=p[1]*12})
  end
 end
--- Nested translucent circles supply a soft halo using native geometry.
-local planet=frame(sky,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.84,0.29),
- Size=UDim2.fromOffset(100,100),BackgroundTransparency=1})
-for i=9,1,-1 do
- local halo=tint(frame(planet,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),
-  Size=UDim2.fromOffset(100+i*8,100+i*8),BackgroundTransparency=0.96}),'BackgroundColor3')
- make('UICorner',{CornerRadius=UDim.new(1,0)},halo)
-end
-local sphere=frame(planet,{Size=UDim2.fromScale(1,1),BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=0.08})
-make('UICorner',{CornerRadius=UDim.new(1,0)},sphere)
-local planetGradient=make('UIGradient',{Rotation=35,Color=ColorSequence.new({
- ColorSequenceKeypoint.new(0,accent:Lerp(ink,0.35)),ColorSequenceKeypoint.new(0.45,accent:Lerp(Color3.fromRGB(35,24,60),0.4)),
- ColorSequenceKeypoint.new(1,Color3.fromRGB(13,12,26))})},sphere)
-local orbit=frame(planet,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),
- Size=UDim2.fromOffset(175,60),BackgroundTransparency=1})
-local orbitSegments={}
-for i=1,56 do
- local angle=(i-1)/56*math.pi*2
- local point=tint(frame(orbit,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5+math.cos(angle)*0.5,0.5+math.sin(angle)*0.5),
-  Size=UDim2.fromOffset(5,1),Rotation=math.deg(math.atan2(math.cos(angle)*30,-math.sin(angle)*87.5)),
-  BackgroundTransparency=0.45+0.25*(math.sin(angle)+1)/2}),'BackgroundColor3')
- table.insert(orbitSegments,point)
-end
-orbit.Rotation=-24
 local random=Random.new(91)
 local stars={}
 for i=1,42 do
- local size=i%9==0 and 4 or (i%3==0 and 2 or 1)
+ local size=i%9==0 and 3 or (i%3==0 and 2 or 1)
  local star=frame(starLayer,{Size=UDim2.fromOffset(size,size),
   Position=UDim2.fromScale(random:NextNumber(),random:NextNumber()),
   BackgroundColor3=Color3.fromRGB(211,191,255),BackgroundTransparency=0.6})
@@ -201,15 +188,9 @@ connect(RunService.Heartbeat,function(dt)
  accumulator=accumulator+dt
  if accumulator<0.05 then return end
  elapsed=elapsed+accumulator; accumulator=0
- for i,glow in ipairs(nebulaGlows) do
-  glow.object.Position=UDim2.fromScale(glow.x+math.sin(elapsed*0.06+i)*0.065,glow.y+math.cos(elapsed*0.08+i)*0.06)
- end
- planet.Position=UDim2.fromScale(0.84+math.sin(elapsed*0.055)*0.025,0.29+math.sin(elapsed*0.08)*0.025)
- orbit.Rotation=-24+math.sin(elapsed*0.07)*5
- planetGradient.Rotation=35+math.sin(elapsed*0.06)*18
  if showStars then
-  for _,d in ipairs(dust) do d.object.BackgroundTransparency=0.14+(math.sin(elapsed*0.45+d.phase)+1)*0.22 end
-  for _,f in ipairs(flares) do f.object.BackgroundTransparency=0.18+(math.sin(elapsed*0.8+f.phase)+1)*0.19 end
+  for _,d in ipairs(dust) do d.object.BackgroundTransparency=0.68+(math.sin(elapsed*0.45+d.phase)+1)*0.10 end
+  for _,f in ipairs(flares) do f.object.BackgroundTransparency=0.48+(math.sin(elapsed*0.8+f.phase)+1)*0.16 end
  end
  for i,cloud in ipairs(nebulae) do
   cloud.Position=UDim2.fromScale(0.2+i*0.17+math.sin(elapsed*0.075+i)*0.12,0.2+i*0.15+math.cos(elapsed*0.065+i)*0.09)
@@ -223,7 +204,7 @@ connect(RunService.Heartbeat,function(dt)
  if showStars then
   for _,star in ipairs(stars) do
    star.object.Position=UDim2.fromScale(star.x,(star.y-elapsed*star.speed)%1)
-   star.object.BackgroundTransparency=0.13+(math.sin(elapsed*0.7+star.phase)+1)*0.29
+   star.object.BackgroundTransparency=0.42+(math.sin(elapsed*0.7+star.phase)+1)*0.20
   end
  end
 end)
@@ -235,7 +216,7 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  1.7',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  1.8',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 -- Slim vertical text navigation, with the original stacked layout.
@@ -463,7 +444,7 @@ slider(appearance,'Transparency','Higher values reveal more of the world.',0,65,
  opacity=v/100; root.BackgroundTransparency=opacity
  for _,s in ipairs(surfaces) do s.BackgroundTransparency=math.min(0.85,opacity+0.2) end
 end)
-slider(appearance,'Galaxy intensity','Turn up the nebula colors and luminous clouds.',0,100,78,function(v)
+slider(appearance,'Detail intensity','Adjust the etched contours and subtle background wisps.',0,100,30,function(v)
  skyIntensity=v; refreshSky()
 end)
 local function applyAccent(color)
@@ -471,9 +452,6 @@ local function applyAccent(color)
  for _,t in ipairs(themes) do t[1][t[2]]=accent end
  for _,t in pairs(tabs) do t.page.ScrollBarImageColor3=accent end
  for _,draw in ipairs(toggleDraws) do draw() end
- planetGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,accent:Lerp(ink,0.35)),
-  ColorSequenceKeypoint.new(0.45,accent:Lerp(Color3.fromRGB(35,24,60),0.4)),
-  ColorSequenceKeypoint.new(1,Color3.fromRGB(13,12,26))})
  nav.ScrollBarImageColor3=accent
 
  for _,link in ipairs(links) do link.object.BackgroundColor3=accent end
@@ -494,7 +472,7 @@ for index,c in ipairs(colors) do
  make('UIStroke',{Color=color,Thickness=1,Transparency=0.5},swatch)
  connect(swatch.Activated,function() applyAccent(color) end)
 end
-toggle(appearance,'Animated sky','Nebula ribbons, an orbital planet, and shooting stars.',true,function(v) animatedSky=v end)
+toggle(appearance,'Animated sky','Subtle moving wisps, twinkling stars, and occasional meteors.',true,function(v) animatedSky=v end)
 toggle(appearance,'Pixel stars','Show or hide the star field independently.',true,function(v) showStars=v; starLayer.Visible=v end)
 local settings=page('Settings','07')
 section(settings,'WINDOW & PREFERENCES')
