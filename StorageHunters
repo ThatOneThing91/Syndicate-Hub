@@ -5409,6 +5409,7 @@ local function RunAutoUnfavoriteOnce()
     end)
 end
 
+ThisHubInstance.RunFavoriteToggle = RunAutoUnfavoriteOnce
 CreateActionButton(MainPage, "\070\097\118\111\114\105\116\101\032\084\111\103\103\108\101", function()
     RunAutoUnfavoriteOnce()
 end)
@@ -5501,7 +5502,7 @@ do
         end
     end
 
-    depositButton = CreateActionButton(MainPage, "\079\114\101\032\068\101\112\111\115\105\116", function()
+    local function RunOreDeposit()
         if HubDestroyed then return end
         if busy then
             cancelRequested = true
@@ -5619,7 +5620,9 @@ do
         if not ok and not HubDestroyed then
             Notify("\079\114\101\032\068\101\112\111\115\105\116", "\069\114\114\111\114\058\032" .. tostring(err), 5)
         end
-    end)
+    end
+    ThisHubInstance.RunOreDeposit = RunOreDeposit
+    depositButton = CreateActionButton(MainPage, "\079\114\101\032\068\101\112\111\115\105\116", RunOreDeposit)
 end
 
                                                                 
@@ -5658,15 +5661,16 @@ local function ScanInstantAuctionPrompts()
     return count
 end
 
-CreateActionButton(MainPage, "\073\110\115\116\097\110\116\032\065\117\099\116\105\111\110\032\069\110\116\114\121", function()
+local function RunInstantAuctionEntry()
     local count = ScanInstantAuctionPrompts()
-
     Notify(
         "\073\110\115\116\097\110\116\032\065\117\099\116\105\111\110\032\069\110\116\114\121",
         "\085\112\100\097\116\101\100\032" .. tostring(count) .. "\032\097\117\099\116\105\111\110\032\112\114\111\109\112\116\115\046",
         2
     )
-end)
+end
+ThisHubInstance.RunInstantAuctionEntry = RunInstantAuctionEntry
+CreateActionButton(MainPage, "\073\110\115\116\097\110\116\032\065\117\099\116\105\111\110\032\069\110\116\114\121", RunInstantAuctionEntry)
 
 task.spawn(function()
     local garages
