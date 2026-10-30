@@ -1014,10 +1014,8 @@ end
       
                                                                 
 
-local Gui = New("\083\099\114\101\101\110\071\117\105", {
-    Name = "\083\116\111\114\097\103\101\072\117\110\116\101\114\115\072\117\098",
-    ResetOnSpawn = false,
-    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+$1    Enabled = HubEnvironment.__SyndicateTestGuiHeadless ~= true,
+$2
 }, CoreGui)
 
 local Main = New("\070\114\097\109\101", {
@@ -1450,68 +1448,25 @@ Layout(ThisHubInstance.TestsExtraPage, 7)
                                                                 
 
 local ToggleObjects = {}
+ThisHubInstance.ToggleObjects = ToggleObjects
+ThisHubInstance.ToggleCallbacks = {}
+ThisHubInstance.State = State
 
-local function CreateToggle(parent, text, stateKey, callback)
-    local holder = New("\070\114\097\109\101", {
-        Size = UDim2.new(1, -8, 0, 42),
-        BackgroundColor3 = ButtonBackground,
-        BorderSizePixel = 0,
-    }, parent)
+$1
 
-    Corner(holder, 7)
-
-    New("\084\101\120\116\076\097\098\101\108", {
-        Size = UDim2.new(1, -80, 1, 0),
-        Position = UDim2.fromOffset(12, 0),
-        BackgroundTransparency = 1,
-        Text = text,
-        TextColor3 = TextColor,
-        TextSize = 13,
-        Font = Enum.Font.GothamMedium,
-        TextXAlignment = Enum.TextXAlignment.Left,
-    }, holder)
-
-    local button = New("\084\101\120\116\066\117\116\116\111\110", {
-        Size = UDim2.fromOffset(58, 28),
-        Position = UDim2.new(1, -68, 0.5, -14),
-        BackgroundColor3 = OffColor,
-        Text = "\079\070\070",
-        TextColor3 = TextColor,
-        TextSize = 11,
-        Font = Enum.Font.GothamBold,
-        BorderSizePixel = 0,
-    }, holder)
-
-    Corner(button, 14)
-
-    local function Update(value)
-        State[stateKey] = value
-
-        button.Text = value and "\079\078" or "\079\070\070"
-        button.BackgroundColor3 = value and ThemeColor or OffColor
+ThisHubInstance.SetToggle = function(stateKey, value)
+    if HubDestroyed then return false, "Hub destroyed" end
+    local update = ToggleObjects[stateKey]
+    if type(update) ~= "function" then return false, "Toggle is not registered: " .. tostring(stateKey) end
+    value = value == true
+    if State[stateKey] == value then
+        update(value)
+        return true
     end
-
-    TrackConnection(
-        button.Activated:Connect(function()
-            if HubDestroyed then
-                return
-            end
-
-            local newValue = not State[stateKey]
-
-            Update(newValue)
-
-            if callback then
-                task.spawn(callback, newValue)
-            end
-        end)
-    )
-
-    ToggleObjects[stateKey] = Update
-
-    Update(State[stateKey])
-
-    return holder
+    update(value)
+    local callback = ThisHubInstance.ToggleCallbacks[stateKey]
+    if type(callback) == "function" then task.spawn(callback, value) end
+    return true
 end
 
                                                                 
@@ -6758,12 +6713,18 @@ local function StartAutoBidLoop()
 end
 
                                                                       
-ThisHubInstance.ToggleAutoBid = function()
-    if HubDestroyed then return end
-    State.AutoBid = not State.AutoBid
+ThisHubInstance.SetAutoBid = function(value)
+    if HubDestroyed then return false end
+    value = value == true
+    State.AutoBid = value
     UpdateAutoBidStatus()
     if State.AutoBid then StartAutoBidLoop() end
-    Notify("\065\117\116\111\032\066\105\100", State.AutoBid and "\069\110\097\098\108\101\100" or "\068\105\115\097\098\108\101\100", 1.5)
+    Notify("Auto Bid", State.AutoBid and "Enabled" or "Disabled", 1.5)
+    return true
+end
+
+ThisHubInstance.ToggleAutoBid = function()
+    return ThisHubInstance.SetAutoBid(not State.AutoBid)
 end
 
                                                                 
@@ -8556,6 +8517,39 @@ AuctionDropdown = CreateDropdown(
 )
 AuctionDropdown:SetLabelFormatter(ThisHubInstance.FormatAuctionOption)
 AuctionDropdown.BeforeOpen = RefreshAuctionDropdown
+
+ThisHubInstance.GetFarmAreas = function()
+    local result = {}
+    for _, value in ipairs(AreaNames) do result[#result + 1] = value end
+    return result
+end
+
+ThisHubInstance.GetFarmAuctions = function(areaName)
+    local result = {}
+    for _, value in ipairs(AreaAuctions[areaName or State.SelectedArea] or {}) do result[#result + 1] = value end
+    return result
+end
+
+ThisHubInstance.SetFarmArea = function(value)
+    if HubDestroyed or not table.find(AreaNames, value) then return false end
+    State.SelectedArea = value
+    State.SelectedAuction = ThisHubInstance.AuctionSelections[value]
+    RefreshAuctionDropdown()
+    return true
+end
+
+ThisHubInstance.SetFarmAuction = function(value)
+    local auctions = AreaAuctions[State.SelectedArea] or {}
+    if HubDestroyed or not table.find(auctions, value) then return false end
+    State.SelectedAuction = value
+    FarmingPreferredAuction = value
+    ThisHubInstance.AuctionSelections[State.SelectedArea] = value
+    ThisHubInstance.SelectedTierRetryArea = nil
+    ThisHubInstance.SelectedTierRetryName = nil
+    ThisHubInstance.SelectedTierRetryUntil = 0
+    if AuctionDropdown then AuctionDropdown:Set(value) end
+    return true
+end
 
                                                                 
                   
