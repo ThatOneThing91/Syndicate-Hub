@@ -1,4 +1,4 @@
--- AMETHYST / PIXEL UI 1.9
+-- AMETHYST / PIXEL UI 2.0
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
@@ -6,6 +6,7 @@ local Input = game:GetService('UserInputService')
 local GuiService = game:GetService('GuiService')
 local RunService = game:GetService('RunService')
 local TweenService = game:GetService('TweenService')
+local TextService = game:GetService('TextService')
 local player = Players.LocalPlayer
 assert(player, 'Run AmethystPixel from a client LocalScript')
 local parent = player:WaitForChild('PlayerGui')
@@ -18,6 +19,8 @@ local muted = Color3.fromRGB(157, 146, 179)
 local opacity, active, notifications = 0.18, 'Account', true
 local animatedSky, showStars = true, true
 local toggleDraws = {}
+local rowSpecs, sectionSpecs = {}, {}
+local preferredNavCollapsed=false
 local skyIntensity=30
 local function connect(event, fn)
  local c = event:Connect(fn); table.insert(connections, c); return c
@@ -146,7 +149,7 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  1.9',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  2.0',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 -- Slim vertical text navigation, with the original stacked layout.
@@ -221,12 +224,15 @@ local function setNavCollapsed(value)
  end
  updateNavScroll()
 end
-connect(collapseNav.Activated,function() setNavCollapsed(not navCollapsed) end)
+connect(collapseNav.Activated,function()
+ preferredNavCollapsed=not navCollapsed
+ setNavCollapsed(preferredNavCollapsed)
+end)
 
 local title=label(body,'Account',{Size=UDim2.new(1,-185,0,26),TextSize=22})
 local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffset(0,31),Size=UDim2.new(1,0,0,16),TextSize=10,TextColor3=muted})
 local search=make('TextBox',{Position=UDim2.new(1,-177,0,0),Size=UDim2.fromOffset(177,28),BackgroundColor3=Color3.fromRGB(39,29,55),BackgroundTransparency=0.15,BorderSizePixel=0,Text='',PlaceholderText='Search this tab...',PlaceholderColor3=muted,TextColor3=ink,Font=Enum.Font.Code,TextSize=12,ClearTextOnFocus=false},body)
-local footer=label(root,'  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted})
+local footer=label(root,'  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
 local grip=button(root,'//',{Position=UDim2.new(1,-27,1,-27),Size=UDim2.fromOffset(26,26),BackgroundTransparency=1,TextColor3=muted})
 local restore=button(gui,'♥',{Position=UDim2.fromOffset(18,90),Size=UDim2.fromOffset(48,48),Visible=false,
  BackgroundColor3=Color3.fromRGB(29,18,44),BackgroundTransparency=0.12,TextSize=27,Font=Enum.Font.Gotham,TextColor3=accent})
@@ -302,20 +308,24 @@ local function page(name, icon)
 end
 local function section(p,text)
  order=order+1
- return label(p,text,{Size=UDim2.new(1,0,0,23),TextColor3=muted,TextSize=10,LayoutOrder=order})
+ local heading=label(p,text,{Size=UDim2.new(1,0,0,23),TextColor3=muted,TextSize=10,LayoutOrder=order,TextWrapped=true})
+ table.insert(sectionSpecs,heading)
+ return heading
 end
 local function row(p,name,desc,height)
  order=order+1
  local r=frame(p,{Size=UDim2.new(1,0,0,height or 66),BackgroundColor3=Color3.fromRGB(36,26,50),BackgroundTransparency=math.min(0.85,opacity+0.2),LayoutOrder=order})
  table.insert(surfaces,r)
- label(r,name,{Position=UDim2.fromOffset(14,12),Size=UDim2.new(1,-140,0,18),TextSize=14})
- label(r,desc,{Position=UDim2.fromOffset(14,34),Size=UDim2.new(1,-140,0,24),TextColor3=muted,TextSize=11,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
+ local heading=label(r,name,{Position=UDim2.fromOffset(14,12),Size=UDim2.new(1,-140,0,18),TextSize=14,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
+ local description=label(r,desc,{Position=UDim2.fromOffset(14,34),Size=UDim2.new(1,-140,0,24),TextColor3=muted,TextSize=11,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
+ rowSpecs[r]={heading=heading,description=description,minHeight=height or 66}
  for n,t in pairs(tabs) do if t.page==p then table.insert(rows[n],{frame=r,text=(name..' '..desc):lower()}) end end
  return r
 end
 local function toggle(p,name,desc,default,callback)
  local r=row(p,name,desc); local value=default or false
  local b=button(r,'',{Position=UDim2.new(1,-70,0,22),Size=UDim2.fromOffset(54,24)})
+ rowSpecs[r].control=b
  local pixel=frame(b,{Size=UDim2.fromOffset(16,16),Position=UDim2.fromOffset(4,4),BackgroundColor3=ink})
  local function draw()
   b.BackgroundColor3=value and accent or Color3.fromRGB(64,53,80)
@@ -328,6 +338,7 @@ end
 local function action(p,name,desc,caption,callback)
  local r=row(p,name,desc)
  local b=button(r,caption,{Position=UDim2.new(1,-108,0,20),Size=UDim2.fromOffset(92,28)})
+ rowSpecs[r].control=b
  connect(b.Activated,callback or function() notify(name..' / demo only') end)
 end
 local dragSlider
@@ -335,6 +346,7 @@ local function slider(p,name,desc,lo,hi,value,callback)
  local r=row(p,name,desc,98)
  local valueLabel=label(r,tostring(value),{Position=UDim2.new(1,-90,0,12),Size=UDim2.fromOffset(74,20),TextXAlignment=Enum.TextXAlignment.Right})
  local track=button(r,'',{Position=UDim2.fromOffset(14,74),Size=UDim2.new(1,-28,0,12),BackgroundColor3=Color3.fromRGB(65,50,82)})
+ rowSpecs[r].kind='slider'; rowSpecs[r].control=track; rowSpecs[r].value=valueLabel
  local fill=tint(frame(track,{Size=UDim2.fromScale((value-lo)/(hi-lo),1)}),'BackgroundColor3')
  local function set(v)
   value=math.clamp(math.floor(v+0.5),lo,hi); valueLabel.Text=tostring(value)
@@ -391,6 +403,7 @@ row(home,'Roblox user ID',tostring(player.UserId))
 row(home,'Account age',tostring(player.AccountAge)..' days')
 local session=row(home,'Current session','Time since opening this interface.')
 local sessionValue=tint(label(session,'00:00:00',{Position=UDim2.new(1,-112,0,22),Size=UDim2.fromOffset(96,22),TextXAlignment=Enum.TextXAlignment.Right}),'TextColor3')
+rowSpecs[session].value=sessionValue
 local sessionStart=os.clock()
 local lastSessionSecond=-1
 connect(RunService.Heartbeat,function()
@@ -439,8 +452,9 @@ local function applyAccent(color)
  choose(active)
 end
 local palette=row(appearance,'Accent palette','Choose a color for the controls and sky.',142)
+rowSpecs[palette].kind='palette'
 local swatches=frame(palette,{Position=UDim2.fromOffset(14,68),Size=UDim2.new(1,-28,0,62),BackgroundTransparency=1})
-make('UIGridLayout',{CellSize=UDim2.new(0.2,-5,0,28),CellPadding=UDim2.fromOffset(5,5),SortOrder=Enum.SortOrder.LayoutOrder},swatches)
+local paletteGrid=make('UIGridLayout',{CellSize=UDim2.new(0.2,-5,0,28),CellPadding=UDim2.fromOffset(5,5),SortOrder=Enum.SortOrder.LayoutOrder},swatches)
 local colors={
  {'Amethyst',176,119,255},{'Orchid',218,128,234},{'Lavender',151,151,255},
  {'Rose',245,126,174},{'Coral',255,147,127},{'Amber',240,186,95},
@@ -463,6 +477,75 @@ connect(search:GetPropertyChangedSignal('Text'),function()
  local query=search.Text:lower()
  for _,r in ipairs(rows[active]) do r.frame.Visible=query=='' or r.text:find(query,1,true)~=nil end
 end)
+-- Reflow text and controls, keeping every control inside its scrolling page.
+local function measure(text,size,width)
+ return math.ceil(TextService:GetTextSize(text,size,Enum.Font.Code,Vector2.new(math.max(40,width),10000)).Y)+2
+end
+local reflowing=false
+local function reflow()
+ if reflowing then return end
+ reflowing=true
+ local narrow=root.Size.X.Offset<560
+ if narrow and not navCollapsed then setNavCollapsed(true)
+ elseif not narrow and navCollapsed~=preferredNavCollapsed then setNavCollapsed(preferredNavCollapsed) end
+ -- Use logical coordinates so scaling and touch-device viewport fitting agree.
+ local width=root.Size.X.Offset-(navCollapsed and 48 or 118)-32
+ local stackedHeader=width<430
+ title.Size=UDim2.new(1,stackedHeader and 0 or -185,0,26)
+ subtitle.Visible=not stackedHeader
+ search.Position=stackedHeader and UDim2.fromOffset(0,34) or UDim2.new(1,-177,0,0)
+ search.Size=stackedHeader and UDim2.new(1,0,0,28) or UDim2.fromOffset(177,28)
+ local pageTop=stackedHeader and 76 or 61
+ local rowWidth=width-9
+ for _,t in pairs(tabs) do
+  t.page.Position=UDim2.fromOffset(0,pageTop)
+  t.page.Size=UDim2.new(1,0,1,-pageTop)
+  t.page.ScrollingDirection=Enum.ScrollingDirection.Y
+ end
+ for _,heading in ipairs(sectionSpecs) do
+  heading.Size=UDim2.new(1,0,0,math.max(23,measure(heading.Text,10,rowWidth)))
+ end
+ for r,spec in pairs(rowSpecs) do
+  local compact=rowWidth<400
+  local reserve=(spec.control or spec.value) and not compact and 140 or 28
+  local textWidth=math.max(80,rowWidth-reserve)
+  local headingWidth=spec.kind=='slider' and textWidth-70 or textWidth
+  local h=measure(spec.heading.Text,14,headingWidth)
+  local d=measure(spec.description.Text,11,textWidth)
+  spec.heading.Size=UDim2.fromOffset(headingWidth,h)
+  spec.description.Position=UDim2.fromOffset(14,16+h)
+  spec.description.Size=UDim2.fromOffset(textWidth,d)
+  local bottom=16+h+d+12
+  if spec.kind=='slider' then
+   spec.value.Position=UDim2.new(1,-90,0,12)
+   spec.control.Position=UDim2.fromOffset(14,bottom)
+   r.Size=UDim2.new(1,0,0,bottom+26)
+  elseif spec.kind=='palette' then
+   local columns=compact and 3 or 5
+   local gridRows=math.ceil(10/columns)
+   paletteGrid.CellSize=UDim2.new(1/columns,-5,0,28)
+   swatches.Position=UDim2.fromOffset(14,bottom)
+   swatches.Size=UDim2.new(1,-28,0,gridRows*33)
+   r.Size=UDim2.new(1,0,0,bottom+gridRows*33+12)
+  elseif spec.control then
+   if compact then
+    spec.control.Position=UDim2.new(1,-spec.control.Size.X.Offset-14,0,bottom)
+    r.Size=UDim2.new(1,0,0,bottom+spec.control.Size.Y.Offset+12)
+   else
+    spec.control.Position=UDim2.new(1,-spec.control.Size.X.Offset-14,0,20)
+    r.Size=UDim2.new(1,0,0,math.max(66,bottom))
+   end
+  elseif spec.value then
+   spec.value.Position=compact and UDim2.new(1,-112,0,bottom) or UDim2.new(1,-112,0,22)
+   r.Size=UDim2.new(1,0,0,compact and bottom+34 or math.max(66,bottom))
+  else r.Size=UDim2.new(1,0,0,math.max(66,bottom)) end
+ end
+ footer.Text=narrow and '  AMETHYST 2.0 / TEST GUI' or '  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED'
+ updateNavScroll()
+ reflowing=false
+end
+connect(root:GetPropertyChangedSignal('Size'),reflow)
+connect(body:GetPropertyChangedSignal('Size'),reflow)
 -- Fit the logical window inside the available device area; reflow after rotation.
 local function fit()
  local camera=workspace.CurrentCamera; if not camera then return end
@@ -476,7 +559,7 @@ end
 local gesture
 local function start(i,kind)
  if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
-  gesture={input=i,kind=kind,start=i.Position,position=root.Position,size=root.Size}
+  gesture={input=i,kind=kind,start=i.Position,position=root.Position,size=root.Size,scale=scale.Scale}
  end
 end
 connect(top.InputBegan,function(i) start(i,'move') end)
@@ -489,7 +572,7 @@ connect(Input.InputChanged,function(i)
  if gesture.kind=='move' then
   root.Position=UDim2.fromOffset(gesture.position.X.Offset+delta.X,gesture.position.Y.Offset+delta.Y)
  else
-  root.Size=UDim2.fromOffset(math.clamp(gesture.size.X.Offset+delta.X/scale.Scale,690,1100),math.clamp(gesture.size.Y.Offset+delta.Y/scale.Scale,310,800))
+  root.Size=UDim2.fromOffset(math.clamp(gesture.size.X.Offset+delta.X/gesture.scale,360,1100),math.clamp(gesture.size.Y.Offset+delta.Y/gesture.scale,280,800))
  end
  fit()
 end)
@@ -520,4 +603,4 @@ connect(workspace:GetPropertyChangedSignal('CurrentCamera'),watchCamera)
 for _,child in ipairs(root:GetChildren()) do
  if child:IsA('GuiObject') and child~=sky then child.ZIndex=2 end
 end
-choose('Account'); watchCamera(); fitIcon(); updateNavScroll()
+choose('Account'); reflow(); watchCamera(); fitIcon(); updateNavScroll()
