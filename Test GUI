@@ -282,6 +282,8 @@ local function drawNavIcon(host,name)
  elseif name=='Event' then
   outline(3,5,16,15,2); line(3,10,19,10); line(7,2,7,7); line(15,2,15,7)
   line(7,14,9,14); line(13,14,15,14); line(7,17,9,17)
+ elseif name=='Misc.' then
+  outline(4,4,5,5,2); outline(13,4,5,5,2); outline(4,13,5,5,2); outline(13,13,5,5,2)
  elseif name=='Appearance' then
   -- Diagonal brush: tapered handle, ferrule, and a curved-looking bristle tip.
   line(9,12,16,3); line(16,3,18,2); line(18,2,20,4)
@@ -376,6 +378,63 @@ connect(Input.InputEnded,function(i)
   if iconGesture.dragged then suppressIconUntil=os.clock()+0.3 end
   iconGesture=nil
   snapInside(restore,true)
+ end
+end)
+
+local saleBadge=button(gui,'—%',{
+ Position=UDim2.new(0.5,-29,0,70),Size=UDim2.fromOffset(58,32),
+ BackgroundColor3=Color3.fromRGB(29,18,44),BackgroundTransparency=0.08,
+ TextSize=13,Font=Enum.Font.Code,TextColor3=accent,ZIndex=240,AutoButtonColor=false})
+make('UICorner',{CornerRadius=UDim.new(0,8)},saleBadge)
+tint(make('UIStroke',{Thickness=1,Transparency=0.35},saleBadge),'Color')
+tint(saleBadge,'TextColor3')
+local saleGesture,saleSuppress=nil,0
+connect(saleBadge.InputBegan,function(i)
+ if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+  cancelSnap(saleBadge)
+  saleGesture={input=i,start=i.Position,position=saleBadge.Position,dragged=false}
+ end
+end)
+connect(Input.InputChanged,function(i)
+ local g=saleGesture
+ if not g or not (i==g.input or i.UserInputType==Enum.UserInputType.MouseMovement and g.input.UserInputType==Enum.UserInputType.MouseButton1) then return end
+ local delta=i.Position-g.start
+ if delta.Magnitude>6 then g.dragged=true end
+ if g.dragged then
+  saleSuppress=os.clock()+0.3
+  saleBadge.Position=UDim2.new(g.position.X.Scale,g.position.X.Offset+delta.X,g.position.Y.Scale,g.position.Y.Offset+delta.Y)
+ end
+end)
+connect(Input.InputEnded,function(i)
+ if saleGesture and i==saleGesture.input then
+  if saleGesture.dragged then saleSuppress=os.clock()+0.3 end
+  saleGesture=nil
+  snapInside(saleBadge,true)
+ end
+end)
+connect(saleBadge.Activated,function()
+ if os.clock()<saleSuppress or saleGesture and saleGesture.dragged then return end
+ if Backend and type(Backend.GoToUnload)=='function' then
+  task.spawn(function() Backend.GoToUnload(false) end)
+ else
+  notify('Manual unload backend unavailable.')
+ end
+end)
+task.spawn(function()
+ local rate=0
+ while gui.Parent do
+  local ok,state=pcall(function()
+   return game:GetService('ReplicatedStorage').Events.Pawn.GetPawnState:InvokeServer()
+  end)
+  if ok and type(state)=='table' then
+   local raw=tonumber(state.rate)
+   if raw~=nil then rate=math.floor(((raw-1)*100)+0.5) end
+  end
+  if saleBadge.Parent then saleBadge.Text=string.format('%+d%%',rate) end
+  for _=1,20 do
+   if not gui.Parent then return end
+   task.wait(1)
+  end
  end
 end)
 local toast=label(gui,'',{AnchorPoint=Vector2.new(1,1),Position=UDim2.new(1,-18,1,-18),Size=UDim2.fromOffset(300,48),BackgroundColor3=Color3.fromRGB(40,25,60),BackgroundTransparency=0.08,TextXAlignment=Enum.TextXAlignment.Center,TextWrapped=true,Visible=false})
@@ -989,12 +1048,10 @@ local function SetupInventoryFilter(target,filterName)
   end)
   connect(none.Activated,function() settings.Selected[group]={}; for _,entry in ipairs(blocks[group].buttons) do entry.paint() end; refreshPreview() end)
  end
- local toolsBlock=newBlock(56)
- local refreshButton=button(toolsBlock,'Refresh categories',{Position=UDim2.fromOffset(12,12),Size=UDim2.new(0.5,-18,0,32),TextSize=10})
- local inventoryButton
- if isGrading then
-  refreshButton.Size=UDim2.new(1,-24,0,32)
- else
+ local toolsBlock,refreshButton,inventoryButton
+ if isQuickSell then
+  toolsBlock=newBlock(56)
+  refreshButton=button(toolsBlock,'Refresh categories',{Position=UDim2.fromOffset(12,12),Size=UDim2.new(0.5,-18,0,32),TextSize=10})
   inventoryButton=button(toolsBlock,'Read inventory',{Position=UDim2.new(0.5,6,0,12),Size=UDim2.new(0.5,-18,0,32),TextSize=10})
  end
  local preview,summaryLabel,previewScroll,previewEmpty
@@ -1157,7 +1214,7 @@ local function SetupInventoryFilter(target,filterName)
    loading=false
   end)
  end
- connect(refreshButton.Activated,loadCatalog)
+ if refreshButton then connect(refreshButton.Activated,loadCatalog) end
  local function readInventorySafety()
   local states,worn,favorites={},{},{}
   local character=player.Character
@@ -1486,6 +1543,32 @@ end)
 section(event,'HALLOWEEN MARKET')
 toggle(event,'Auto Market Rolling','Continuously uses the normal Halloween market roll.',backendState('AutoMarketRolling',false),function(value) backendToggle('AutoMarketRolling',value) end)
 toggle(event,'Auto Market Rolling x5','Continuously uses the five-roll Halloween market option.',backendState('AutoMarketRollingFive',false),function(value) backendToggle('AutoMarketRollingFive',value) end)
+
+local misc=page('Misc.','07')
+section(misc,'GARDEN')
+toggle(misc,'Auto Harvest','Harvests ready plants using the existing one-plant-at-a-time routine and stops when inventory is full.',backendState('AutoHarvest',false),function(value) backendToggle('AutoHarvest',value) end)
+toggle(misc,'Auto Water Plants','Uses watering cans, skips watered/grown plants, swaps empty cans, and retries pours.',backendState('AutoWaterPlants',false),function(value) backendToggle('AutoWaterPlants',value) end)
+toggle(misc,'Auto Plant Seeds','Plants seed items across your garden using the existing spacing and expansion logic.',backendState('AutoPlantSeeds',false),function(value) backendToggle('AutoPlantSeeds',value) end)
+
+section(misc,'ACTIVITIES')
+toggle(misc,'Auto Basketball','Uses the existing hoop positioning and repeated-shot routine.',backendState('AutoBasketball',false),function(value) backendToggle('AutoBasketball',value) end)
+toggle(misc,'Auto Fishing','Runs the existing fishing state/recast automation.',backendState('AutoFishing',false),function(value) backendToggle('AutoFishing',value) end)
+toggle(misc,'Hay Knocker','Finds current hay targets and runs the existing collection route.',backendState('HayCollector',false),function(value) backendToggle('HayCollector',value) end)
+toggle(misc,'Tree Knocker','Runs the existing tree-knocking automation.',backendState('TreeKnocker',false),function(value) backendToggle('TreeKnocker',value) end)
+toggle(misc,'Police Auction','Runs the existing Police Auction finder/automation.',backendState('PoliceAuction',false),function(value) backendToggle('PoliceAuction',value) end)
+
+section(misc,'UTILITY')
+action(misc,'Favorite Toggle','Runs the same one-click inventory favorite routine from the old Main tab.','RUN',function()
+ if Backend and type(Backend.RunFavoriteToggle)=='function' then Backend.RunFavoriteToggle() else notify('Favorite Toggle backend unavailable.') end
+end)
+action(misc,'Ore Deposit','Runs the existing uranium deposit routine and returns you to your previous position.','RUN',function()
+ if Backend and type(Backend.RunOreDeposit)=='function' then Backend.RunOreDeposit() else notify('Ore Deposit backend unavailable.') end
+end)
+action(misc,'Instant Auction Entry','Sets loaded auction entry prompts to instant interaction.','APPLY',function()
+ if Backend and type(Backend.RunInstantAuctionEntry)=='function' then Backend.RunInstantAuctionEntry() else notify('Instant Auction Entry backend unavailable.') end
+end)
+toggle(misc,'Jump Button 1.5x Size','Enlarges the mobile Roblox jump button while enabled.',backendState('MoveJumpButton',false),function(value) backendToggle('MoveJumpButton',value) end)
+
 local appearance=page('Appearance','05')
 section(appearance,'MAKE IT YOURS / LIVE CONTROLS')
 slider(appearance,'Transparency','Higher values reveal more of the world.',0,65,18,function(v)
