@@ -1,6 +1,5 @@
 -- SYNDICATE HUB / STORAGE HUNTERS UI 2.8
--- Syndicate Hub migration interface backed by the live StorageHunters automation engine.
--- Multi-input Syndicate Hub interface backed by the live StorageHunters automation engine.
+-- Syndicate Hub interface for Storage Hunters.
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
@@ -397,12 +396,13 @@ connect(Input.InputEnded,function(i)
 end)
 
 local saleBadge=button(gui,'—%',{
- Position=UDim2.new(0.5,-29,0,70),Size=UDim2.fromOffset(58,32),
- BackgroundColor3=Color3.fromRGB(29,18,44),BackgroundTransparency=0.08,
- TextSize=13,Font=Enum.Font.Code,TextColor3=accent,ZIndex=240,AutoButtonColor=false})
-make('UICorner',{CornerRadius=UDim.new(0,8)},saleBadge)
-tint(make('UIStroke',{Thickness=1,Transparency=0.35},saleBadge),'Color')
-tint(saleBadge,'TextColor3')
+ Position=UDim2.new(0.5,-29,0,76),Size=UDim2.fromOffset(58,30),
+ BackgroundColor3=Color3.fromRGB(18,18,22),BackgroundTransparency=0.04,
+ TextSize=12,Font=Enum.Font.GothamMedium,TextColor3=Color3.fromRGB(242,242,247),
+ ZIndex=240,AutoButtonColor=false})
+make('UICorner',{CornerRadius=UDim.new(0,7)},saleBadge)
+make('UIStroke',{Thickness=1,Transparency=0.48,Color=Color3.fromRGB(210,210,220)},saleBadge)
+make('UIGradient',{Color=ColorSequence.new(Color3.fromRGB(28,28,34),Color3.fromRGB(14,14,18)),Rotation=90},saleBadge)
 local saleGesture,saleSuppress=nil,0
 connect(saleBadge.InputBegan,function(i)
  if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
@@ -434,7 +434,7 @@ connect(saleBadge.Activated,function()
  if Backend and type(Backend.GoToUnload)=='function' then
   task.spawn(function() Backend.GoToUnload(false) end)
  else
-  notify('Manual unload backend unavailable.')
+  notify('Manual unload is unavailable right now.')
  end
 end)
 task.spawn(function()
@@ -758,7 +758,7 @@ local function backendState(key,default)
  return default
 end
 local function backendToggle(key,value)
- if not Backend or type(Backend.SetToggle)~='function' then notify('StorageHunters backend is unavailable.'); return end
+ if not Backend or type(Backend.SetToggle)~='function' then notify('Feature is unavailable right now.'); return end
  local ok,result,message=pcall(Backend.SetToggle,key,value)
  if not ok or result==false then notify('Could not change '..key..': '..tostring(message or result)) end
 end
@@ -779,7 +779,7 @@ local areaControl=dropdown(farming,'Area','Choose which auction area the farmer 
 end,selectedArea)
 local initialAuctions=Backend and type(Backend.GetFarmAuctions)=='function' and Backend.GetFarmAuctions(selectedArea) or {}
 local selectedAuction=backendState('SelectedAuction',initialAuctions[1])
-auctionControl=dropdown(farming,'Priority auction','The preferred garage/tier. Existing strict priority, affordability, retry, and no-mid-start-switch logic stays unchanged.',initialAuctions,function(value)
+auctionControl=dropdown(farming,'Priority auction','Choose the preferred garage or tier. Priority, affordability, retries, and active-auction protection are handled automatically.',initialAuctions,function(value)
  if Backend and type(Backend.SetFarmAuction)=='function' then
   local ok,result=pcall(Backend.SetFarmAuction,value)
   if not ok or result==false then notify('Could not select priority auction.') end
@@ -787,28 +787,28 @@ auctionControl=dropdown(farming,'Priority auction','The preferred garage/tier. E
 end,selectedAuction)
 
 section(farming,'AUCTION CONTROL')
-toggle(farming,'Auto Bid','Automatically bids while an auction is active using the existing Syndicate timing.',backendState('AutoBid',false),function(value)
- if Backend and type(Backend.SetAutoBid)=='function' then Backend.SetAutoBid(value) else notify('Auto Bid backend unavailable.') end
+toggle(farming,'Auto Bid','Automatically bids while an auction is active.',backendState('AutoBid',false),function(value)
+ if Backend and type(Backend.SetAutoBid)=='function' then Backend.SetAutoBid(value) else notify('Auto Bid is unavailable right now.') end
 end)
 toggle(farming,'Farming','Runs the full auction farming loop: priority selection, retrying the chosen garage, affordability checks, auction-state protection, and vehicle-full stop.',backendState('Farming',false),function(value) backendToggle('Farming',value) end)
-toggle(farming,'Pause Auction','Arms the existing pause-on-first-bid behavior.',backendState('PauseAuction',false),function(value) backendToggle('PauseAuction',value) end)
+toggle(farming,'Pause Auction','Pauses after the first bid when armed.',backendState('PauseAuction',false),function(value) backendToggle('PauseAuction',value) end)
 
 section(farming,'UNLOADING')
-toggle(farming,'Lost & Found Unloader','Keeps the existing Lost & Found claim/unload worker running in the background.',backendState('LostFoundUnloader',false),function(value) backendToggle('LostFoundUnloader',value) end)
-toggle(farming,'Instant Unload','Uses the existing instant unload worker.',backendState('InstantUnload',false),function(value) backendToggle('InstantUnload',value) end)
+toggle(farming,'Lost & Found Unloader','Continuously checks and claims Lost & Found items for the selected area.',backendState('LostFoundUnloader',false),function(value) backendToggle('LostFoundUnloader',value) end)
+toggle(farming,'Instant Unload','Automatically unloads eligible vehicle inventory.',backendState('InstantUnload',false),function(value) backendToggle('InstantUnload',value) end)
 toggle(farming,'Auto Unload When Full','Automatically starts the unload trip when the equipped vehicle is full.',backendState('AutoUnloadWhenFull',false),function(value) backendToggle('AutoUnloadWhenFull',value) end)
 action(farming,'Manual unload','Teleports to your own unload pad, spawns your vehicle, and seats you so the unload menu opens.','START',function()
- if Backend and type(Backend.GoToUnload)=='function' then task.spawn(function() Backend.GoToUnload(false) end) else notify('Manual unload backend unavailable.') end
+ if Backend and type(Backend.GoToUnload)=='function' then task.spawn(function() Backend.GoToUnload(false) end) else notify('Manual unload is unavailable right now.') end
 end)
 local shop=page('Shop','03')
 section(shop,'SHOP AUTOMATION')
-toggle(shop,'Auto Wash','Fills available wash slots and completes brush cleaning with the existing completion checks.',backendState('AutoWash',false),function(value) backendToggle('AutoWash',value) end)
-toggle(shop,'Auto Repair','Repairs broken inventory items with the existing fishing-rod exclusion and paced scan.',backendState('AutoRepair',false),function(value) backendToggle('AutoRepair',value) end)
+toggle(shop,'Auto Wash','Fills available wash slots and completes brush cleaning automatically.',backendState('AutoWash',false),function(value) backendToggle('AutoWash',value) end)
+toggle(shop,'Auto Repair','Repairs broken inventory items while skipping fishing rods.',backendState('AutoRepair',false),function(value) backendToggle('AutoRepair',value) end)
 toggle(shop,'Auto Open Safes','Starts, opens, and claims available locksmith safe slots automatically.',backendState('AutoOpenSafes',false),function(value) backendToggle('AutoOpenSafes',value) end)
 
 section(shop,'REWARDS')
 toggle(shop,'Auto Collect Daily Rewards','Claims the daily reward when the game allows it.',backendState('AutoDailyRewards',false),function(value) backendToggle('AutoDailyRewards',value) end)
-toggle(shop,'Auto Collect Museum Gift','Checks the museum gift on the existing five-minute cycle.',backendState('AutoMuseumGift',false),function(value) backendToggle('AutoMuseumGift',value) end)
+toggle(shop,'Auto Collect Museum Gift','Checks for the museum gift every five minutes.',backendState('AutoMuseumGift',false),function(value) backendToggle('AutoMuseumGift',value) end)
 
 section(shop,'NPC SHOPPERS')
 local offerThreshold=25
@@ -831,8 +831,13 @@ end)
 local plot=page('Plot','03P')
 section(plot,'POTION AUTOMATION')
 toggle(plot,'Auto Load Potions','Moves supported potions from inventory into your equipped vehicle, including favorited potions.',backendState('AutoLoadPotions',false),function(value) backendToggle('AutoLoadPotions',value) end)
-toggle(plot,'Auto Place Potions','Continues your existing potion layout layer-by-layer using the established spacing and placement checks.',backendState('AutoPlacePotions',false),function(value) backendToggle('AutoPlacePotions',value) end)
+toggle(plot,'Auto Place Potions','Places supported potions layer-by-layer with spacing and placement checks.',backendState('AutoPlacePotions',false),function(value) backendToggle('AutoPlacePotions',value) end)
 toggle(plot,'Pick Up Plot Potions','Rapidly picks your placed potions back up and stops safely if inventory becomes full.',backendState('AutoPickupPlotPotions',false),function(value) backendToggle('AutoPickupPlotPotions',value) end)
+
+section(plot,'GARDEN')
+toggle(plot,'Auto Harvest','Harvests ready plants one at a time and stops when inventory is full.',backendState('AutoHarvest',false),function(value) backendToggle('AutoHarvest',value) end)
+toggle(plot,'Auto Water Plants','Uses watering cans, skips watered/grown plants, swaps empty cans, and retries pours.',backendState('AutoWaterPlants',false),function(value) backendToggle('AutoWaterPlants',value) end)
+toggle(plot,'Auto Plant Seeds','Plants seed items across your garden with adaptive spacing and expansion.',backendState('AutoPlantSeeds',false),function(value) backendToggle('AutoPlantSeeds',value) end)
 
 section(plot,'PLOT TOOLS')
 action(plot,'Launch Plot Studio','Opens your separate Plot Studio / Plot Copier tooling without merging it into the main hub.','LAUNCH',function()
@@ -1049,7 +1054,7 @@ local function SetupInventoryFilter(target,filterName)
  end
  local intro=newBlock(92)
  label(intro,filterName:upper()..' FILTER',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=15})
- local introText=label(intro,isQuickSell and 'Live Quick Sell filter. Nothing sells unless it matches your current rules. Favorites, protected utility items, worn accessories, and unverified accessories stay protected.' or 'Use Grade All for every gradable item, or Grade Selected to use the same category filters as Quick Sell.',{
+ local introText=label(intro,isQuickSell and 'Live Quick Sell filter. Nothing sells unless it matches your current rules. Favorites, protected utility items, worn accessories, and unverified accessories stay protected.' or 'Use Grade All for every gradable item, or Grade Selected to grade only items matching your selected filters.',{
   Position=UDim2.fromOffset(12,36),Size=UDim2.new(1,-24,0,48),TextSize=11,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
  local modeBlock=newBlock(86)
  local modeButton=button(modeBlock,isGrading and gradingMode or settings.Mode,{Position=UDim2.fromOffset(12,12),Size=UDim2.new(1,-24,0,30),TextSize=11})
@@ -1414,14 +1419,14 @@ local function SetupInventoryFilter(target,filterName)
  if isGrading then
   section(target,'GRADING CONTROL')
   local gradingDesired=false
-  toggle(target,'Auto Grading','Runs the existing Syndicate grading worker: fills open slots, waits for completion, reveals grades, claims items, and continues.',false,function(value)
+  toggle(target,'Auto Grading','Fills open grading slots, waits for completion, reveals grades, claims finished items, and continues automatically.',false,function(value)
    gradingDesired=value
    local controller=Backend and Backend.GradingController
    if controller and type(controller.SetEnabled)=='function' then
     local ok,result=pcall(function() return controller:SetEnabled(value) end)
     if not ok or result==false then notify('Auto Grading could not be changed yet.') end
    else
-    notify('Grading backend is still initializing. Try again in a moment.')
+    notify('Grading is still initializing. Try again in a moment.')
    end
   end)
 
@@ -1487,7 +1492,7 @@ local function SetupInventoryFilter(target,filterName)
   section(target,'QUICK SELL HELPERS')
   local presetAdded={Rarity={},Mutations={}}
   local keepAllSnapshot
-  toggle(target,'Quick Sell Preset','Applies the old Syndicate preset: Epic+ rarities plus the commonly used mutation set.',false,function(value)
+  toggle(target,'Quick Sell Preset','Selects Epic+ rarities plus the commonly used mutation set.',false,function(value)
    local presetRarities={'exclusive','mythical','legendary','epic'}
    local presetMutations={'dirty','mint','hologram','void','secret','rainbow','onyx','pure','spotless','perfect'}
    if value then
@@ -1506,7 +1511,7 @@ local function SetupInventoryFilter(target,filterName)
    for _,entry in pairs(blocks) do for _,option in ipairs(entry.buttons) do option.paint() end end
    refreshPreview()
   end)
-  toggle(target,'Keep All Mutations','Matches the old helper: temporarily keeps every known mutation and uses Keep Selected mode.',false,function(value)
+  toggle(target,'Keep All Mutations','Temporarily keeps every known mutation and switches to Keep Selected mode.',false,function(value)
    if value then
     keepAllSnapshot={Mode=settings.Mode,Rarity=table.clone(settings.Selected.Rarity),Mutations=table.clone(settings.Selected.Mutations)}
     table.clear(settings.Selected.Rarity);table.clear(settings.Selected.Mutations)
@@ -1638,18 +1643,17 @@ SetupInventoryFilter(grading,'Grading')
 end
 
 local event=page('Event','06')
-section(event,'HALLOWEEN EVENT')
 section(event,'COLLECTION')
 toggle(event,'Auto Trick or Treat','Visits active Halloween houses, retries available prompts, returns to your starting point, and stops if inventory fills.',backendState('AutoTrickOrTreat',false),function(value) backendToggle('AutoTrickOrTreat',value) end)
-toggle(event,'Grave Digger','Runs the existing grave prompt/cooldown tracker and retries failed digs.',backendState('GraveDigger',false),function(value) backendToggle('GraveDigger',value) end)
+toggle(event,'Grave Digger','Tracks grave cooldowns and retries failed digs.',backendState('GraveDigger',false),function(value) backendToggle('GraveDigger',value) end)
 
 section(event,'ZOMBIES')
-toggle(event,'Zombie Collector','Finds live zombies, handles combat and carryable pickup with the existing vehicle/fullness checks.',backendState('ZombieCollector',false),function(value) backendToggle('ZombieCollector',value) end)
-action(event,'Turn In Zombies','Uses the existing Halloween turn-in routine, then returns you to your previous position.','TURN IN',function()
+toggle(event,'Zombie Collector','Finds live zombies, handles combat, and collects carryables with vehicle/fullness checks.',backendState('ZombieCollector',false),function(value) backendToggle('ZombieCollector',value) end)
+action(event,'Turn In Zombies','Turns in collected zombies, then returns you to your previous position.','TURN IN',function()
  if Backend and type(Backend.TurnInZombies)=='function' then
   Backend.TurnInZombies()
  else
-  notify('Zombie turn-in backend unavailable.')
+  notify('Zombie turn-in is unavailable right now.')
  end
 end)
 
@@ -1658,27 +1662,22 @@ toggle(event,'Auto Market Rolling','Continuously uses the normal Halloween marke
 toggle(event,'Auto Market Rolling x5','Continuously uses the five-roll Halloween market option.',backendState('AutoMarketRollingFive',false),function(value) backendToggle('AutoMarketRollingFive',value) end)
 
 local misc=page('Misc.','07')
-section(misc,'GARDEN')
-toggle(misc,'Auto Harvest','Harvests ready plants using the existing one-plant-at-a-time routine and stops when inventory is full.',backendState('AutoHarvest',false),function(value) backendToggle('AutoHarvest',value) end)
-toggle(misc,'Auto Water Plants','Uses watering cans, skips watered/grown plants, swaps empty cans, and retries pours.',backendState('AutoWaterPlants',false),function(value) backendToggle('AutoWaterPlants',value) end)
-toggle(misc,'Auto Plant Seeds','Plants seed items across your garden using the existing spacing and expansion logic.',backendState('AutoPlantSeeds',false),function(value) backendToggle('AutoPlantSeeds',value) end)
-
 section(misc,'ACTIVITIES')
-toggle(misc,'Auto Basketball','Uses the existing hoop positioning and repeated-shot routine.',backendState('AutoBasketball',false),function(value) backendToggle('AutoBasketball',value) end)
-toggle(misc,'Auto Fishing','Runs the existing fishing state/recast automation.',backendState('AutoFishing',false),function(value) backendToggle('AutoFishing',value) end)
-toggle(misc,'Hay Knocker','Finds current hay targets and runs the existing collection route.',backendState('HayCollector',false),function(value) backendToggle('HayCollector',value) end)
-toggle(misc,'Tree Knocker','Runs the existing tree-knocking automation.',backendState('TreeKnocker',false),function(value) backendToggle('TreeKnocker',value) end)
-toggle(misc,'Police Auction','Runs the existing Police Auction finder/automation.',backendState('PoliceAuction',false),function(value) backendToggle('PoliceAuction',value) end)
+toggle(misc,'Auto Basketball','Positions at the hoop and repeatedly shoots baskets.',backendState('AutoBasketball',false),function(value) backendToggle('AutoBasketball',value) end)
+toggle(misc,'Auto Fishing','Automates fishing and recasting.',backendState('AutoFishing',false),function(value) backendToggle('AutoFishing',value) end)
+toggle(misc,'Hay Knocker','Finds current hay targets and runs the collection route.',backendState('HayCollector',false),function(value) backendToggle('HayCollector',value) end)
+toggle(misc,'Tree Knocker','Finds and knocks available trees automatically.',backendState('TreeKnocker',false),function(value) backendToggle('TreeKnocker',value) end)
+toggle(misc,'Police Auction','Finds and handles Police Auction activity automatically.',backendState('PoliceAuction',false),function(value) backendToggle('PoliceAuction',value) end)
 
 section(misc,'UTILITY')
-action(misc,'Favorite Toggle','Runs the same one-click inventory favorite routine from the old Main tab.','RUN',function()
- if Backend and type(Backend.RunFavoriteToggle)=='function' then Backend.RunFavoriteToggle() else notify('Favorite Toggle backend unavailable.') end
+action(misc,'Favorite Toggle','Runs the inventory favorite toggle action.','RUN',function()
+ if Backend and type(Backend.RunFavoriteToggle)=='function' then Backend.RunFavoriteToggle() else notify('Favorite Toggle is unavailable right now.') end
 end)
-action(misc,'Ore Deposit','Runs the existing uranium deposit routine and returns you to your previous position.','RUN',function()
- if Backend and type(Backend.RunOreDeposit)=='function' then Backend.RunOreDeposit() else notify('Ore Deposit backend unavailable.') end
+action(misc,'Ore Deposit','Deposits uranium and returns you to your previous position.','RUN',function()
+ if Backend and type(Backend.RunOreDeposit)=='function' then Backend.RunOreDeposit() else notify('Ore Deposit is unavailable right now.') end
 end)
 action(misc,'Instant Auction Entry','Sets loaded auction entry prompts to instant interaction.','APPLY',function()
- if Backend and type(Backend.RunInstantAuctionEntry)=='function' then Backend.RunInstantAuctionEntry() else notify('Instant Auction Entry backend unavailable.') end
+ if Backend and type(Backend.RunInstantAuctionEntry)=='function' then Backend.RunInstantAuctionEntry() else notify('Instant Auction Entry is unavailable right now.') end
 end)
 toggle(misc,'Jump Button 1.5x Size','Enlarges the mobile Roblox jump button while enabled.',backendState('MoveJumpButton',false),function(value) backendToggle('MoveJumpButton',value) end)
 
