@@ -1,10 +1,11 @@
--- AMETHYST / PIXEL UI 1.4
+-- AMETHYST / PIXEL UI 1.5
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local GuiService = game:GetService('GuiService')
 local RunService = game:GetService('RunService')
+local TweenService = game:GetService('TweenService')
 local player = Players.LocalPlayer
 assert(player, 'Run AmethystPixel from a client LocalScript')
 local parent = player:WaitForChild('PlayerGui')
@@ -61,11 +62,11 @@ local skyGradient=make('UIGradient',{
  ColorSequenceKeypoint.new(0.5,Color3.fromRGB(47,25,69)),
  ColorSequenceKeypoint.new(1,Color3.fromRGB(15,19,38))}),Rotation=25},root)
 local sky=frame(root,{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,ClipsDescendants=true,ZIndex=1})
--- Three translucent aurora layers create depth without external textures.
+-- Five translucent aurora ribbons create depth without external textures.
 local nebulae={}
-for i=1,3 do
+for i=1,5 do
  local cloud=frame(sky,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.2+i*0.17,0.2+i*0.15),
-  Size=UDim2.fromScale(1.3,0.36+i*0.06),BackgroundColor3=accent,BackgroundTransparency=0.82+i*0.025,Rotation=-28+i*14})
+  Size=UDim2.fromScale(1.45,0.18+i*0.035),BackgroundColor3=accent:Lerp(Color3.fromRGB(80,145,245),i/12),BackgroundTransparency=0.76+i*0.025,Rotation=-28+i*14})
  make('UICorner',{CornerRadius=UDim.new(0.5,0)},cloud)
  make('UIGradient',{Rotation=90,Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),
   NumberSequenceKeypoint.new(0.3,0.55),NumberSequenceKeypoint.new(0.5,0.2),
@@ -99,6 +100,50 @@ connect(starLayer:GetPropertyChangedSignal('AbsoluteSize'),layoutConstellations)
 layoutConstellations()
 local meteor=frame(starLayer,{Size=UDim2.fromOffset(75,2),BackgroundColor3=ink,Rotation=24,Visible=false})
 make('UIGradient',{Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(1,0.12)})},meteor)
+-- A diagonal galaxy ribbon, luminous starbursts, and an orbital planet.
+local galaxyRandom=Random.new(151)
+local dust={}
+for i=1,76 do
+ local x=galaxyRandom:NextNumber()
+ local y=0.88-x*0.73+math.sin(x*7)*0.055+galaxyRandom:NextNumber(-0.095,0.095)
+ local size=i%13==0 and 3 or 1
+ local speck=tint(frame(starLayer,{Position=UDim2.fromScale(x,y),
+  Size=UDim2.fromOffset(size,size),BackgroundTransparency=galaxyRandom:NextNumber(0.35,0.78)}),'BackgroundColor3')
+ table.insert(dust,{object=speck,phase=galaxyRandom:NextNumber(0,6.28)})
+end
+local flares={}
+for _,p in ipairs({{0.21,0.66},{0.56,0.43},{0.82,0.21},{0.91,0.71}}) do
+ local flare=frame(starLayer,{Position=UDim2.fromScale(p[1],p[2]),Size=UDim2.fromOffset(1,1),BackgroundTransparency=1})
+ for _,d in ipairs({{1,11},{11,1},{3,3}}) do
+  local ray=tint(frame(flare,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),
+   Size=UDim2.fromOffset(d[1],d[2]),BackgroundTransparency=0.24}),'BackgroundColor3')
+  table.insert(flares,{object=ray,phase=p[1]*12})
+ end
+end
+-- Nested translucent circles supply a soft halo using native geometry.
+local planet=frame(sky,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.84,0.29),
+ Size=UDim2.fromOffset(100,100),BackgroundTransparency=1})
+for i=9,1,-1 do
+ local halo=tint(frame(planet,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),
+  Size=UDim2.fromOffset(100+i*8,100+i*8),BackgroundTransparency=0.985}),'BackgroundColor3')
+ make('UICorner',{CornerRadius=UDim.new(1,0)},halo)
+end
+local sphere=frame(planet,{Size=UDim2.fromScale(1,1),BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=0.22})
+make('UICorner',{CornerRadius=UDim.new(1,0)},sphere)
+local planetGradient=make('UIGradient',{Rotation=35,Color=ColorSequence.new({
+ ColorSequenceKeypoint.new(0,accent:Lerp(ink,0.35)),ColorSequenceKeypoint.new(0.45,accent:Lerp(Color3.fromRGB(35,24,60),0.4)),
+ ColorSequenceKeypoint.new(1,Color3.fromRGB(13,12,26))})},sphere)
+local orbit=frame(planet,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),
+ Size=UDim2.fromOffset(175,60),BackgroundTransparency=1})
+local orbitSegments={}
+for i=1,56 do
+ local angle=(i-1)/56*math.pi*2
+ local point=tint(frame(orbit,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5+math.cos(angle)*0.5,0.5+math.sin(angle)*0.5),
+  Size=UDim2.fromOffset(5,1),Rotation=math.deg(math.atan2(math.cos(angle)*30,-math.sin(angle)*87.5)),
+  BackgroundTransparency=0.45+0.25*(math.sin(angle)+1)/2}),'BackgroundColor3')
+ table.insert(orbitSegments,point)
+end
+orbit.Rotation=-24
 local random=Random.new(91)
 local stars={}
 for i=1,42 do
@@ -115,6 +160,13 @@ connect(RunService.Heartbeat,function(dt)
  accumulator=accumulator+dt
  if accumulator<0.05 then return end
  elapsed=elapsed+accumulator; accumulator=0
+ planet.Position=UDim2.fromScale(0.84+math.sin(elapsed*0.055)*0.025,0.29+math.sin(elapsed*0.08)*0.025)
+ orbit.Rotation=-24+math.sin(elapsed*0.07)*5
+ planetGradient.Rotation=35+math.sin(elapsed*0.06)*18
+ if showStars then
+  for _,d in ipairs(dust) do d.object.BackgroundTransparency=0.45+(math.sin(elapsed*0.45+d.phase)+1)*0.18 end
+  for _,f in ipairs(flares) do f.object.BackgroundTransparency=0.18+(math.sin(elapsed*0.8+f.phase)+1)*0.19 end
+ end
  for i,cloud in ipairs(nebulae) do
   cloud.Position=UDim2.fromScale(0.2+i*0.17+math.sin(elapsed*0.075+i)*0.12,0.2+i*0.15+math.cos(elapsed*0.065+i)*0.09)
   cloud.Rotation=-28+i*14+math.sin(elapsed*0.04+i)*12
@@ -139,13 +191,45 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  1.4',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  1.5',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
-local sidebar=frame(root,{Position=UDim2.fromOffset(0,56),Size=UDim2.new(0,136,1,-84),BackgroundColor3=Color3.fromRGB(22,16,34),BackgroundTransparency=0.25})
-local nav=make('ScrollingFrame',{Position=UDim2.fromOffset(8,30),Size=UDim2.new(1,-16,1,-36),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=2,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new()},sidebar)
-make('UIListLayout',{Padding=UDim.new(0,3),SortOrder=Enum.SortOrder.LayoutOrder},nav)
-label(sidebar,'NAVIGATION',{Position=UDim2.fromOffset(16,10),Size=UDim2.fromOffset(110,14),TextColor3=muted,TextSize=10})
+-- Floating two-column navigation dock: pixel icons with short labels.
+local sidebar=frame(root,{Position=UDim2.fromOffset(10,72),Size=UDim2.new(0,132,1,-112),
+ BackgroundColor3=Color3.fromRGB(20,15,32),BackgroundTransparency=0.18})
+make('UICorner',{CornerRadius=UDim.new(0,10)},sidebar)
+local dockStroke=tint(make('UIStroke',{Thickness=1,Transparency=0.7},sidebar),'Color')
+make('UIGradient',{Rotation=90,Color=ColorSequence.new(Color3.fromRGB(255,255,255),Color3.fromRGB(118,100,154))},sidebar)
+label(sidebar,'E X P L O R E',{Position=UDim2.fromOffset(12,12),Size=UDim2.new(1,-24,0,14),TextSize=9,TextColor3=muted,TextXAlignment=Enum.TextXAlignment.Center})
+local nav=make('ScrollingFrame',{Position=UDim2.fromOffset(8,36),Size=UDim2.new(1,-16,1,-64),
+ BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=2,ScrollBarImageColor3=accent,
+ AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new()},sidebar)
+make('UIGridLayout',{CellSize=UDim2.new(0.5,-3,0,61),CellPadding=UDim2.fromOffset(6,6),
+ SortOrder=Enum.SortOrder.LayoutOrder},nav)
+local navCount=label(sidebar,'08 SPACES',{Position=UDim2.new(0,8,1,-22),Size=UDim2.new(1,-16,0,14),
+ TextSize=9,TextColor3=muted,TextXAlignment=Enum.TextXAlignment.Center})
+local iconPatterns={
+ Account={'01110','10001','01110','10001','11111'},
+ Farming={'00100','10101','01110','00100','00100'},
+ Shop={'11111','10101','11111','10001','10101'},
+ ['Quick Sell']={'01110','10100','01110','00101','01110'},
+ Grading={'00100','01110','11111','01110','00100'},
+ Event={'10101','01110','11111','01110','10101'},
+ Appearance={'10001','01010','00100','01010','10001'},
+ Settings={'10101','01110','11011','01110','10101'}
+}
+local navTweens={}
+local function paintTab(t,selected,hovered)
+ if navTweens[t] then navTweens[t]:Cancel() end
+ local tween=TweenService:Create(t.button,TweenInfo.new(0.16,Enum.EasingStyle.Quad),{
+  BackgroundTransparency=selected and 0.08 or (hovered and 0.35 or 0.78),
+  BackgroundColor3=selected and accent:Lerp(Color3.fromRGB(24,17,39),0.64) or Color3.fromRGB(44,33,62)})
+ navTweens[t]=tween; tween:Play()
+ t.caption.TextColor3=selected and ink or muted
+ t.border.Transparency=selected and 0.28 or (hovered and 0.65 or 0.92)
+ t.indicator.Visible=selected
+ for _,pixel in ipairs(t.pixels) do pixel.BackgroundTransparency=selected and 0 or (hovered and 0.12 or 0.4) end
+end
 local body=frame(root,{Position=UDim2.fromOffset(152,72),Size=UDim2.new(1,-168,1,-112),BackgroundTransparency=1})
 local title=label(body,'Account',{Size=UDim2.new(1,-185,0,26),TextSize=22})
 local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffset(0,31),Size=UDim2.new(1,0,0,16),TextSize=10,TextColor3=muted})
@@ -200,22 +284,38 @@ local function choose(name)
  active=name; title.Text=name; search.Text=''
  for n,t in pairs(tabs) do
   t.page.Visible=n==name
-  t.button.BackgroundTransparency=n==name and 0 or 1
-  t.button.TextColor3=n==name and ink or muted
-  t.indicator.Visible=n==name
+  paintTab(t,n==name,false)
  end
 end
 local order=0
 local tabOrder=0
 local function page(name, icon)
  tabOrder=tabOrder+1
- local b=button(nav,name,{LayoutOrder=tabOrder,Size=UDim2.new(1,0,0,32),TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1})
- make('UIPadding',{PaddingLeft=UDim.new(0,10)},b)
+ local b=button(nav,'',{LayoutOrder=tabOrder,Size=UDim2.fromOffset(55,61),BackgroundTransparency=0.78,AutoButtonColor=false})
+ make('UICorner',{CornerRadius=UDim.new(0,7)},b)
+ local border=tint(make('UIStroke',{Thickness=1,Transparency=0.92},b),'Color')
+ local caption=label(b,name,{Position=UDim2.fromOffset(1,42),Size=UDim2.new(1,-2,0,14),TextSize=9,
+  TextColor3=muted,TextXAlignment=Enum.TextXAlignment.Center})
+ local pixels={}
+ local iconBox=frame(b,{AnchorPoint=Vector2.new(0.5,0),Position=UDim2.new(0.5,0,0,12),Size=UDim2.fromOffset(20,20),BackgroundTransparency=1})
+ for y,line in ipairs(iconPatterns[name] or iconPatterns.Event) do
+  for x=1,#line do
+   if line:sub(x,x)=='1' then
+    table.insert(pixels,tint(frame(iconBox,{Position=UDim2.fromOffset((x-1)*4,(y-1)*4),
+     Size=UDim2.fromOffset(3,3),BackgroundTransparency=0.4}),'BackgroundColor3'))
+   end
+  end
+ end
  local p=make('ScrollingFrame',{Position=UDim2.fromOffset(0,61),Size=UDim2.new(1,0,1,-61),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3=accent,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,Visible=false},body)
  make('UIListLayout',{Padding=UDim.new(0,9),SortOrder=Enum.SortOrder.LayoutOrder},p)
  make('UIPadding',{PaddingRight=UDim.new(0,9),PaddingBottom=UDim.new(0,12)},p)
- local indicator=tint(frame(b,{Position=UDim2.fromOffset(0,7),Size=UDim2.fromOffset(2,18),Visible=false}),'BackgroundColor3')
- tabs[name]={page=p,button=b,indicator=indicator}; rows[name]={}
+ local indicator=tint(frame(b,{AnchorPoint=Vector2.new(0.5,0),Position=UDim2.new(0.5,0,0,4),Size=UDim2.fromOffset(12,2),Visible=false}),'BackgroundColor3')
+ tabs[name]={page=p,button=b,indicator=indicator,caption=caption,border=border,pixels=pixels}; rows[name]={}
+ navCount.Text=string.format('%02d SPACES',tabOrder)
+ connect(b.MouseEnter,function() paintTab(tabs[name],active==name,true) end)
+ connect(b.MouseLeave,function() paintTab(tabs[name],active==name,false) end)
+ connect(b.SelectionGained,function() paintTab(tabs[name],active==name,true) end)
+ connect(b.SelectionLost,function() paintTab(tabs[name],active==name,false) end)
  connect(b.Activated,function() choose(name) end)
  return p
 end
@@ -348,7 +448,11 @@ local function applyAccent(color)
  for _,t in ipairs(themes) do t[1][t[2]]=accent end
  for _,t in pairs(tabs) do t.page.ScrollBarImageColor3=accent end
  for _,draw in ipairs(toggleDraws) do draw() end
- for _,cloud in ipairs(nebulae) do cloud.BackgroundColor3=accent end
+ planetGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,accent:Lerp(ink,0.35)),
+  ColorSequenceKeypoint.new(0.45,accent:Lerp(Color3.fromRGB(35,24,60),0.4)),
+  ColorSequenceKeypoint.new(1,Color3.fromRGB(13,12,26))})
+ nav.ScrollBarImageColor3=accent
+ for i,cloud in ipairs(nebulae) do cloud.BackgroundColor3=accent:Lerp(Color3.fromRGB(80,145,245),i/12) end
  for _,link in ipairs(links) do link.object.BackgroundColor3=accent end
  for _,star in ipairs(stars) do star.object.BackgroundColor3=ink:Lerp(accent,0.4) end
  skyGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(12,11,25)),
@@ -369,7 +473,7 @@ for index,c in ipairs(colors) do
  make('UIStroke',{Color=color,Thickness=1,Transparency=0.5},swatch)
  connect(swatch.Activated,function() applyAccent(color) end)
 end
-toggle(appearance,'Animated sky','Aurora layers, drifting stars, and shooting stars.',true,function(v) animatedSky=v end)
+toggle(appearance,'Animated sky','Nebula ribbons, an orbital planet, and shooting stars.',true,function(v) animatedSky=v end)
 toggle(appearance,'Pixel stars','Show or hide the star field independently.',true,function(v) showStars=v; starLayer.Visible=v end)
 local settings=page('Settings','07')
 section(settings,'WINDOW & PREFERENCES')
