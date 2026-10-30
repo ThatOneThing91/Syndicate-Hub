@@ -882,20 +882,44 @@ function Engine.Value(data,catalog)
  end
  return tonumber(value) or 0
 end
+function Engine.DisplayDetails(data,catalog)
+ if type(data)~='table' then return 'Unknown','No mutation' end
+ local id=tostring(data.ItemId or data.itemId or data.ItemID or '')
+ local conf=catalog.Items[id] or catalog.Items[tonumber(id)] or {}
+ local rarity=tostring(conf.Rarity or data.Rarity or 'Unknown')
+ local mutations,seen={},{}
+ local function add(value)
+  if type(value)=='table' then value=value.Name or value.name end
+  if type(value)~='string' then return end
+  local text=value:match('^%s*(.-)%s*$')
+  if text=='' or text:lower()=='none' then return end
+  local key=text:lower()
+  if not seen[key] then seen[key]=true;mutations[#mutations+1]=text end
+ end
+ if type(data.Mutators)=='table' then
+  for k,v in pairs(data.Mutators) do
+   if type(k)=='string' and v~=false and v~=nil then add(k)
+   elseif type(v)=='string' or type(v)=='table' then add(v) end
+  end
+ end
+ for _,field in ipairs({'CleanMutation','PerfectMutation','TimeMutation','MiningMutation','EventMutation','Mutator'}) do add(data[field]) end
+ table.sort(mutations,function(a,b) return a:lower()<b:lower() end)
+ return rarity,#mutations>0 and table.concat(mutations,', ') or 'No mutation'
+end
 
 local function SetupInventoryFilter(target,filterName)
  local isQuickSell=filterName=='Quick Sell'
  local isGrading=filterName=='Grading'
  local gradingMode='Grade All'
  local groups={'Consumables','Event Mutations','Mutations','Rarity'}
- local settings={Mode=isQuickSell and 'Sell Selected' or 'Keep Selected',Match='Any',Selected={},AllowAccessories=false,AccessoryState={},WornItems={}}
+ local settings={Mode=isQuickSell and 'Sell Selected' or 'Keep Selected',Match='Any',Selected={},AllowAccessories=isGrading,AccessoryState={},WornItems={}}
  for _,name in ipairs(groups) do settings.Selected[name]={} end
  local catalog={Items={},EventNames={},MutationNames={}}
  local options,blocks={},{}
  local inventory,results={},{}
  local loaded,loading=false,false
  local layoutWidth=500
- local statusLabel,summaryLabel
+ local summaryLabel
  local refreshPreview,layoutFilter,buildOptions
  local function newBlock(height)
   order=order+1
@@ -924,16 +948,18 @@ local function SetupInventoryFilter(target,filterName)
   end
   refreshPreview()
  end)
- local accessoriesBlock=newBlock(96)
- label(accessoriesBlock,isGrading and 'Allow accessory grading' or 'Allow accessory sales',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=12})
- local accessoriesHint=label(accessoriesBlock,isGrading and 'Applies only to Grade Selected. Worn accessories stay excluded.' or 'Worn accessories always stay protected.',{Position=UDim2.fromOffset(12,34),Size=UDim2.new(1,-24,0,25),TextSize=10,TextColor3=muted,TextWrapped=true})
- local accessoryToggle=button(accessoriesBlock,'OFF',{Position=UDim2.new(1,-70,0,64),Size=UDim2.fromOffset(58,24),TextSize=11})
- connect(accessoryToggle.Activated,function()
-  settings.AllowAccessories=not settings.AllowAccessories
-  accessoryToggle.Text=settings.AllowAccessories and 'ON' or 'OFF'
-  accessoryToggle.BackgroundColor3=settings.AllowAccessories and accent:Lerp(Color3.fromRGB(24,18,35),0.5) or Color3.fromRGB(43,33,62)
-  refreshPreview()
- end)
+ if isQuickSell then
+  local accessoriesBlock=newBlock(96)
+  label(accessoriesBlock,'Allow accessory sales',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=12})
+  local accessoriesHint=label(accessoriesBlock,'Worn accessories always stay protected.',{Position=UDim2.fromOffset(12,34),Size=UDim2.new(1,-24,0,25),TextSize=10,TextColor3=muted,TextWrapped=true})
+  local accessoryToggle=button(accessoriesBlock,'OFF',{Position=UDim2.new(1,-70,0,64),Size=UDim2.fromOffset(58,24),TextSize=11})
+  connect(accessoryToggle.Activated,function()
+   settings.AllowAccessories=not settings.AllowAccessories
+   accessoryToggle.Text=settings.AllowAccessories and 'ON' or 'OFF'
+   accessoryToggle.BackgroundColor3=settings.AllowAccessories and accent:Lerp(Color3.fromRGB(24,18,35),0.5) or Color3.fromRGB(43,33,62)
+   refreshPreview()
+  end)
+ end
  for _,group in ipairs(groups) do
   local block=newBlock(52)
   local header=button(block,'',{Position=UDim2.fromOffset(0,0),Size=UDim2.new(1,0,0,50),BackgroundTransparency=1})
@@ -963,93 +989,71 @@ local function SetupInventoryFilter(target,filterName)
   end)
   connect(none.Activated,function() settings.Selected[group]={}; for _,entry in ipairs(blocks[group].buttons) do entry.paint() end; refreshPreview() end)
  end
- local toolsBlock=newBlock(100)
+ local toolsBlock=newBlock(56)
  local refreshButton=button(toolsBlock,'Refresh categories',{Position=UDim2.fromOffset(12,12),Size=UDim2.new(0.5,-18,0,32),TextSize=10})
- local inventoryButton=button(toolsBlock,isGrading and 'Read gradable items' or 'Read inventory',{Position=UDim2.new(0.5,6,0,12),Size=UDim2.new(0.5,-18,0,32),TextSize=10})
- statusLabel=label(toolsBlock,'Loading definitions...',{Position=UDim2.fromOffset(12,52),Size=UDim2.new(1,-24,0,40),TextSize=10,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
- local preview=newBlock(420)
- summaryLabel=label(preview,'No inventory loaded.',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,54),TextSize=11,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
- local previewScroll=make('ScrollingFrame',{Position=UDim2.fromOffset(12,68),Size=UDim2.new(1,-24,1,-80),
-  BackgroundColor3=Color3.fromRGB(24,18,35),BackgroundTransparency=0.35,BorderSizePixel=0,
-  AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new(),ScrollBarThickness=4,ScrollBarImageColor3=accent,
-  ScrollingDirection=Enum.ScrollingDirection.Y},preview)
- make('UICorner',{CornerRadius=UDim.new(0,8)},previewScroll)
- make('UIPadding',{PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),PaddingLeft=UDim.new(0,6),PaddingRight=UDim.new(0,6)},previewScroll)
- make('UIListLayout',{Padding=UDim.new(0,5),SortOrder=Enum.SortOrder.LayoutOrder},previewScroll)
- local previewEmpty=label(previewScroll,isQuickSell and 'Nothing currently matches your SELL rules.' or (isGrading and 'No items are currently queued to grade.' or 'Use Read inventory to preview your selections.'),{
-  Size=UDim2.new(1,-8,0,46),TextSize=11,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Center,LayoutOrder=0})
+ local inventoryButton
+ if isGrading then
+  refreshButton.Size=UDim2.new(1,-24,0,32)
+ else
+  inventoryButton=button(toolsBlock,'Read inventory',{Position=UDim2.new(0.5,6,0,12),Size=UDim2.new(0.5,-18,0,32),TextSize=10})
+ end
+ local preview,summaryLabel,previewScroll,previewEmpty
  local previewRows={}
  local function clearPreviewRows()
   for _,item in ipairs(previewRows) do if item and item.Parent then item:Destroy() end end
   table.clear(previewRows)
  end
  local function showResults()
+  if not isQuickSell or not previewScroll then return end
   clearPreviewRows()
   local visible={}
   for _,result in ipairs(results) do
-   if isQuickSell then
-    if result.status=='Would sell' then visible[#visible+1]=result end
-   elseif isGrading then
-    if result.status=='Will grade' then visible[#visible+1]=result end
-   else
-    visible[#visible+1]=result
-   end
+   if result.status=='Would sell' then visible[#visible+1]=result end
   end
   previewEmpty.Visible=#visible==0
-  previewEmpty.Text=isQuickSell and 'Nothing currently matches your SELL rules.'
-   or (isGrading and 'No items are currently queued to grade.' or 'No inventory results to display.')
+  previewEmpty.Text='Nothing currently matches your SELL rules.'
   if #visible==0 then previewScroll.CanvasPosition=Vector2.new();return end
   for index,result in ipairs(visible) do
-   local item=frame(previewScroll,{Size=UDim2.new(1,-8,0,54),BackgroundColor3=Color3.fromRGB(31,24,45),
+   local item=frame(previewScroll,{Size=UDim2.new(1,-8,0,58),BackgroundColor3=Color3.fromRGB(31,24,45),
     BackgroundTransparency=0.18,LayoutOrder=index})
    make('UICorner',{CornerRadius=UDim.new(0,7)},item)
-   local nameLabel=label(item,result.name,{Position=UDim2.fromOffset(10,7),Size=UDim2.new(1,-118,0,18),
+   label(item,result.name,{Position=UDim2.fromOffset(10,7),Size=UDim2.new(1,-118,0,18),
     TextSize=11,TextTruncate=Enum.TextTruncate.AtEnd})
-   local priceLabel=label(item,string.format('$%s',tostring(math.floor(result.value or 0))),{
-    Position=UDim2.new(1,-104,0,7),Size=UDim2.fromOffset(92,18),TextSize=11,TextXAlignment=Enum.TextXAlignment.Right})
-   if isQuickSell or isGrading then tint(priceLabel,'TextColor3') end
-   label(item,result.status..'  ·  '..result.reason,{Position=UDim2.fromOffset(10,29),Size=UDim2.new(1,-20,0,17),
-    TextSize=9,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
+   tint(label(item,string.format('$%s',tostring(math.floor(result.value or 0))),{
+    Position=UDim2.new(1,-104,0,7),Size=UDim2.fromOffset(92,18),TextSize=11,TextXAlignment=Enum.TextXAlignment.Right}),'TextColor3')
+   label(item,tostring(result.rarity)..'  ·  '..tostring(result.mutations),{
+    Position=UDim2.fromOffset(10,31),Size=UDim2.new(1,-20,0,18),TextSize=9,TextColor3=muted,
+    TextTruncate=Enum.TextTruncate.AtEnd})
    previewRows[#previewRows+1]=item
   end
   previewScroll.CanvasPosition=Vector2.new()
  end
+ if isQuickSell then
+  preview=newBlock(420)
+  summaryLabel=label(preview,'No inventory loaded.',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,54),TextSize=11,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
+  previewScroll=make('ScrollingFrame',{Position=UDim2.fromOffset(12,68),Size=UDim2.new(1,-24,1,-80),
+   BackgroundColor3=Color3.fromRGB(24,18,35),BackgroundTransparency=0.35,BorderSizePixel=0,
+   AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new(),ScrollBarThickness=4,ScrollBarImageColor3=accent,
+   ScrollingDirection=Enum.ScrollingDirection.Y},preview)
+  make('UICorner',{CornerRadius=UDim.new(0,8)},previewScroll)
+  make('UIPadding',{PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),PaddingLeft=UDim.new(0,6),PaddingRight=UDim.new(0,6)},previewScroll)
+  make('UIListLayout',{Padding=UDim.new(0,5),SortOrder=Enum.SortOrder.LayoutOrder},previewScroll)
+  previewEmpty=label(previewScroll,'Nothing currently matches your SELL rules.',{
+   Size=UDim2.new(1,-8,0,46),TextSize=11,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Center,LayoutOrder=0})
+ end
  refreshPreview=function()
   results={}
-  if isGrading then
-   local willGrade,skipped=0,0
-   for guid,data in pairs(inventory) do
-    local matched,reason
-    if gradingMode=='Grade All' then
-     matched,reason=true,'Grade All'
-    else
-     matched,reason=Engine.SelectionMatch(data,catalog,settings,guid)
-    end
-    if matched then willGrade=willGrade+1 else skipped=skipped+1 end
-    local id=type(data)=='table' and tostring(data.ItemId or data.itemId or '') or ''
-    local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
-    results[#results+1]={
-     status=matched and 'Will grade' or 'Skip',reason=reason,
-     name=type(conf)=='table' and tostring(conf.Name or id) or ('Unknown item '..id),
-     guid=tostring(guid),value=Engine.Value(data,catalog)
-    }
-   end
-   table.sort(results,function(a,b)
-    if a.value~=b.value then return a.value>b.value end
-    if a.name~=b.name then return a.name<b.name end
-    return a.guid<b.guid
-   end)
-   summaryLabel.Text=string.format('WILL GRADE %d  ·  SKIP %d\nMode: %s',willGrade,skipped,gradingMode)
-  else
+  if isQuickSell then
    local counts={['Would sell']=0,Keep=0,Protected=0,Unknown=0}
    for guid,data in pairs(inventory) do
     local state,reason=Engine.Evaluate(data,catalog,settings,guid)
     counts[state]=counts[state]+1
     local id=type(data)=='table' and tostring(data.ItemId or '') or ''
     local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
+    local rarity,mutations=Engine.DisplayDetails(data,catalog)
     results[#results+1]={
      status=state,reason=reason,name=type(conf)=='table' and tostring(conf.Name or id) or ('Unknown item '..id),
-     guid=tostring(guid),value=Engine.Value(data,catalog)
+     guid=tostring(guid),value=Engine.Value(data,catalog),rarity=rarity,mutations=mutations
     }
    end
    table.sort(results,function(a,b)
@@ -1057,13 +1061,15 @@ local function SetupInventoryFilter(target,filterName)
     if a.name~=b.name then return a.name<b.name end
     return a.guid<b.guid
    end)
-   summaryLabel.Text=string.format('WILL SELL %d  ·  KEEP %d  ·  PROTECTED %d\nSale queue below is sorted highest value first.',counts['Would sell'],counts.Keep,counts.Protected)
+   if summaryLabel then
+    summaryLabel.Text=string.format('WILL SELL %d  ·  KEEP %d  ·  PROTECTED %d\nSale queue is sorted highest value first.',counts['Would sell'],counts.Keep,counts.Protected)
+   end
   end
   for _,group in ipairs(groups) do
    local selected=0;for _ in pairs(settings.Selected[group]) do selected=selected+1 end
    blocks[group].caption.Text=(blocks[group].expanded and '- ' or '+ ')..group..'  ('..selected..'/'..#(options[group] or {})..')'
   end
-  showResults()
+  if isQuickSell then showResults() end
  end
   buildOptions=function(group)
   local block=blocks[group]
@@ -1145,10 +1151,9 @@ local function SetupInventoryFilter(target,filterName)
      for key in pairs(settings.Selected[group]) do if not seen[group][key] then settings.Selected[group][key]=nil end end
      buildOptions(group)
     end
-    statusLabel.Text=mutationsAvailable and (isGrading and 'Grading categories loaded. Grade All ignores filters; Grade Selected uses the selections below.' or 'Definitions loaded from game modules. New options start unselected. Rejoin for newly deployed module changes.') or 'Item categories loaded. Some mutation definitions are unavailable.'
     layoutFilter(layoutWidth)
    end)
-   if not ok and gui.Parent then statusLabel.Text='Catalog unavailable: '..tostring(err) end
+   if not ok and gui.Parent then notify('Category definitions unavailable: '..tostring(err)) end
    loading=false
   end)
  end
@@ -1268,15 +1273,17 @@ local function SetupInventoryFilter(target,filterName)
   inventory=data;refreshPreview()
   return true
  end
+  if inventoryButton then
   connect(inventoryButton.Activated,function()
-  if reading then return end
-  reading=true;inventoryButton.Text='Reading...'
-  task.spawn(function()
-   readFreshInventory(true)
-   if gui.Parent then inventoryButton.Text=isGrading and 'Read gradable items' or 'Read inventory' end
-   reading=false
+   if reading then return end
+   reading=true;inventoryButton.Text='Reading...'
+   task.spawn(function()
+    readFreshInventory(true)
+    if gui.Parent then inventoryButton.Text='Read inventory' end
+    reading=false
+   end)
   end)
- end)
+ end
 
  if isGrading then
   section(target,'GRADING CONTROL')
@@ -1319,7 +1326,6 @@ local function SetupInventoryFilter(target,filterName)
   end
 
   task.spawn(function()
-   local previewTimer=0
    while gui.Parent do
     if active=='Grading' then
      local controller=Backend and Backend.GradingController
@@ -1345,13 +1351,8 @@ local function SetupInventoryFilter(target,filterName)
        end
       end
      end
-     previewTimer=previewTimer+1
-     if loaded and previewTimer>=4 then
-      previewTimer=0
-      pcall(function() readFreshInventory(false) end)
-     end
     else
-     previewTimer=4
+     previewTimer=0
     end
     task.wait(1)
    end
