@@ -1,4 +1,4 @@
--- AMETHYST / PIXEL UI 1.8
+-- AMETHYST / PIXEL UI 1.9
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
@@ -74,41 +74,6 @@ for i=1,4 do
   NumberSequenceKeypoint.new(0.7,0.55),NumberSequenceKeypoint.new(1,1)})},cloud)
  table.insert(nebulae,cloud)
 end
--- Fine etched contours add structure instead of luminous blobs.
-local contours={}
-for band=1,5 do
- for segment=1,22 do
-  if segment%7~=0 then
-   local x=(segment-1)/22
-   local x2=segment/22
-   local y=0.42+band*0.065+math.sin(x*5.8+band*0.16)*0.13
-   local y2=0.42+band*0.065+math.sin(x2*5.8+band*0.16)*0.13
-   local line=tint(frame(sky,{AnchorPoint=Vector2.new(0,0.5),BackgroundTransparency=0.88}),'BackgroundColor3')
-   table.insert(contours,{object=line,a=Vector2.new(x,y),b=Vector2.new(x2,y2)})
-  end
- end
-end
-local function layoutContours()
- local size=sky.AbsoluteSize
- for _,c in ipairs(contours) do
-  local a=Vector2.new(c.a.X*size.X,c.a.Y*size.Y)
-  local b=Vector2.new(c.b.X*size.X,c.b.Y*size.Y)
-  local delta=b-a
-  c.object.Position=UDim2.fromOffset(a.X,a.Y)
-  c.object.Size=UDim2.fromOffset(delta.Magnitude,1)
-  c.object.Rotation=math.deg(math.atan2(delta.Y,delta.X))
- end
-end
-connect(sky:GetPropertyChangedSignal('AbsoluteSize'),layoutContours)
-layoutContours()
--- Sparse pixel texture breaks up the empty areas without raising the brightness.
-for y=1,9 do
- for x=1,14 do
-  if (x+y)%3==0 then
-   tint(frame(sky,{Position=UDim2.fromScale(x/15,y/10),Size=UDim2.fromOffset(1,1),BackgroundTransparency=0.86}),'BackgroundColor3')
-  end
- end
-end
 local function refreshSky()
  local strength=skyIntensity/100
  local dark=Color3.fromRGB(13,11,23)
@@ -120,36 +85,11 @@ local function refreshSky()
   ColorSequenceKeypoint.new(1,Color3.fromRGB(16,13,29))})
  for i,cloud in ipairs(nebulae) do
   cloud.BackgroundColor3=i%2==0 and blue or accent
-  cloud.BackgroundTransparency=0.96-strength*0.10+i*0.003
+  cloud.BackgroundTransparency=0.91-strength*0.12+i*0.008
  end
- for _,c in ipairs(contours) do c.object.BackgroundTransparency=0.94-strength*0.20 end
 end
 refreshSky()
 local starLayer=frame(sky,{Size=UDim2.fromScale(1,1),BackgroundTransparency=1})
--- Faint constellation fragments complement the small drifting stars.
-local points={{0.12,0.23},{0.21,0.16},{0.31,0.28},{0.42,0.19},{0.67,0.72},{0.79,0.64},{0.88,0.78}}
-local links={}
-for i,point in ipairs(points) do
- local dot=frame(starLayer,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(point[1],point[2]),
-  Size=UDim2.fromOffset(3,3),BackgroundColor3=ink,BackgroundTransparency=0.3})
- if i~=1 and i~=5 then
-  local line=frame(starLayer,{AnchorPoint=Vector2.new(0,0.5),BackgroundColor3=accent,BackgroundTransparency=0.88})
-  table.insert(links,{object=line,a=points[i-1],b=point})
- end
-end
-local function layoutConstellations()
- local size=starLayer.AbsoluteSize
- for _,link in ipairs(links) do
-  local a=Vector2.new(link.a[1]*size.X,link.a[2]*size.Y)
-  local b=Vector2.new(link.b[1]*size.X,link.b[2]*size.Y)
-  local delta=b-a
-  link.object.Position=UDim2.fromOffset(a.X,a.Y)
-  link.object.Size=UDim2.fromOffset(delta.Magnitude,1)
-  link.object.Rotation=math.deg(math.atan2(delta.Y,delta.X))
- end
-end
-connect(starLayer:GetPropertyChangedSignal('AbsoluteSize'),layoutConstellations)
-layoutConstellations()
 local meteor=frame(starLayer,{Size=UDim2.fromOffset(75,1),BackgroundColor3=ink,Rotation=24,Visible=false})
 make('UIGradient',{Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(1,0.12)})},meteor)
 -- A restrained diagonal star field and fine starbursts.
@@ -162,15 +102,6 @@ for i=1,60 do
  local speck=tint(frame(starLayer,{Position=UDim2.fromScale(x,y),
   Size=UDim2.fromOffset(size,size),BackgroundTransparency=galaxyRandom:NextNumber(0.65,0.86)}),'BackgroundColor3')
  table.insert(dust,{object=speck,phase=galaxyRandom:NextNumber(0,6.28)})
-end
-local flares={}
-for _,p in ipairs({{0.21,0.66},{0.56,0.43},{0.82,0.21},{0.91,0.71}}) do
- local flare=frame(starLayer,{Position=UDim2.fromScale(p[1],p[2]),Size=UDim2.fromOffset(1,1),BackgroundTransparency=1})
- for _,d in ipairs({{1,11},{11,1},{3,3}}) do
-  local ray=tint(frame(flare,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),
-   Size=UDim2.fromOffset(d[1],d[2]),BackgroundTransparency=0.24}),'BackgroundColor3')
-  table.insert(flares,{object=ray,phase=p[1]*12})
- end
 end
 local random=Random.new(91)
 local stars={}
@@ -190,7 +121,6 @@ connect(RunService.Heartbeat,function(dt)
  elapsed=elapsed+accumulator; accumulator=0
  if showStars then
   for _,d in ipairs(dust) do d.object.BackgroundTransparency=0.68+(math.sin(elapsed*0.45+d.phase)+1)*0.10 end
-  for _,f in ipairs(flares) do f.object.BackgroundTransparency=0.48+(math.sin(elapsed*0.8+f.phase)+1)*0.16 end
  end
  for i,cloud in ipairs(nebulae) do
   cloud.Position=UDim2.fromScale(0.2+i*0.17+math.sin(elapsed*0.075+i)*0.12,0.2+i*0.15+math.cos(elapsed*0.065+i)*0.09)
@@ -216,7 +146,7 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  1.8',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  1.9',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 -- Slim vertical text navigation, with the original stacked layout.
@@ -224,13 +154,43 @@ local sidebar=frame(root,{Position=UDim2.fromOffset(0,56),Size=UDim2.new(0,118,1
  BackgroundColor3=Color3.fromRGB(22,16,34),BackgroundTransparency=0.32})
 local divider=tint(frame(sidebar,{Position=UDim2.new(1,-1,0,12),Size=UDim2.new(0,1,1,-24),
  BackgroundTransparency=0.78}),'BackgroundColor3')
-label(sidebar,'NAVIGATION',{Position=UDim2.fromOffset(12,13),Size=UDim2.new(1,-24,0,14),
+local navHeading=label(sidebar,'TABS',{Position=UDim2.fromOffset(12,13),Size=UDim2.new(1,-48,0,14),
  TextSize=9,TextColor3=muted})
-local nav=make('ScrollingFrame',{Position=UDim2.fromOffset(6,36),Size=UDim2.new(1,-12,1,-44),
- BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=2,ScrollBarImageColor3=accent,
- AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new()},sidebar)
-make('UIListLayout',{Padding=UDim.new(0,4),SortOrder=Enum.SortOrder.LayoutOrder},nav)
+local collapseNav=button(sidebar,'<',{Position=UDim2.new(1,-30,0,8),Size=UDim2.fromOffset(24,24),TextSize=15,BackgroundTransparency=0.6})
+local nav=make('ScrollingFrame',{Position=UDim2.fromOffset(6,36),Size=UDim2.new(1,-12,1,-78),
+ BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=4,ScrollBarImageColor3=accent,ScrollBarImageTransparency=0.15,
+ ScrollingDirection=Enum.ScrollingDirection.Y,ElasticBehavior=Enum.ElasticBehavior.WhenScrollable,
+ AutomaticCanvasSize=Enum.AutomaticSize.None,CanvasSize=UDim2.new()},sidebar)
+local navLayout=make('UIListLayout',{Padding=UDim.new(0,4),SortOrder=Enum.SortOrder.LayoutOrder},nav)
 make('UIPadding',{PaddingRight=UDim.new(0,3),PaddingBottom=UDim.new(0,4)},nav)
+local scrollUp=button(sidebar,'^',{Position=UDim2.new(0,6,1,-32),Size=UDim2.new(0.5,-9,0,24),BackgroundTransparency=0.55})
+local scrollDown=button(sidebar,'v',{Position=UDim2.new(0.5,3,1,-32),Size=UDim2.new(0.5,-9,0,24),BackgroundTransparency=0.55})
+local function updateNavScroll()
+ local height=navLayout.AbsoluteContentSize.Y+4
+ nav.CanvasSize=UDim2.fromOffset(0,height)
+ local maxY=math.max(0,height-nav.AbsoluteSize.Y)
+ nav.CanvasPosition=Vector2.new(0,math.clamp(nav.CanvasPosition.Y,0,maxY))
+ scrollUp.Visible=maxY>1
+ scrollDown.Visible=maxY>1
+end
+connect(navLayout:GetPropertyChangedSignal('AbsoluteContentSize'),updateNavScroll)
+connect(nav:GetPropertyChangedSignal('AbsoluteSize'),updateNavScroll)
+local function stepNav(direction)
+ local maxY=math.max(0,nav.CanvasSize.Y.Offset-nav.AbsoluteSize.Y)
+ nav.CanvasPosition=Vector2.new(0,math.clamp(nav.CanvasPosition.Y+direction*72,0,maxY))
+end
+connect(scrollUp.Activated,function() stepNav(-1) end)
+connect(scrollDown.Activated,function() stepNav(1) end)
+local function revealTab(t)
+ local y=t.button.AbsolutePosition.Y-nav.AbsolutePosition.Y
+ if y<0 then nav.CanvasPosition=Vector2.new(0,math.max(0,nav.CanvasPosition.Y+y))
+ elseif y+t.button.AbsoluteSize.Y>nav.AbsoluteSize.Y then
+  local maxY=math.max(0,nav.CanvasSize.Y.Offset-nav.AbsoluteSize.Y)
+  nav.CanvasPosition=Vector2.new(0,math.min(maxY,nav.CanvasPosition.Y+y+t.button.AbsoluteSize.Y-nav.AbsoluteSize.Y))
+ end
+end
+local navCollapsed=false
+local navShort={Account='AC',Farming='FM',Shop='SH',['Quick Sell']='QS',Grading='GR',Event='EV',Appearance='AP',Settings='ST'}
 local navTweens={}
 local function paintTab(t,selected,hovered)
  if navTweens[t] then navTweens[t]:Cancel() end
@@ -243,6 +203,26 @@ local function paintTab(t,selected,hovered)
  t.indicator.Visible=selected
 end
 local body=frame(root,{Position=UDim2.fromOffset(134,72),Size=UDim2.new(1,-150,1,-112),BackgroundTransparency=1})
+local function setNavCollapsed(value)
+ navCollapsed=value
+ local width=value and 48 or 118
+ sidebar.Size=UDim2.new(0,width,1,-84)
+ body.Position=UDim2.fromOffset(width+16,72)
+ body.Size=UDim2.new(1,-width-32,1,-112)
+ navHeading.Visible=not value
+ collapseNav.Text=value and '>' or '<'
+ collapseNav.Position=value and UDim2.fromOffset(12,8) or UDim2.new(1,-30,0,8)
+ for name,t in pairs(tabs) do
+  t.caption.Text=value and (navShort[name] or name:sub(1,2)) or name
+  t.caption.Position=UDim2.fromOffset(value and 3 or 10,0)
+  t.caption.Size=UDim2.new(1,value and -6 or -14,1,0)
+  t.caption.TextSize=value and 10 or 12
+  t.caption.TextXAlignment=value and Enum.TextXAlignment.Center or Enum.TextXAlignment.Left
+ end
+ updateNavScroll()
+end
+connect(collapseNav.Activated,function() setNavCollapsed(not navCollapsed) end)
+
 local title=label(body,'Account',{Size=UDim2.new(1,-185,0,26),TextSize=22})
 local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffset(0,31),Size=UDim2.new(1,0,0,16),TextSize=10,TextColor3=muted})
 local search=make('TextBox',{Position=UDim2.new(1,-177,0,0),Size=UDim2.fromOffset(177,28),BackgroundColor3=Color3.fromRGB(39,29,55),BackgroundTransparency=0.15,BorderSizePixel=0,Text='',PlaceholderText='Search this tab...',PlaceholderColor3=muted,TextColor3=ink,Font=Enum.Font.Code,TextSize=12,ClearTextOnFocus=false},body)
@@ -315,7 +295,7 @@ local function page(name, icon)
  tabs[name]={page=p,button=b,indicator=indicator,caption=caption,border=border}; rows[name]={}
  connect(b.MouseEnter,function() paintTab(tabs[name],active==name,true) end)
  connect(b.MouseLeave,function() paintTab(tabs[name],active==name,false) end)
- connect(b.SelectionGained,function() paintTab(tabs[name],active==name,true) end)
+ connect(b.SelectionGained,function() paintTab(tabs[name],active==name,true); revealTab(tabs[name]) end)
  connect(b.SelectionLost,function() paintTab(tabs[name],active==name,false) end)
  connect(b.Activated,function() choose(name) end)
  return p
@@ -444,7 +424,7 @@ slider(appearance,'Transparency','Higher values reveal more of the world.',0,65,
  opacity=v/100; root.BackgroundTransparency=opacity
  for _,s in ipairs(surfaces) do s.BackgroundTransparency=math.min(0.85,opacity+0.2) end
 end)
-slider(appearance,'Detail intensity','Adjust the etched contours and subtle background wisps.',0,100,30,function(v)
+slider(appearance,'Nebula strength','Adjust the soft purple and blue shading behind the stars.',0,100,30,function(v)
  skyIntensity=v; refreshSky()
 end)
 local function applyAccent(color)
@@ -454,7 +434,6 @@ local function applyAccent(color)
  for _,draw in ipairs(toggleDraws) do draw() end
  nav.ScrollBarImageColor3=accent
 
- for _,link in ipairs(links) do link.object.BackgroundColor3=accent end
  for _,star in ipairs(stars) do star.object.BackgroundColor3=ink:Lerp(accent,0.4) end
  refreshSky()
  choose(active)
@@ -472,7 +451,7 @@ for index,c in ipairs(colors) do
  make('UIStroke',{Color=color,Thickness=1,Transparency=0.5},swatch)
  connect(swatch.Activated,function() applyAccent(color) end)
 end
-toggle(appearance,'Animated sky','Subtle moving wisps, twinkling stars, and occasional meteors.',true,function(v) animatedSky=v end)
+toggle(appearance,'Animated sky','Soft nebula shading, scattered stars, and occasional meteors.',true,function(v) animatedSky=v end)
 toggle(appearance,'Pixel stars','Show or hide the star field independently.',true,function(v) showStars=v; starLayer.Visible=v end)
 local settings=page('Settings','07')
 section(settings,'WINDOW & PREFERENCES')
@@ -510,7 +489,7 @@ connect(Input.InputChanged,function(i)
  if gesture.kind=='move' then
   root.Position=UDim2.fromOffset(gesture.position.X.Offset+delta.X,gesture.position.Y.Offset+delta.Y)
  else
-  root.Size=UDim2.fromOffset(math.clamp(gesture.size.X.Offset+delta.X/scale.Scale,690,1100),math.clamp(gesture.size.Y.Offset+delta.Y/scale.Scale,420,800))
+  root.Size=UDim2.fromOffset(math.clamp(gesture.size.X.Offset+delta.X/scale.Scale,690,1100),math.clamp(gesture.size.Y.Offset+delta.Y/scale.Scale,310,800))
  end
  fit()
 end)
@@ -541,4 +520,4 @@ connect(workspace:GetPropertyChangedSignal('CurrentCamera'),watchCamera)
 for _,child in ipairs(root:GetChildren()) do
  if child:IsA('GuiObject') and child~=sky then child.ZIndex=2 end
 end
-choose('Account'); watchCamera(); fitIcon()
+choose('Account'); watchCamera(); fitIcon(); updateNavScroll()
