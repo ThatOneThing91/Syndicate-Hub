@@ -9,7 +9,9 @@ local TextService = game:GetService('TextService')
 local player = Players.LocalPlayer
 assert(player, 'Run AmethystPixel from a client LocalScript')
 local parent = player:WaitForChild('PlayerGui')
-$1local Backend, backendError
+local old = parent:FindFirstChild('AmethystPixel')
+if old then old:Destroy() end
+local Backend, backendError
 local backendEnv=getgenv and getgenv() or _G
 do
  backendEnv.__SyndicateTestGuiHeadless=true
