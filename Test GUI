@@ -640,7 +640,7 @@ local function dropdown(p,name,desc,options,callback,initial)
   draw(true)
 
   local blocker=button(gui,'',{Position=UDim2.fromScale(0,0),Size=UDim2.fromScale(1,1),
-   BackgroundTransparency=1,Text='',AutoButtonColor=false,ZIndex=190})
+   BackgroundTransparency=1,Text='',AutoButtonColor=false,Selectable=false,ZIndex=190})
   local viewport=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920,1080)
   local width=math.max(224,b.AbsoluteSize.X+32)
   local desired=math.min(300,44+#values*35)
@@ -1169,9 +1169,11 @@ local function SetupInventoryFilter(target,filterName)
   results={}
   if isQuickSell then
    local counts={['Would sell']=0,Keep=0,Protected=0,Unknown=0}
+   local queued=0
    for guid,data in pairs(inventory) do
     local state,reason=Engine.Evaluate(data,catalog,settings,guid)
     counts[state]=counts[state]+1
+    if state=='Would sell' and not manualSaleExclusions[tostring(guid)] then queued=queued+1 end
     local id=type(data)=='table' and tostring(data.ItemId or '') or ''
     local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
     local rarity,mutations=Engine.DisplayDetails(data,catalog)
@@ -1186,7 +1188,7 @@ local function SetupInventoryFilter(target,filterName)
     return a.guid<b.guid
    end)
    if summaryLabel then
-    summaryLabel.Text=string.format('WILL SELL %d  ·  KEEP %d  ·  PROTECTED %d\nSale queue is sorted highest value first.',counts['Would sell'],counts.Keep,counts.Protected)
+    summaryLabel.Text=string.format('WILL SELL %d  ·  KEEP %d  ·  PROTECTED %d\nSale queue is sorted highest value first.',queued,counts.Keep,counts.Protected)
    end
   end
   for _,group in ipairs(groups) do
@@ -1885,3 +1887,8 @@ for _,child in ipairs(root:GetChildren()) do
  if child:IsA('GuiObject') and child~=sky then child.ZIndex=2 end
 end
 choose('Account'); reflow(); watchCamera(); updateNavScroll()
+if Input.GamepadEnabled then focusActiveTab() end
+connect(Input.GamepadConnected,function()
+ if root.Visible then focusActiveTab()
+ elseif restore.Visible then pcall(function() GuiService.SelectedObject=restore end) end
+end)
