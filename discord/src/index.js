@@ -360,8 +360,15 @@ async function recentExecutions(env){
  const rows=await userLabels(r.results||[],"roblox_user_id");
  return reply(rows.length?"📋 **Recent Syndicate Hub executions**\n"+rows.map(x=>"• **"+x.username+"** • Roblox ID `"+x.roblox_user_id+"` • <t:"+Math.floor(Date.parse(x.created_at)/1000)+":R>").join("\n"):"No script executions recorded yet.");
 }
+const EXECUTION_LOGS_PAUSED=true; // TEMP: pause Discord execution notifications without disabling launch recording
 async function sendExecutionLogs(env){
  const channel="1563495489662488587";
+ if(EXECUTION_LOGS_PAUSED){
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_activity_cursor(id INTEGER PRIMARY KEY CHECK(id=1), last_row INTEGER NOT NULL)").run();
+  const max=await env.DB.prepare("SELECT COALESCE(MAX(id),0) AS n FROM auth_events").first();
+  await env.DB.prepare("INSERT OR REPLACE INTO discord_activity_cursor(id,last_row) VALUES(1,?)").bind(max?.n||0).run();
+  return;
+ }
  if(!env.DISCORD_BOT_TOKEN)throw Error("Discord bot token unavailable");
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_activity_cursor(id INTEGER PRIMARY KEY CHECK(id=1), last_row INTEGER NOT NULL)").run();
  const cursor=await env.DB.prepare("SELECT last_row FROM discord_activity_cursor WHERE id=1").first();
