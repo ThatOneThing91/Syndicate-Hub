@@ -1,9 +1,8 @@
--- AMETHYST / PIXEL UI 2.0
+-- AMETHYST / PIXEL UI 2.1
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
-local GuiService = game:GetService('GuiService')
 local RunService = game:GetService('RunService')
 local TweenService = game:GetService('TweenService')
 local TextService = game:GetService('TextService')
@@ -51,7 +50,10 @@ local function button(host, text, props)
  return make('TextButton', p, host)
 end
 local gui = make('ScreenGui', {Name='AmethystPixel', ResetOnSpawn=false,
- ZIndexBehavior=Enum.ZIndexBehavior.Sibling, IgnoreGuiInset=false, DisplayOrder=30}, parent)
+ ZIndexBehavior=Enum.ZIndexBehavior.Sibling, IgnoreGuiInset=true, DisplayOrder=30}, parent)
+-- Use the full display, including the top bar and device safe-area edges.
+gui.ScreenInsets=Enum.ScreenInsets.None
+gui.ClipToDeviceSafeArea=false
 connect(gui.Destroying, function()
  for _,c in ipairs(connections) do c:Disconnect() end
 end)
@@ -149,7 +151,7 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  2.0',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  2.1',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 -- Slim vertical text navigation, with the original stacked layout.
@@ -241,13 +243,6 @@ local restoreRing=tint(make('UIStroke',{Thickness=1.5,Transparency=0.15},restore
 tint(restore,'TextColor3')
 make('UIGradient',{Color=ColorSequence.new(Color3.fromRGB(255,255,255),Color3.fromRGB(109,78,151)),Rotation=65},restore)
 local iconGesture, suppressIconUntil = nil, 0
-local function fitIcon()
- local camera=workspace.CurrentCamera; if not camera then return end
- local inset=GuiService:GetGuiInset()
- local size=camera.ViewportSize-Vector2.new(0,inset.Y)
- restore.Position=UDim2.fromOffset(math.clamp(restore.Position.X.Offset,4,math.max(4,size.X-52)),
-  math.clamp(restore.Position.Y.Offset,4,math.max(4,size.Y-52)))
-end
 connect(restore.InputBegan,function(i)
  if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
   iconGesture={input=i,start=i.Position,position=restore.Position,dragged=false}
@@ -261,7 +256,6 @@ connect(Input.InputChanged,function(i)
  if g.dragged then
   suppressIconUntil=os.clock()+0.3
   restore.Position=UDim2.fromOffset(g.position.X.Offset+delta.X,g.position.Y.Offset+delta.Y)
-  fitIcon()
  end
 end)
 connect(Input.InputEnded,function(i)
@@ -540,21 +534,18 @@ local function reflow()
    r.Size=UDim2.new(1,0,0,compact and bottom+34 or math.max(66,bottom))
   else r.Size=UDim2.new(1,0,0,math.max(66,bottom)) end
  end
- footer.Text=narrow and '  AMETHYST 2.0 / TEST GUI' or '  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED'
+ footer.Text=narrow and '  AMETHYST 2.1 / TEST GUI' or '  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED'
  updateNavScroll()
  reflowing=false
 end
 connect(root:GetPropertyChangedSignal('Size'),reflow)
 connect(body:GetPropertyChangedSignal('Size'),reflow)
--- Fit the logical window inside the available device area; reflow after rotation.
+-- Fit the window scale to the device without restricting dragging.
 local function fit()
  local camera=workspace.CurrentCamera; if not camera then return end
  local size=camera.ViewportSize
- local inset=GuiService:GetGuiInset()
- scale.Scale=math.min(1,(size.X-24)/root.Size.X.Offset,(size.Y-inset.Y-42)/root.Size.Y.Offset)
- scale.Scale=math.max(0.1,scale.Scale)
- local px=root.Position.X.Offset; local py=root.Position.Y.Offset
- root.Position=UDim2.fromOffset(math.clamp(px,0,math.max(0,size.X-root.AbsoluteSize.X)),math.clamp(py,0,math.max(0,size.Y-inset.Y-root.AbsoluteSize.Y)))
+ -- Scale for device size only. Never alter a user-selected window position.
+ scale.Scale=math.clamp(math.min(1,(size.X-24)/root.Size.X.Offset,(size.Y-24)/root.Size.Y.Offset),0.1,1)
 end
 local gesture
 local function start(i,kind)
@@ -580,7 +571,7 @@ connect(Input.InputEnded,function(i)
  if gesture and i==gesture.input then gesture=nil end
  if dragSlider and i==dragSlider.input then dragSlider=nil end
 end)
-local function hide() root.Visible=false; restore.Visible=true; fitIcon() end
+local function hide() root.Visible=false; restore.Visible=true end
 connect(minimize.Activated,hide)
 connect(restore.Activated,function()
  if os.clock()<suppressIconUntil or iconGesture and iconGesture.dragged then return end
@@ -589,18 +580,18 @@ end)
 connect(close.Activated,function() gui:Destroy() end)
 connect(Input.InputBegan,function(i,processed)
  if not processed and i.KeyCode==Enum.KeyCode.RightShift then
-  root.Visible=not root.Visible; restore.Visible=not root.Visible; fitIcon()
+  root.Visible=not root.Visible; restore.Visible=not root.Visible
  end
 end)
 local cameraConnection
 local function watchCamera()
  if cameraConnection then cameraConnection:Disconnect() end
  local camera=workspace.CurrentCamera
- if camera then cameraConnection=connect(camera:GetPropertyChangedSignal('ViewportSize'),function() fit(); fitIcon() end) end
+ if camera then cameraConnection=connect(camera:GetPropertyChangedSignal('ViewportSize'),function() fit() end) end
  fit()
 end
 connect(workspace:GetPropertyChangedSignal('CurrentCamera'),watchCamera)
 for _,child in ipairs(root:GetChildren()) do
  if child:IsA('GuiObject') and child~=sky then child.ZIndex=2 end
 end
-choose('Account'); reflow(); watchCamera(); fitIcon(); updateNavScroll()
+choose('Account'); reflow(); watchCamera(); updateNavScroll()
