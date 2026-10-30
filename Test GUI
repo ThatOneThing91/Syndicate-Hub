@@ -427,6 +427,8 @@ connect(Input.InputEnded,function(i)
   snapInside(saleBadge,true)
  end
 end)
+restore.NextSelectionDown=saleBadge
+saleBadge.NextSelectionUp=restore
 connect(saleBadge.Activated,function()
  if os.clock()<saleSuppress or saleGesture and saleGesture.dragged then return end
  if Backend and type(Backend.GoToUnload)=='function' then
@@ -999,6 +1001,7 @@ local function SetupInventoryFilter(target,filterName)
  local catalog={Items={},EventNames={},MutationNames={}}
  local options,blocks={},{}
  local inventory,results={},{}
+ local manualSaleExclusions={}
  local loaded,loading=false,false
  local layoutWidth=500
  local summaryLabel
@@ -1088,7 +1091,7 @@ local function SetupInventoryFilter(target,filterName)
   clearPreviewRows()
   local visible={}
   for _,result in ipairs(results) do
-   if result.status=='Would sell' then visible[#visible+1]=result end
+   if result.status=='Would sell' and not manualSaleExclusions[result.guid] then visible[#visible+1]=result end
   end
   previewEmpty.Visible=#visible==0
   previewEmpty.Text='Nothing currently matches your SELL rules.'
@@ -1102,8 +1105,15 @@ local function SetupInventoryFilter(target,filterName)
    tint(label(item,string.format('$%s',tostring(math.floor(result.value or 0))),{
     Position=UDim2.new(1,-104,0,7),Size=UDim2.fromOffset(92,18),TextSize=11,TextXAlignment=Enum.TextXAlignment.Right}),'TextColor3')
    label(item,tostring(result.rarity)..'  ·  '..tostring(result.mutations),{
-    Position=UDim2.fromOffset(10,31),Size=UDim2.new(1,-20,0,18),TextSize=9,TextColor3=muted,
+    Position=UDim2.fromOffset(10,31),Size=UDim2.new(1,-54,0,18),TextSize=9,TextColor3=muted,
     TextTruncate=Enum.TextTruncate.AtEnd})
+   local keep=button(item,'×',{Position=UDim2.new(1,-35,0,27),Size=UDim2.fromOffset(26,23),
+    BackgroundColor3=Color3.fromRGB(48,34,63),TextSize=14,ZIndex=4})
+   make('UICorner',{CornerRadius=UDim.new(0,6)},keep)
+   connect(keep.Activated,function()
+    manualSaleExclusions[result.guid]=true
+    showResults()
+   end)
    previewRows[#previewRows+1]=item
   end
   previewScroll.CanvasPosition=Vector2.new()
@@ -1438,6 +1448,50 @@ local function SetupInventoryFilter(target,filterName)
  end
 
  if isQuickSell then
+  section(target,'QUICK SELL HELPERS')
+  local presetAdded={Rarity={},Mutations={}}
+  local keepAllSnapshot
+  toggle(target,'Quick Sell Preset','Applies the old Syndicate preset: Epic+ rarities plus the commonly used mutation set.',false,function(value)
+   local presetRarities={'exclusive','mythical','legendary','epic'}
+   local presetMutations={'dirty','mint','hologram','void','secret','rainbow','onyx','pure','spotless','perfect'}
+   if value then
+    table.clear(presetAdded.Rarity);table.clear(presetAdded.Mutations)
+    for _,key in ipairs(presetRarities) do
+     if not settings.Selected.Rarity[key] then settings.Selected.Rarity[key]=true;presetAdded.Rarity[key]=true end
+    end
+    for _,key in ipairs(presetMutations) do
+     if not settings.Selected.Mutations[key] then settings.Selected.Mutations[key]=true;presetAdded.Mutations[key]=true end
+    end
+   else
+    for key in pairs(presetAdded.Rarity) do settings.Selected.Rarity[key]=nil end
+    for key in pairs(presetAdded.Mutations) do settings.Selected.Mutations[key]=nil end
+    table.clear(presetAdded.Rarity);table.clear(presetAdded.Mutations)
+   end
+   for _,entry in pairs(blocks) do for _,option in ipairs(entry.buttons) do option.paint() end end
+   refreshPreview()
+  end)
+  toggle(target,'Keep All Mutations','Matches the old helper: temporarily keeps every known mutation and uses Keep Selected mode.',false,function(value)
+   if value then
+    keepAllSnapshot={Mode=settings.Mode,Rarity=table.clone(settings.Selected.Rarity),Mutations=table.clone(settings.Selected.Mutations)}
+    table.clear(settings.Selected.Rarity);table.clear(settings.Selected.Mutations)
+    for _,option in ipairs(options.Mutations or {}) do settings.Selected.Mutations[option.key]=true end
+    settings.Mode='Keep Selected'
+   elseif keepAllSnapshot then
+    settings.Mode=keepAllSnapshot.Mode
+    settings.Selected.Rarity=table.clone(keepAllSnapshot.Rarity)
+    settings.Selected.Mutations=table.clone(keepAllSnapshot.Mutations)
+    keepAllSnapshot=nil
+   end
+   modeButton.Text=settings.Mode
+   modeHint.Text=settings.Mode=='Keep Selected' and 'Keep anything selected; other eligible items would sell.' or 'Only items matching a selection would sell.'
+   for _,entry in pairs(blocks) do for _,option in ipairs(entry.buttons) do option.paint() end end
+   refreshPreview()
+  end)
+  action(target,'Restore X-removed items','Restores queue items you manually removed with ×.','RESTORE',function()
+   table.clear(manualSaleExclusions)
+   showResults()
+  end)
+
   section(target,'AUTO QUICK SELL')
   local autoRate=false
   local rateThreshold=0
@@ -1456,7 +1510,7 @@ local function SetupInventoryFilter(target,filterName)
    local result={}
    for guid,data in pairs(inventory) do
     local state=Engine.Evaluate(data,catalog,settings,guid)
-    if state=='Would sell' then result[#result+1]=tostring(guid) end
+    if state=='Would sell' and not manualSaleExclusions[tostring(guid)] then result[#result+1]=tostring(guid) end
    end
    table.sort(result)
    return result
@@ -1631,6 +1685,13 @@ toggle(appearance,'Pixel stars','Show or hide the star field independently.',tru
 local settings=page('Settings','07')
 section(settings,'WINDOW & PREFERENCES')
 toggle(settings,'Notifications','Show interface toast messages.',true,function(v) notifications=v; if not v then toast.Visible=false end end)
+action(settings,'Discord Server','Copies the Syndicate Hub Discord invite to your clipboard.','COPY',function()
+ local copy=type(setclipboard)=='function' and setclipboard or type(toclipboard)=='function' and toclipboard
+ local invite='https://discord.gg/6K2qGPpuEH'
+ if not copy then notify(invite);return end
+ local ok=pcall(copy,invite)
+ notify(ok and 'Discord invite copied.' or invite)
+end)
 action(settings,'Minimize window','Tap the floating heart to reopen; drag to move it.','HIDE',function() root.Visible=false; restore.Visible=true end)
 action(settings,'Reset position','Return the window to its initial position.','RESET',function() root.Position=UDim2.fromOffset(30,35) end)
 action(settings,'Close interface','Destroys this standalone interface.','CLOSE',function() gui:Destroy() end)
