@@ -9,8 +9,21 @@ local TextService = game:GetService('TextService')
 local player = Players.LocalPlayer
 assert(player, 'Run AmethystPixel from a client LocalScript')
 local parent = player:WaitForChild('PlayerGui')
-local old = parent:FindFirstChild('AmethystPixel')
-if old then old:Destroy() end
+$1local Backend, backendError
+local backendEnv=getgenv and getgenv() or _G
+do
+ backendEnv.__SyndicateTestGuiHeadless=true
+ local ok,err=pcall(function()
+  local source=game:HttpGet('https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/StorageHunters?v='..tostring(os.time()))
+  local chunk,compileError=loadstring(source)
+  assert(chunk,compileError or 'StorageHunters backend failed to compile')
+  chunk()
+ end)
+ backendEnv.__SyndicateTestGuiHeadless=nil
+ Backend=backendEnv.__StorageHuntersHubInstance
+ if not ok then backendError=tostring(err) end
+ if not Backend and not backendError then backendError='StorageHunters backend did not initialize.' end
+end
 local connections, themes, surfaces, rows, tabs = {}, {}, {}, {}, {}
 local accent = Color3.fromRGB(176, 119, 255)
 local ink = Color3.fromRGB(239, 233, 255)
@@ -57,6 +70,7 @@ gui.ScreenInsets=Enum.ScreenInsets.None
 gui.ClipToDeviceSafeArea=false
 connect(gui.Destroying, function()
  for _,c in ipairs(connections) do c:Disconnect() end
+ if Backend and type(Backend.Destroy)=='function' then pcall(Backend.Destroy) end
 end)
 local root = frame(gui,{Size=UDim2.fromOffset(790,530), Position=UDim2.fromOffset(30,35),
  BackgroundColor3=Color3.fromRGB(17,12,27), BackgroundTransparency=opacity, Active=true})
@@ -460,12 +474,37 @@ local function slider(p,name,desc,lo,hi,value,callback)
  end)
  return set
 end
-local function cycle(p,name,desc,options,callback)
+local function cycle(p,name,desc,options,callback,initial)
+ local values={}
+ for _,value in ipairs(options or {}) do values[#values+1]=value end
  local index=1; local r=row(p,name,desc)
- local b=button(r,options[1]..' >',{Position=UDim2.new(1,-118,0,20),Size=UDim2.fromOffset(102,28)})
+ local b=button(r,'',{Position=UDim2.new(1,-152,0,20),Size=UDim2.fromOffset(136,28),TextSize=10,TextTruncate=Enum.TextTruncate.AtEnd})
+ rowSpecs[r].control=b
+ local object={}
+ local function find(value)
+  for i,item in ipairs(values) do if item==value then return i end end
+ end
+ local function draw()
+  b.Text=(values[index] and tostring(values[index]) or 'None')..' >'
+ end
+ function object:Get() return values[index] end
+ function object:Set(value,fire)
+  local found=find(value); if not found then return false end
+  index=found; draw(); if fire and callback then callback(values[index]) end; return true
+ end
+ function object:SetOptions(newOptions,selected)
+  values={}; for _,value in ipairs(newOptions or {}) do values[#values+1]=value end
+  index=find(selected) or math.min(index,math.max(1,#values))
+  if #values==0 then index=1 end
+  draw()
+ end
+ if initial then index=find(initial) or 1 end
+ draw()
  connect(b.Activated,function()
-  index=index%#options+1; b.Text=options[index]..' >'; if callback then callback(options[index]) end
+  if #values==0 then return end
+  index=index%#values+1; draw(); if callback then callback(values[index]) end
  end)
+ return object
 end
 local home=page('Account','01')
 section(home,'YOUR ROBLOX ACCOUNT')
@@ -510,8 +549,56 @@ section(home,'PERSONALIZE YOUR SPACE')
 action(home,'Appearance','Adjust colors, transparency, and the animated sky.','OPEN',function() choose('Appearance') end)
 -- Dedicated feature pages; game behavior will be connected separately.
 local farming=page('Farming','02')
-section(farming,'FARMING')
-row(farming,'Farming controls','Ready for your farming features to be added.')
+section(farming,'FARMING BACKEND')
+row(farming,Backend and 'Automation engine connected' or 'Automation engine unavailable',Backend and 'Using the same StorageHunters farming logic in headless mode, so this tab can be tested without the old hub UI.' or ('Backend error: '..tostring(backendError or 'unknown error')),84)
+
+local function backendState(key,default)
+ if Backend and type(Backend.State)=='table' and Backend.State[key]~=nil then return Backend.State[key] end
+ return default
+end
+local function backendToggle(key,value)
+ if not Backend or type(Backend.SetToggle)~='function' then notify('StorageHunters backend is unavailable.'); return end
+ local ok,result,message=pcall(Backend.SetToggle,key,value)
+ if not ok or result==false then notify('Could not change '..key..': '..tostring(message or result)) end
+end
+
+section(farming,'AUCTION ROUTING')
+local fallbackAreas={'Halloween','The Mines','Back Alley','Business Bay','Farmyard','Junk Yard','Lucky Beach','Power Plant','Shipyard','Cargo Ship','Cargo Train'}
+local areas=Backend and type(Backend.GetFarmAreas)=='function' and Backend.GetFarmAreas() or fallbackAreas
+local selectedArea=backendState('SelectedArea',areas[1])
+local auctionControl
+local areaControl=cycle(farming,'Area','Choose which auction area the farmer should work in.',areas,function(value)
+ if Backend and type(Backend.SetFarmArea)=='function' then
+  local ok,result=pcall(Backend.SetFarmArea,value)
+  if not ok or result==false then notify('Could not select farming area.'); return end
+  local auctions=Backend.GetFarmAuctions and Backend.GetFarmAuctions(value) or {}
+  local selected=Backend.State and Backend.State.SelectedAuction or auctions[1]
+  if auctionControl then auctionControl:SetOptions(auctions,selected) end
+ end
+end,selectedArea)
+local initialAuctions=Backend and type(Backend.GetFarmAuctions)=='function' and Backend.GetFarmAuctions(selectedArea) or {}
+local selectedAuction=backendState('SelectedAuction',initialAuctions[1])
+auctionControl=cycle(farming,'Priority auction','The preferred garage/tier. Existing strict priority, affordability, retry, and no-mid-start-switch logic stays unchanged.',initialAuctions,function(value)
+ if Backend and type(Backend.SetFarmAuction)=='function' then
+  local ok,result=pcall(Backend.SetFarmAuction,value)
+  if not ok or result==false then notify('Could not select priority auction.') end
+ end
+end,selectedAuction)
+
+section(farming,'AUCTION CONTROL')
+toggle(farming,'Auto Bid','Automatically bids while an auction is active using the existing Syndicate timing.',backendState('AutoBid',false),function(value)
+ if Backend and type(Backend.SetAutoBid)=='function' then Backend.SetAutoBid(value) else notify('Auto Bid backend unavailable.') end
+end)
+toggle(farming,'Farming','Runs the full auction farming loop: priority selection, retrying the chosen garage, affordability checks, auction-state protection, and vehicle-full stop.',backendState('Farming',false),function(value) backendToggle('Farming',value) end)
+toggle(farming,'Pause Auction','Arms the existing pause-on-first-bid behavior.',backendState('PauseAuction',false),function(value) backendToggle('PauseAuction',value) end)
+
+section(farming,'UNLOADING')
+toggle(farming,'Instant Unload','Uses the existing instant unload worker.',backendState('InstantUnload',false),function(value) backendToggle('InstantUnload',value) end)
+toggle(farming,'Auto Unload When Full','Automatically starts the unload trip when the equipped vehicle is full.',backendState('AutoUnloadWhenFull',false),function(value) backendToggle('AutoUnloadWhenFull',value) end)
+action(farming,'Manual unload','Teleports to your own unload pad, spawns your vehicle, and seats you so the unload menu opens.','START',function()
+ if Backend and type(Backend.GoToUnload)=='function' then task.spawn(function() Backend.GoToUnload(false) end) else notify('Manual unload backend unavailable.') end
+end)
+toggle(farming,'Lost & Found Unloader','Keeps the existing Lost & Found claim/unload worker running in the background.',backendState('LostFoundUnloader',false),function(value) backendToggle('LostFoundUnloader',value) end)
 local shop=page('Shop','03')
 section(shop,'SHOP')
 row(shop,'Shop controls','Ready for your shop features to be added.')
