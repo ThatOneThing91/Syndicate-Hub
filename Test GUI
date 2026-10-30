@@ -1,0 +1,268 @@
+-- AMETHYST / PIXEL UI 1.0
+-- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
+-- Demo controls change UI state only. No game automation or external dependencies.
+local Players = game:GetService('Players')
+local Input = game:GetService('UserInputService')
+local GuiService = game:GetService('GuiService')
+local player = Players.LocalPlayer
+assert(player, 'Run AmethystPixel from a client LocalScript')
+local parent = player:WaitForChild('PlayerGui')
+local old = parent:FindFirstChild('AmethystPixel')
+if old then old:Destroy() end
+local connections, themes, surfaces, rows, tabs = {}, {}, {}, {}, {}
+local accent = Color3.fromRGB(176, 119, 255)
+local ink = Color3.fromRGB(239, 233, 255)
+local muted = Color3.fromRGB(157, 146, 179)
+local opacity, active, notifications = 0.18, 'Overview', true
+local function connect(event, fn)
+ local c = event:Connect(fn); table.insert(connections, c); return c
+end
+local function make(kind, props, host)
+ local x = Instance.new(kind)
+ for k,v in pairs(props) do x[k] = v end
+ x.Parent = host
+ return x
+end
+local function tint(x, prop)
+ x[prop] = accent; table.insert(themes, {x, prop}); return x
+end
+local function frame(host, props)
+ props.BorderSizePixel = 0
+ return make('Frame', props, host)
+end
+local function label(host, text, props)
+ local p = {Text=text, Font=Enum.Font.Code, TextSize=13, TextColor3=ink,
+ BackgroundTransparency=1, BorderSizePixel=0, TextXAlignment=Enum.TextXAlignment.Left}
+ for k,v in pairs(props or {}) do p[k]=v end
+ return make('TextLabel', p, host)
+end
+local function button(host, text, props)
+ local p = {Text=text, Font=Enum.Font.Code, TextSize=13, TextColor3=ink,
+ BackgroundColor3=Color3.fromRGB(43,33,62), BorderSizePixel=0, AutoButtonColor=true, Selectable=true}
+ for k,v in pairs(props or {}) do p[k]=v end
+ return make('TextButton', p, host)
+end
+local gui = make('ScreenGui', {Name='AmethystPixel', ResetOnSpawn=false,
+ ZIndexBehavior=Enum.ZIndexBehavior.Sibling, IgnoreGuiInset=false, DisplayOrder=30}, parent)
+connect(gui.Destroying, function()
+ for _,c in ipairs(connections) do c:Disconnect() end
+end)
+local root = frame(gui,{Size=UDim2.fromOffset(790,530), Position=UDim2.fromOffset(30,35),
+ BackgroundColor3=Color3.fromRGB(17,12,27), BackgroundTransparency=opacity, Active=true})
+make('UIStroke',{Color=Color3.fromRGB(85,61,116),Thickness=1},root)
+local scale = make('UIScale',{Scale=1},root)
+local top = frame(root,{Size=UDim2.new(1,0,0,56), BackgroundColor3=Color3.fromRGB(27,18,42),BackgroundTransparency=0.15,Active=true})
+tint(frame(top,{Position=UDim2.fromOffset(0,0),Size=UDim2.new(1,0,0,2)}),'BackgroundColor3')
+-- Three stepped pixels form the mark; all shapes are native UI objects.
+for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
+ tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
+end
+label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
+label(top,'PIXEL INTERFACE  /  01',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
+local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
+local sidebar=frame(root,{Position=UDim2.fromOffset(0,56),Size=UDim2.new(0,166,1,-84),BackgroundColor3=Color3.fromRGB(22,16,34),BackgroundTransparency=0.25})
+local nav=make('ScrollingFrame',{Position=UDim2.fromOffset(12,30),Size=UDim2.new(1,-24,1,-40),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=2,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new()},sidebar)
+make('UIListLayout',{Padding=UDim.new(0,6)},nav)
+label(sidebar,'WORKSPACE',{Position=UDim2.fromOffset(16,10),Size=UDim2.fromOffset(130,14),TextColor3=muted,TextSize=10})
+local body=frame(root,{Position=UDim2.fromOffset(184,72),Size=UDim2.new(1,-202,1,-112),BackgroundTransparency=1})
+local title=label(body,'Overview',{Size=UDim2.new(1,-185,0,26),TextSize=22})
+local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffset(0,31),Size=UDim2.new(1,0,0,16),TextSize=10,TextColor3=muted})
+local search=make('TextBox',{Position=UDim2.new(1,-177,0,0),Size=UDim2.fromOffset(177,28),BackgroundColor3=Color3.fromRGB(39,29,55),BackgroundTransparency=0.15,BorderSizePixel=0,Text='',PlaceholderText='Search this tab...',PlaceholderColor3=muted,TextColor3=ink,Font=Enum.Font.Code,TextSize=12,ClearTextOnFocus=false},body)
+local footer=label(root,'  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted})
+local grip=button(root,'//',{Position=UDim2.new(1,-27,1,-27),Size=UDim2.fromOffset(26,26),BackgroundTransparency=1,TextColor3=muted})
+local restore=button(gui,'A / OPEN',{Position=UDim2.fromOffset(18,90),Size=UDim2.fromOffset(100,36),Visible=false})
+local toast=label(gui,'',{AnchorPoint=Vector2.new(1,1),Position=UDim2.new(1,-18,1,-18),Size=UDim2.fromOffset(300,48),BackgroundColor3=Color3.fromRGB(40,25,60),BackgroundTransparency=0.08,TextXAlignment=Enum.TextXAlignment.Center,TextWrapped=true,Visible=false})
+local toastVersion=0
+local function notify(message)
+ if not notifications then return end
+ toastVersion=toastVersion+1; local version=toastVersion
+ toast.Text=message; toast.Visible=true
+ task.delay(3,function() if gui.Parent and version==toastVersion then toast.Visible=false end end)
+end
+local function choose(name)
+ active=name; title.Text=name; search.Text=''
+ for n,t in pairs(tabs) do
+  t.page.Visible=n==name
+  t.button.BackgroundTransparency=n==name and 0 or 1
+  t.button.TextColor3=n==name and accent or muted
+ end
+end
+local order=0
+local function page(name, icon)
+ local b=button(nav,icon..'  '..name,{Size=UDim2.new(1,0,0,35),TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1})
+ make('UIPadding',{PaddingLeft=UDim.new(0,10)},b)
+ local p=make('ScrollingFrame',{Position=UDim2.fromOffset(0,61),Size=UDim2.new(1,0,1,-61),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3=accent,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,Visible=false},body)
+ make('UIListLayout',{Padding=UDim.new(0,9),SortOrder=Enum.SortOrder.LayoutOrder},p)
+ make('UIPadding',{PaddingRight=UDim.new(0,9),PaddingBottom=UDim.new(0,12)},p)
+ tabs[name]={page=p,button=b}; rows[name]={}
+ connect(b.Activated,function() choose(name) end)
+ return p
+end
+local function section(p,text)
+ order=order+1
+ return label(p,text,{Size=UDim2.new(1,0,0,23),TextColor3=muted,TextSize=10,LayoutOrder=order})
+end
+local function row(p,name,desc,height)
+ order=order+1
+ local r=frame(p,{Size=UDim2.new(1,0,0,height or 66),BackgroundColor3=Color3.fromRGB(36,26,50),BackgroundTransparency=opacity,LayoutOrder=order})
+ table.insert(surfaces,r)
+ label(r,name,{Position=UDim2.fromOffset(14,12),Size=UDim2.new(1,-140,0,18),TextSize=14})
+ label(r,desc,{Position=UDim2.fromOffset(14,34),Size=UDim2.new(1,-140,0,24),TextColor3=muted,TextSize=11,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
+ for n,t in pairs(tabs) do if t.page==p then table.insert(rows[n],{frame=r,text=(name..' '..desc):lower()}) end end
+ return r
+end
+local function toggle(p,name,desc,default,callback)
+ local r=row(p,name,desc); local value=default or false
+ local b=button(r,'',{Position=UDim2.new(1,-70,0,22),Size=UDim2.fromOffset(54,24)})
+ local pixel=frame(b,{Size=UDim2.fromOffset(16,16),Position=UDim2.fromOffset(4,4),BackgroundColor3=ink})
+ local function draw()
+  b.BackgroundColor3=value and accent or Color3.fromRGB(64,53,80)
+  pixel.Position=UDim2.fromOffset(value and 34 or 4,4)
+ end
+ connect(b.Activated,function() value=not value; draw(); if callback then callback(value) end end)
+ draw(); return draw
+end
+local function action(p,name,desc,caption,callback)
+ local r=row(p,name,desc)
+ local b=button(r,caption,{Position=UDim2.new(1,-108,0,20),Size=UDim2.fromOffset(92,28)})
+ connect(b.Activated,callback or function() notify(name..' / demo only') end)
+end
+local dragSlider
+local function slider(p,name,desc,lo,hi,value,callback)
+ local r=row(p,name,desc,98)
+ local valueLabel=label(r,tostring(value),{Position=UDim2.new(1,-90,0,12),Size=UDim2.fromOffset(74,20),TextXAlignment=Enum.TextXAlignment.Right})
+ local track=button(r,'',{Position=UDim2.fromOffset(14,74),Size=UDim2.new(1,-28,0,12),BackgroundColor3=Color3.fromRGB(65,50,82)})
+ local fill=tint(frame(track,{Size=UDim2.fromScale((value-lo)/(hi-lo),1)}),'BackgroundColor3')
+ local function set(v)
+  value=math.clamp(math.floor(v+0.5),lo,hi); valueLabel.Text=tostring(value)
+  fill.Size=UDim2.fromScale((value-lo)/(hi-lo),1)
+  if callback then callback(value) end
+ end
+ local function update(x) set(lo+(hi-lo)*math.clamp((x-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)) end
+ connect(track.InputBegan,function(i)
+  if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+   dragSlider={input=i,update=update}; update(i.Position.X)
+  end
+ end)
+ connect(track.InputBegan,function(i)
+  if i.KeyCode==Enum.KeyCode.DPadLeft then set(value-1) elseif i.KeyCode==Enum.KeyCode.DPadRight then set(value+1) end
+ end)
+ connect(track.Activated,function(i)
+  if i and i.UserInputType==Enum.UserInputType.Gamepad1 then set(value>=hi and lo or value+1) end
+ end)
+ return set
+end
+local function cycle(p,name,desc,options,callback)
+ local index=1; local r=row(p,name,desc)
+ local b=button(r,options[1]..' >',{Position=UDim2.new(1,-118,0,20),Size=UDim2.fromOffset(102,28)})
+ connect(b.Activated,function()
+  index=index%#options+1; b.Text=options[index]..' >'; if callback then callback(options[index]) end
+ end)
+end
+local home=page('Overview','01')
+section(home,'WELCOME / AMETHYST 1.0')
+local hero=row(home,'A little glass. A little pixel.','A separate canvas for your next interface.',100)
+label(hero,'7 TABS    /    PURPLE GLASS    /    NATIVE UI',{Position=UDim2.fromOffset(14,72),Size=UDim2.new(1,-22,0,15),TextColor3=accent,TextSize=11})
+section(home,'QUICK ACCESS')
+action(home,'Appearance','Tune transparency and accent color.','OPEN',function() choose('Appearance') end)
+action(home,'Control gallery','Try switches, sliders, and selectors.','EXPLORE',function() choose('Controls') end)
+action(home,'Notification preview','Preview the compact toast style.','PREVIEW',function() notify('AMETHYST / Everything in its place.') end)
+local controls=page('Controls','02')
+section(controls,'CONTROL GALLERY / DEMO STATE ONLY')
+toggle(controls,'Primary switch','A crisp, square toggle with touch support.',true,function(v) notify('Primary switch: '..(v and 'ON' or 'OFF')) end)
+toggle(controls,'Secondary switch','Independent state for each control.',false)
+slider(controls,'Intensity','Drag to adjust. Gamepad A steps the value.',0,100,65)
+cycle(controls,'Profile','Tap to cycle through available profiles.',{'Balanced','Fast','Custom'})
+action(controls,'Run preview','An example action button.','RUN')
+local modules=page('Modules','03')
+section(modules,'YOUR FUTURE FEATURES / PLACEHOLDERS')
+for _,m in ipairs({'Collection','Inventory','Travel','Utilities','Custom module'}) do
+ toggle(modules,m,'Interface placeholder; no game action attached.',false)
+end
+local profiles=page('Profiles','04')
+section(profiles,'SESSION PRESETS')
+cycle(profiles,'Active profile','A selector mockup for your future profiles.',{'Default','Mobile','Desktop'})
+action(profiles,'Save profile','Placeholder for future persistence.','DEMO')
+action(profiles,'Import profile','Placeholder for a future import flow.','DEMO')
+action(profiles,'Export profile','Placeholder for a future export flow.','DEMO')
+local appearance=page('Appearance','05')
+section(appearance,'MAKE IT YOURS / LIVE CONTROLS')
+slider(appearance,'Transparency','Higher values reveal more of the world.',0,65,18,function(v)
+ opacity=v/100; root.BackgroundTransparency=opacity
+ for _,s in ipairs(surfaces) do s.BackgroundTransparency=opacity end
+end)
+cycle(appearance,'Accent color','Purple variants, applied immediately.',{'Amethyst','Orchid','Lavender'},function(v)
+ accent=({Amethyst=Color3.fromRGB(176,119,255),Orchid=Color3.fromRGB(218,128,234),Lavender=Color3.fromRGB(151,151,255)})[v]
+ for _,t in ipairs(themes) do t[1][t[2]]=accent end
+ for _,t in pairs(tabs) do t.page.ScrollBarImageColor3=accent end
+ choose(active)
+end)
+local status=page('Activity','06')
+section(status,'INTERFACE STATUS')
+row(status,'Standalone mode','No hub files or game systems connected.')
+row(status,'Input ready','Mouse, keyboard, touch, and selectable buttons.')
+row(status,'Responsive layout','Window scales down to fit smaller screens.')
+action(status,'Test toast','Check notification placement and readability.','TEST',function() notify('AMETHYST / Notification test') end)
+local settings=page('Settings','07')
+section(settings,'WINDOW & PREFERENCES')
+toggle(settings,'Notifications','Show interface toast messages.',true,function(v) notifications=v; if not v then toast.Visible=false end end)
+action(settings,'Minimize window','Restore with the floating A / OPEN button.','HIDE',function() root.Visible=false; restore.Visible=true end)
+action(settings,'Reset position','Return the window to its initial position.','RESET',function() root.Position=UDim2.fromOffset(30,35) end)
+action(settings,'Close interface','Destroys this standalone interface.','CLOSE',function() gui:Destroy() end)
+connect(search:GetPropertyChangedSignal('Text'),function()
+ local query=search.Text:lower()
+ for _,r in ipairs(rows[active]) do r.frame.Visible=query=='' or r.text:find(query,1,true)~=nil end
+end)
+-- Fit the logical window inside the available device area; reflow after rotation.
+local function fit()
+ local camera=workspace.CurrentCamera; if not camera then return end
+ local size=camera.ViewportSize
+ local inset=GuiService:GetGuiInset()
+ scale.Scale=math.min(1,(size.X-24)/root.Size.X.Offset,(size.Y-inset.Y-42)/root.Size.Y.Offset)
+ scale.Scale=math.max(0.1,scale.Scale)
+ local px=root.Position.X.Offset; local py=root.Position.Y.Offset
+ root.Position=UDim2.fromOffset(math.clamp(px,0,math.max(0,size.X-root.AbsoluteSize.X)),math.clamp(py,0,math.max(0,size.Y-inset.Y-root.AbsoluteSize.Y)))
+end
+local gesture
+local function start(i,kind)
+ if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+  gesture={input=i,kind=kind,start=i.Position,position=root.Position,size=root.Size}
+ end
+end
+connect(top.InputBegan,function(i) start(i,'move') end)
+connect(grip.InputBegan,function(i) start(i,'resize') end)
+connect(Input.InputChanged,function(i)
+ if dragSlider and (i==dragSlider.input or i.UserInputType==Enum.UserInputType.MouseMovement and dragSlider.input.UserInputType==Enum.UserInputType.MouseButton1) then dragSlider.update(i.Position.X) end
+ if not gesture then return end
+ if not (i==gesture.input or i.UserInputType==Enum.UserInputType.MouseMovement and gesture.input.UserInputType==Enum.UserInputType.MouseButton1) then return end
+ local delta=i.Position-gesture.start
+ if gesture.kind=='move' then
+  root.Position=UDim2.fromOffset(gesture.position.X.Offset+delta.X,gesture.position.Y.Offset+delta.Y)
+ else
+  root.Size=UDim2.fromOffset(math.clamp(gesture.size.X.Offset+delta.X/scale.Scale,690,1100),math.clamp(gesture.size.Y.Offset+delta.Y/scale.Scale,420,800))
+ end
+ fit()
+end)
+connect(Input.InputEnded,function(i)
+ if gesture and i==gesture.input then gesture=nil end
+ if dragSlider and i==dragSlider.input then dragSlider=nil end
+end)
+local function hide() root.Visible=false; restore.Visible=true end
+connect(minimize.Activated,hide)
+connect(restore.Activated,function() restore.Visible=false; root.Visible=true; fit() end)
+connect(close.Activated,function() gui:Destroy() end)
+connect(Input.InputBegan,function(i,processed)
+ if not processed and i.KeyCode==Enum.KeyCode.RightShift then
+  root.Visible=not root.Visible; restore.Visible=not root.Visible
+ end
+end)
+local cameraConnection
+local function watchCamera()
+ if cameraConnection then cameraConnection:Disconnect() end
+ local camera=workspace.CurrentCamera
+ if camera then cameraConnection=connect(camera:GetPropertyChangedSignal('ViewportSize'),fit) end
+ fit()
+end
+connect(workspace:GetPropertyChangedSignal('CurrentCamera'),watchCamera)
+choose('Overview'); watchCamera()
