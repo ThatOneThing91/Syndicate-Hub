@@ -1351,8 +1351,6 @@ local function SetupInventoryFilter(target,filterName)
        end
       end
      end
-    else
-     previewTimer=0
     end
     task.wait(1)
    end
