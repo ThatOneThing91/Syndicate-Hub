@@ -1,4 +1,4 @@
--- AMETHYST / PIXEL UI 1.3
+-- AMETHYST / PIXEL UI 1.4
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
@@ -139,7 +139,7 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  1.3',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  1.4',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 local sidebar=frame(root,{Position=UDim2.fromOffset(0,56),Size=UDim2.new(0,136,1,-84),BackgroundColor3=Color3.fromRGB(22,16,34),BackgroundTransparency=0.25})
@@ -334,18 +334,9 @@ row(quickSell,'Quick Sell controls','Ready for your selling controls and filters
 local grading=page('Grading','05')
 section(grading,'GRADING')
 row(grading,'Grading controls','Ready for your grading controls and filters.')
-local controls=page('Controls','06')
-section(controls,'CONTROL GALLERY / DEMO STATE ONLY')
-toggle(controls,'Primary switch','A crisp, square toggle with touch support.',true,function(v) notify('Primary switch: '..(v and 'ON' or 'OFF')) end)
-toggle(controls,'Secondary switch','Independent state for each control.',false)
-slider(controls,'Intensity','Drag to adjust. Gamepad A steps the value.',0,100,65)
-cycle(controls,'Mode','A sample selector for future controls.',{'Balanced','Fast','Custom'})
-action(controls,'Run preview','An example action button.','RUN')
-local modules=page('Modules','03')
-section(modules,'YOUR FUTURE FEATURES / PLACEHOLDERS')
-for _,m in ipairs({'Collection','Inventory','Travel','Utilities','Custom module'}) do
- toggle(modules,m,'Interface placeholder; no game action attached.',false)
-end
+local event=page('Event','06')
+section(event,'EVENT')
+row(event,'Event controls','Ready for your event features to be added.')
 local appearance=page('Appearance','05')
 section(appearance,'MAKE IT YOURS / LIVE CONTROLS')
 slider(appearance,'Transparency','Higher values reveal more of the world.',0,65,18,function(v)
@@ -380,12 +371,6 @@ for index,c in ipairs(colors) do
 end
 toggle(appearance,'Animated sky','Aurora layers, drifting stars, and shooting stars.',true,function(v) animatedSky=v end)
 toggle(appearance,'Pixel stars','Show or hide the star field independently.',true,function(v) showStars=v; starLayer.Visible=v end)
-local status=page('Activity','06')
-section(status,'INTERFACE STATUS')
-row(status,'Standalone mode','No hub files or game systems connected.')
-row(status,'Input ready','Mouse, keyboard, touch, and selectable buttons.')
-row(status,'Responsive layout','Window scales down to fit smaller screens.')
-action(status,'Test toast','Check notification placement and readability.','TEST',function() notify('AMETHYST / Notification test') end)
 local settings=page('Settings','07')
 section(settings,'WINDOW & PREFERENCES')
 toggle(settings,'Notifications','Show interface toast messages.',true,function(v) notifications=v; if not v then toast.Visible=false end end)
