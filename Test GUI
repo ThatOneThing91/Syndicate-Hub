@@ -1244,7 +1244,7 @@ local function SetupInventoryFilter(target,filterName)
     task.wait(1)
    end
   end)
- end end
+ end
  loadCatalog()
 end
 SetupInventoryFilter(quickSell,'Quick Sell')
