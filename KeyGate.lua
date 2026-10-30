@@ -147,9 +147,6 @@ local discord=make("TextButton",{Position=UDim2.fromOffset(20,276),Size=UDim2.ne
  BackgroundColor3=Color3.fromRGB(70,78,165),BorderSizePixel=0,Text="Discord Server  ·  Copy Invite",
  TextColor3=Color3.fromRGB(255,255,255),Font=Enum.Font.GothamBold,TextSize=12,Selectable=true,ZIndex=3},panel)
 make("UICorner",{CornerRadius=UDim.new(0,7)},discord)
-make("TextLabel",{Position=UDim2.fromOffset(20,326),Size=UDim2.new(1,-40,0,18),BackgroundTransparency=1,
- Text="Free keys: 24 hours   ·   Premium keys: lifetime",TextColor3=Color3.fromRGB(126,116,143),
- Font=Enum.Font.Gotham,TextSize=10,TextXAlignment=Enum.TextXAlignment.Center,ZIndex=3},panel)
 
 local dragHandle=make("TextButton",{Position=UDim2.fromOffset(0,0),Size=UDim2.new(1,0,0,62),
  BackgroundTransparency=1,Text="",AutoButtonColor=false,Selectable=false,ZIndex=2},panel)
