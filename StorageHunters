@@ -11910,6 +11910,7 @@ function ThisHubInstance.GradingController:SetEnabled(value)
         toggle.Text = "AUTO GRADING: " .. (enabled and "ON" or "OFF")
         toggle.BackgroundColor3 = enabled and Color3.fromRGB(35, 115, 65) or Color3.fromRGB(65, 35, 43)
     end
+    if status then status.Text = "Status: Auto Grading " .. (enabled and "ON" or "OFF") end
     report("Auto Grading " .. (enabled and "enabled" or "disabled"))
     return true
 end
