@@ -678,12 +678,12 @@ toggle(farming,'Farming','Runs the full auction farming loop: priority selection
 toggle(farming,'Pause Auction','Arms the existing pause-on-first-bid behavior.',backendState('PauseAuction',false),function(value) backendToggle('PauseAuction',value) end)
 
 section(farming,'UNLOADING')
+toggle(farming,'Lost & Found Unloader','Keeps the existing Lost & Found claim/unload worker running in the background.',backendState('LostFoundUnloader',false),function(value) backendToggle('LostFoundUnloader',value) end)
 toggle(farming,'Instant Unload','Uses the existing instant unload worker.',backendState('InstantUnload',false),function(value) backendToggle('InstantUnload',value) end)
 toggle(farming,'Auto Unload When Full','Automatically starts the unload trip when the equipped vehicle is full.',backendState('AutoUnloadWhenFull',false),function(value) backendToggle('AutoUnloadWhenFull',value) end)
 action(farming,'Manual unload','Teleports to your own unload pad, spawns your vehicle, and seats you so the unload menu opens.','START',function()
  if Backend and type(Backend.GoToUnload)=='function' then task.spawn(function() Backend.GoToUnload(false) end) else notify('Manual unload backend unavailable.') end
 end)
-toggle(farming,'Lost & Found Unloader','Keeps the existing Lost & Found claim/unload worker running in the background.',backendState('LostFoundUnloader',false),function(value) backendToggle('LostFoundUnloader',value) end)
 local shop=page('Shop','03')
 section(shop,'SHOP AUTOMATION')
 row(shop,Backend and 'Shop automation connected' or 'Shop automation unavailable',Backend and 'These controls use the existing Syndicate Hub workers while the new interface handles layout and input.' or ('Backend error: '..tostring(backendError or 'unknown error')),78)
@@ -800,6 +800,19 @@ function Engine.Evaluate(data,catalog,settings,guid)
  local sell=(settings.Mode=='Sell Selected' and match) or (settings.Mode=='Keep Selected' and not match)
  return sell and 'Would sell' or 'Keep',match and 'Matches selection' or 'Does not match selection'
 end
+function Engine.Value(data,catalog)
+ if type(data)~='table' then return 0 end
+ local id=tostring(data.ItemId or '')
+ local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
+ if type(conf)~='table' then return 0 end
+ local base=tonumber(conf.BasePrice) or 0
+ local value=base
+ local module=catalog.MutatorModule
+ if type(module)=='table' and type(module.CalculatePriceForEntry)=='function' then
+  pcall(function() value=module:CalculatePriceForEntry(base,data) or base end)
+ end
+ return tonumber(value) or 0
+end
 
 local function SetupInventoryFilter(target,filterName)
  local isQuickSell=filterName=='Quick Sell'
@@ -810,9 +823,8 @@ local function SetupInventoryFilter(target,filterName)
  local options,blocks={},{}
  local inventory,results={},{}
  local loaded,loading=false,false
- local pageNumber=1
  local layoutWidth=500
- local previewLabel,statusLabel,summaryLabel
+ local statusLabel,summaryLabel
  local refreshPreview,layoutFilter,buildOptions
  local function newBlock(height)
   order=order+1
@@ -879,22 +891,44 @@ local function SetupInventoryFilter(target,filterName)
  statusLabel=label(toolsBlock,'Loading definitions...',{Position=UDim2.fromOffset(12,52),Size=UDim2.new(1,-24,0,40),TextSize=10,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
  local preview=newBlock(420)
  summaryLabel=label(preview,'No inventory loaded.',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,54),TextSize=11,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
- local previewScroll=make('ScrollingFrame',{Position=UDim2.fromOffset(12,72),Size=UDim2.new(1,-24,1,-118),
-  BackgroundTransparency=1,BorderSizePixel=0,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new(),ScrollBarThickness=4},preview)
- previewLabel=label(previewScroll,'Use Read inventory to preview your selections.',{Size=UDim2.new(1,-8,0,0),AutomaticSize=Enum.AutomaticSize.Y,
-  TextSize=11,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
- local prev=button(preview,'< Previous',{Position=UDim2.new(0,12,1,-36),Size=UDim2.new(0.5,-18,0,25),TextSize=10})
- local nextButton=button(preview,'Next >',{Position=UDim2.new(0.5,6,1,-36),Size=UDim2.new(0.5,-18,0,25),TextSize=10})
- local function showResults()
-  local totalPages=math.max(1,math.ceil(#results/20));pageNumber=math.clamp(pageNumber,1,totalPages)
-  local lines={string.format('PAGE %d / %d',pageNumber,totalPages)}
-  for i=(pageNumber-1)*20+1,math.min(#results,pageNumber*20) do
-   local r=results[i];lines[#lines+1]=r.status..' | '..r.name..'\n'..r.reason
-  end
-  previewLabel.Text=table.concat(lines,'\n\n');previewScroll.CanvasPosition=Vector2.new()
+ local previewScroll=make('ScrollingFrame',{Position=UDim2.fromOffset(12,68),Size=UDim2.new(1,-24,1,-80),
+  BackgroundColor3=Color3.fromRGB(24,18,35),BackgroundTransparency=0.35,BorderSizePixel=0,
+  AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new(),ScrollBarThickness=4,ScrollBarImageColor3=accent,
+  ScrollingDirection=Enum.ScrollingDirection.Y},preview)
+ make('UICorner',{CornerRadius=UDim.new(0,8)},previewScroll)
+ make('UIPadding',{PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),PaddingLeft=UDim.new(0,6),PaddingRight=UDim.new(0,6)},previewScroll)
+ make('UIListLayout',{Padding=UDim.new(0,5),SortOrder=Enum.SortOrder.LayoutOrder},previewScroll)
+ local previewEmpty=label(previewScroll,isQuickSell and 'Nothing currently matches your SELL rules.' or 'Use Read inventory to preview your selections.',{
+  Size=UDim2.new(1,-8,0,46),TextSize=11,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Center,LayoutOrder=0})
+ local previewRows={}
+ local function clearPreviewRows()
+  for _,item in ipairs(previewRows) do if item and item.Parent then item:Destroy() end end
+  table.clear(previewRows)
  end
- connect(prev.Activated,function() pageNumber=pageNumber-1;showResults() end)
- connect(nextButton.Activated,function() pageNumber=pageNumber+1;showResults() end)
+ local function showResults()
+  clearPreviewRows()
+  local visible={}
+  for _,result in ipairs(results) do
+   if not isQuickSell or result.status=='Would sell' then visible[#visible+1]=result end
+  end
+  previewEmpty.Visible=#visible==0
+  previewEmpty.Text=isQuickSell and 'Nothing currently matches your SELL rules.' or 'No inventory results to display.'
+  if #visible==0 then previewScroll.CanvasPosition=Vector2.new();return end
+  for index,result in ipairs(visible) do
+   local item=frame(previewScroll,{Size=UDim2.new(1,-8,0,54),BackgroundColor3=Color3.fromRGB(31,24,45),
+    BackgroundTransparency=0.18,LayoutOrder=index})
+   make('UICorner',{CornerRadius=UDim.new(0,7)},item)
+   local nameLabel=label(item,result.name,{Position=UDim2.fromOffset(10,7),Size=UDim2.new(1,-118,0,18),
+    TextSize=11,TextTruncate=Enum.TextTruncate.AtEnd})
+   local priceLabel=label(item,string.format('$%s',tostring(math.floor(result.value or 0))),{
+    Position=UDim2.new(1,-104,0,7),Size=UDim2.fromOffset(92,18),TextSize=11,TextXAlignment=Enum.TextXAlignment.Right})
+   if isQuickSell then tint(priceLabel,'TextColor3') end
+   label(item,result.status..'  ·  '..result.reason,{Position=UDim2.fromOffset(10,29),Size=UDim2.new(1,-20,0,17),
+    TextSize=9,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
+   previewRows[#previewRows+1]=item
+  end
+  previewScroll.CanvasPosition=Vector2.new()
+ end
  refreshPreview=function()
   results={};local counts={['Would sell']=0,Keep=0,Protected=0,Unknown=0}
   for guid,data in pairs(inventory) do
@@ -902,10 +936,19 @@ local function SetupInventoryFilter(target,filterName)
    counts[state]=counts[state]+1
    local id=type(data)=='table' and tostring(data.ItemId or '') or ''
    local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
-   results[#results+1]={status=state,reason=reason,name=type(conf)=='table' and tostring(conf.Name or id) or ('Unknown item '..id),guid=tostring(guid)}
+   results[#results+1]={
+    status=state,reason=reason,name=type(conf)=='table' and tostring(conf.Name or id) or ('Unknown item '..id),
+    guid=tostring(guid),value=Engine.Value(data,catalog)
+   }
   end
-  table.sort(results,function(a,b) if a.status~=b.status then return a.status<b.status end; if a.name~=b.name then return a.name<b.name end;return a.guid<b.guid end)
-  summaryLabel.Text=string.format('WOULD SELL %d  /  KEEP %d\nPROTECTED %d  /  UNKNOWN %d\n%s',counts['Would sell'],counts.Keep,counts.Protected,counts.Unknown,isQuickSell and 'Live rules; only WOULD SELL items enter the sale queue.' or 'Grading preview only; worn/unverified accessories protected.')
+  table.sort(results,function(a,b)
+   if a.value~=b.value then return a.value>b.value end
+   if a.name~=b.name then return a.name<b.name end
+   return a.guid<b.guid
+  end)
+  summaryLabel.Text=isQuickSell
+   and string.format('WILL SELL %d  ·  KEEP %d  ·  PROTECTED %d\nSale queue below is sorted highest value first.',counts['Would sell'],counts.Keep,counts.Protected)
+   or string.format('KEEP %d  ·  PROTECTED %d  ·  UNKNOWN %d\nResults are sorted highest value first.',counts.Keep,counts.Protected,counts.Unknown)
   for _,group in ipairs(groups) do
    local selected=0;for _ in pairs(settings.Selected[group]) do selected=selected+1 end
    blocks[group].caption.Text=(blocks[group].expanded and '- ' or '+ ')..group..'  ('..selected..'/'..#(options[group] or {})..')'
@@ -956,7 +999,7 @@ local function SetupInventoryFilter(target,filterName)
      local result=require(object);assert(type(result)=='table',name..' did not return a table');return result
     end
     local items=module('Items');local drinks=module('EnergyDrinks');local accessories=module('Accessories');local mutations=module('MutatorModule')
-    local newCatalog={Items=items,EventNames={},MutationNames={}}
+    local newCatalog={Items=items,EventNames={},MutationNames={},MutatorModule=mutations}
     local fresh={};local seen={};for _,group in ipairs(groups) do fresh[group]={};seen[group]={} end
     local function add(group,key,name)
      if not key or seen[group][key] then return end
@@ -1086,7 +1129,7 @@ local function SetupInventoryFilter(target,filterName)
   for guid,item in pairs(data) do
    if type(item)=='table' and favorites[tostring(guid)] then item.Favorite=true end
   end
-  inventory=data;pageNumber=1;refreshPreview()
+  inventory=data;refreshPreview()
   return true
  end
  connect(inventoryButton.Activated,function()
@@ -1101,29 +1144,18 @@ local function SetupInventoryFilter(target,filterName)
 
  if isQuickSell then
   section(target,'AUTO QUICK SELL')
-  local autoInventory=false
   local autoRate=false
-  local inventoryThreshold=80
   local rateThreshold=0
   local currentRate=0
   local secondsUntilNext=0
   local selling=false
   local lastSale=-math.huge
 
-  local monitor=row(target,'Quick Sell monitor','Live inventory and pawn-rate status.',86)
-  local monitorValue=label(monitor,'Loading...',{
-   Position=UDim2.fromOffset(14,56),Size=UDim2.new(1,-28,0,20),TextSize=10,TextColor3=muted,
-   TextTruncate=Enum.TextTruncate.AtEnd})
+  local monitor=row(target,'Quick Sell rate','Current pawn sale rate and time remaining before the game updates it.',78)
+  local monitorValue=tint(label(monitor,'Loading rate...',{
+   Position=UDim2.fromOffset(14,49),Size=UDim2.new(1,-28,0,18),TextSize=11,
+   TextTruncate=Enum.TextTruncate.AtEnd}),'TextColor3')
   rowSpecs[monitor].value=monitorValue
-
-  local statusRow=row(target,'Sale status','Ready. Select filter options, review WOULD SELL items, then sell manually or arm a trigger.',88)
-  local saleStatus=label(statusRow,'READY',{Position=UDim2.fromOffset(14,58),Size=UDim2.new(1,-28,0,18),
-   TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
-  rowSpecs[statusRow].value=saleStatus
-
-  local function setSaleStatus(textValue)
-   if saleStatus and saleStatus.Parent then saleStatus.Text=tostring(textValue) end
-  end
 
   local function eligibleGuids()
    local result={}
@@ -1147,18 +1179,13 @@ local function SetupInventoryFilter(target,filterName)
   end
 
   local function updateMonitor()
-   local count=tonumber(player:GetAttribute('InventoryCount')) or 0
-   local cap=tonumber(player:GetAttribute('InventoryCap')) or 0
-   local pct=cap>0 and count/cap*100 or 0
-   monitorValue.Text=string.format('Inventory %d/%d (%.0f%%)  ·  Pawn %+d%%  ·  Next %02d:%02d',
-    count,cap,pct,currentRate,math.floor(secondsUntilNext/60),secondsUntilNext%60)
-   return pct
+   monitorValue.Text=string.format('%+d%%  ·  updates in %02d:%02d',
+    currentRate,math.floor(secondsUntilNext/60),secondsUntilNext%60)
   end
 
   local function sellMatching(reason)
    if selling or not loaded or os.clock()-lastSale<3 then return end
    selling=true;lastSale=os.clock()
-   setSaleStatus('Reading protected items and sale rules...')
    task.spawn(function()
     local sold,earned,remaining=0,0,0
     local ok,problem=pcall(function()
@@ -1168,11 +1195,9 @@ local function SetupInventoryFilter(target,filterName)
       local guids=eligibleGuids()
       remaining=#guids
       if remaining==0 then break end
-      local batches=math.ceil(#guids/200)
       for first=1,#guids,200 do
        local batch={}
        for i=first,math.min(first+199,#guids) do batch[#batch+1]=guids[i] end
-       setSaleStatus(string.format('Pass %d/3 · batch %d/%d · %d items',pass,math.ceil(first/200),batches,#batch))
        local saleOK,result=pcall(function()
         return game:GetService('ReplicatedStorage').Events.Pawn.SellItems:InvokeServer(batch)
        end)
@@ -1188,42 +1213,38 @@ local function SetupInventoryFilter(target,filterName)
     selling=false;lastSale=os.clock()
     if not gui.Parent then return end
     if not ok then
-     setSaleStatus('Stopped: '..tostring(problem))
+     if reason=='Manual' then notify('Quick Sell stopped: '..tostring(problem)) end
     elseif remaining>0 then
-     setSaleStatus(string.format('Sold %d · %d still eligible after 3 passes',sold,remaining))
+     if reason=='Manual' then notify(string.format('Quick Sell sold %d; %d items are still eligible.',sold,remaining)) end
     elseif sold>0 then
-     setSaleStatus(string.format('%s · sold %d · earned $%d',reason or 'Quick Sell',sold,math.floor(earned)))
      notify(string.format('Quick Sell sold %d matching items for $%d',sold,math.floor(earned)))
-    else
-     setSaleStatus('No items match the current SELL rules.')
+    elseif reason=='Manual' then
+     notify('No items match the current SELL rules.')
     end
    end)
   end
 
-  toggle(target,'Inventory trigger','Automatically runs Quick Sell when inventory reaches the selected percentage.',false,function(value) autoInventory=value end)
-  slider(target,'Inventory threshold %','Inventory percentage required before the automatic inventory trigger runs.',1,100,80,function(value) inventoryThreshold=value end)
   toggle(target,'Pawn rate trigger','Automatically runs Quick Sell when the current pawn rate reaches your target.',false,function(value) autoRate=value end)
   slider(target,'Pawn rate threshold %','Minimum pawn-rate bonus required before the rate trigger runs.',-100,100,0,function(value) rateThreshold=value end)
-  action(target,'Sell matching now','Rechecks every rule and sells only current WOULD SELL items in batches of 200, up to three passes.','SELL NOW',function()
+  action(target,'Sell matching now','Rechecks every rule and sells only current WILL SELL items in batches of 200, up to three passes.','SELL NOW',function()
    sellMatching('Manual')
   end)
 
   task.spawn(function()
    local rateTimer=20
    while gui.Parent do
-    if active=='Quick Sell' or autoInventory or autoRate then
-     if loaded then pcall(function() readFreshInventory(false) end) end
-     rateTimer=rateTimer+3
-     secondsUntilNext=math.max(0,secondsUntilNext-3)
+    if active=='Quick Sell' or autoRate then
+     if loaded and active=='Quick Sell' then pcall(function() readFreshInventory(false) end) end
+     rateTimer=rateTimer+1
+     secondsUntilNext=math.max(0,secondsUntilNext-1)
      if rateTimer>=20 then rateTimer=0;pcall(refreshPawnRate) end
-     local pct=updateMonitor()
-     if autoInventory and pct>=inventoryThreshold then sellMatching(string.format('Inventory %.0f%%',pct)) end
+     updateMonitor()
      if autoRate and currentRate>=rateThreshold then sellMatching('Pawn Rate '..tostring(currentRate)..'%') end
     end
-    task.wait(3)
+    task.wait(1)
    end
   end)
- end
+ end end
  loadCatalog()
 end
 SetupInventoryFilter(quickSell,'Quick Sell')
