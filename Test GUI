@@ -1,4 +1,4 @@
--- AMETHYST / PIXEL UI 1.2
+-- AMETHYST / PIXEL UI 1.3
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
@@ -139,12 +139,12 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  1.2',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  1.3',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 local sidebar=frame(root,{Position=UDim2.fromOffset(0,56),Size=UDim2.new(0,136,1,-84),BackgroundColor3=Color3.fromRGB(22,16,34),BackgroundTransparency=0.25})
 local nav=make('ScrollingFrame',{Position=UDim2.fromOffset(8,30),Size=UDim2.new(1,-16,1,-36),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=2,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new()},sidebar)
-make('UIListLayout',{Padding=UDim.new(0,3)},nav)
+make('UIListLayout',{Padding=UDim.new(0,3),SortOrder=Enum.SortOrder.LayoutOrder},nav)
 label(sidebar,'NAVIGATION',{Position=UDim2.fromOffset(16,10),Size=UDim2.fromOffset(110,14),TextColor3=muted,TextSize=10})
 local body=frame(root,{Position=UDim2.fromOffset(152,72),Size=UDim2.new(1,-168,1,-112),BackgroundTransparency=1})
 local title=label(body,'Account',{Size=UDim2.new(1,-185,0,26),TextSize=22})
@@ -206,8 +206,10 @@ local function choose(name)
  end
 end
 local order=0
+local tabOrder=0
 local function page(name, icon)
- local b=button(nav,name,{Size=UDim2.new(1,0,0,32),TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1})
+ tabOrder=tabOrder+1
+ local b=button(nav,name,{LayoutOrder=tabOrder,Size=UDim2.new(1,0,0,32),TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1})
  make('UIPadding',{PaddingLeft=UDim.new(0,10)},b)
  local p=make('ScrollingFrame',{Position=UDim2.fromOffset(0,61),Size=UDim2.new(1,0,1,-61),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3=accent,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,Visible=false},body)
  make('UIListLayout',{Padding=UDim.new(0,9),SortOrder=Enum.SortOrder.LayoutOrder},p)
@@ -319,7 +321,20 @@ connect(RunService.Heartbeat,function()
 end)
 section(home,'PERSONALIZE YOUR SPACE')
 action(home,'Appearance','Adjust colors, transparency, and the animated sky.','OPEN',function() choose('Appearance') end)
-local controls=page('Controls','02')
+-- Dedicated feature pages; game behavior will be connected separately.
+local farming=page('Farming','02')
+section(farming,'FARMING')
+row(farming,'Farming controls','Ready for your farming features to be added.')
+local shop=page('Shop','03')
+section(shop,'SHOP')
+row(shop,'Shop controls','Ready for your shop features to be added.')
+local quickSell=page('Quick Sell','04')
+section(quickSell,'QUICK SELL')
+row(quickSell,'Quick Sell controls','Ready for your selling controls and filters.')
+local grading=page('Grading','05')
+section(grading,'GRADING')
+row(grading,'Grading controls','Ready for your grading controls and filters.')
+local controls=page('Controls','06')
 section(controls,'CONTROL GALLERY / DEMO STATE ONLY')
 toggle(controls,'Primary switch','A crisp, square toggle with touch support.',true,function(v) notify('Primary switch: '..(v and 'ON' or 'OFF')) end)
 toggle(controls,'Secondary switch','Independent state for each control.',false)
