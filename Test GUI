@@ -700,6 +700,7 @@ local offerThreshold=25
 toggle(shop,'Auto Shop Offers','Accepts shopper offers at or above your selected minimum and declines lower verified offers.',false,function(value)
  local controller=Backend and Backend.AutoShopOffersController
  if controller and type(controller.SetActive)=='function' then
+  if type(controller.SetPercent)=='function' then pcall(function() controller:SetPercent(offerThreshold) end) end
   local ok,result=pcall(function() return controller:SetActive(value) end)
   if not ok or result==false then notify('Auto Shop Offers could not be changed yet.') end
  else
@@ -999,8 +1000,8 @@ local function SetupInventoryFilter(target,filterName)
   end)
  end
  connect(refreshButton.Activated,loadCatalog)
- local function readAccessoryState()
-  local states,worn={},{}
+ local function readInventorySafety()
+  local states,worn,favorites={},{},{}
   local character=player.Character
   if character then
    for _,object in ipairs(character:GetDescendants()) do
@@ -1019,7 +1020,7 @@ local function SetupInventoryFilter(target,filterName)
   end)
   if ok and type(full)=='table' then
    local visited={}
-   local function flag(entry)
+   local function equipFlag(entry)
     local explicitFalse=false
     for _,key in ipairs({'Equipped','equipped','IsEquipped','isEquipped','Wearing','wearing','Worn','worn','IsWorn','isWorn','IsWearing','isWearing'}) do
      local value=entry[key]
@@ -1031,24 +1032,39 @@ local function SetupInventoryFilter(target,filterName)
     if explicitFalse then return false end
     return nil
    end
-   local function scan(entry,depth)
+   local function favoriteFlag(entry)
+    for _,key in ipairs({'Favorite','favorite','Favorited','favorited','IsFavorite','isFavorite','IsFavorited','isFavorited','Favourite','favourite','IsFavourite','isFavourite'}) do
+     local value=rawget(entry,key)
+     if value==true or value==1 then return true end
+     if type(value)=='string' then
+      local lower=value:lower()
+      if lower=='true' or lower=='favorite' or lower=='favorited' then return true end
+     end
+    end
+    return false
+   end
+   local function scan(entry,depth,inheritedFavorite)
     if type(entry)~='table' or visited[entry] or depth>12 then return end
     visited[entry]=true
+    local hereFavorite=inheritedFavorite or favoriteFlag(entry)
     for key,value in pairs(entry) do
      if type(value)=='table' then
       local id=value.UUID or value.Guid or value.GUID or value.UniqueId
       if not id and type(key)=='string' and #key==36 and key:find('-',1,true) then id=key end
-      local state=flag(value)
+      local keyLower=type(key)=='string' and key:lower() or ''
+      local childFavorite=hereFavorite or keyLower=='favorites' or keyLower=='favourites' or favoriteFlag(value)
+      local state=equipFlag(value)
       if id and state~=nil then
        id=tostring(id);if state or states[id]~=true then states[id]=state end
       end
-      scan(value,depth+1)
+      if id and childFavorite then favorites[tostring(id)]=true end
+      scan(value,depth+1,childFavorite)
      end
     end
    end
-   scan(full,0)
+   scan(full,0,false)
   end
-  return states,worn
+  return states,worn,favorites
  end
  local reading=false
  local function readFreshInventory(showNotice)
@@ -1064,9 +1080,12 @@ local function SetupInventoryFilter(target,filterName)
    if showNotice then notify('Inventory read failed: '..tostring(data)) end
    return false
   end
-  local states,worn=readAccessoryState()
+  local states,worn,favorites=readInventorySafety()
   if not gui.Parent then return false end
   settings.AccessoryState=states;settings.WornItems=worn
+  for guid,item in pairs(data) do
+   if type(item)=='table' and favorites[tostring(guid)] then item.Favorite=true end
+  end
   inventory=data;pageNumber=1;refreshPreview()
   return true
  end
