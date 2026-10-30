@@ -1,9 +1,10 @@
--- AMETHYST / PIXEL UI 1.0
+-- AMETHYST / PIXEL UI 1.1
 -- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
 -- Demo controls change UI state only. No game automation or external dependencies.
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local GuiService = game:GetService('GuiService')
+local RunService = game:GetService('RunService')
 local player = Players.LocalPlayer
 assert(player, 'Run AmethystPixel from a client LocalScript')
 local parent = player:WaitForChild('PlayerGui')
@@ -14,6 +15,8 @@ local accent = Color3.fromRGB(176, 119, 255)
 local ink = Color3.fromRGB(239, 233, 255)
 local muted = Color3.fromRGB(157, 146, 179)
 local opacity, active, notifications = 0.18, 'Overview', true
+local animatedSky, showStars = true, true
+local toggleDraws = {}
 local function connect(event, fn)
  local c = event:Connect(fn); table.insert(connections, c); return c
 end
@@ -51,6 +54,39 @@ local root = frame(gui,{Size=UDim2.fromOffset(790,530), Position=UDim2.fromOffse
  BackgroundColor3=Color3.fromRGB(17,12,27), BackgroundTransparency=opacity, Active=true})
 make('UIStroke',{Color=Color3.fromRGB(85,61,116),Thickness=1},root)
 local scale = make('UIScale',{Scale=1},root)
+-- Native, clipped pixel stars stay underneath all interactive content.
+root.BackgroundColor3=Color3.new(1,1,1)
+local skyGradient=make('UIGradient',{
+ Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(12,11,25)),
+ ColorSequenceKeypoint.new(0.5,Color3.fromRGB(47,25,69)),
+ ColorSequenceKeypoint.new(1,Color3.fromRGB(15,19,38))}),Rotation=25},root)
+local sky=frame(root,{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,ClipsDescendants=true,ZIndex=1})
+local random=Random.new(91)
+local stars={}
+for i=1,42 do
+ local size=i%9==0 and 3 or (i%3==0 and 2 or 1)
+ local star=frame(sky,{Size=UDim2.fromOffset(size,size),
+  Position=UDim2.fromScale(random:NextNumber(),random:NextNumber()),
+  BackgroundColor3=Color3.fromRGB(211,191,255),BackgroundTransparency=0.6})
+ table.insert(stars,{object=star,x=random:NextNumber(),y=random:NextNumber(),
+  phase=random:NextNumber(0,math.pi*2),speed=random:NextNumber(0.001,0.003)})
+end
+local elapsed,accumulator=0,0
+connect(RunService.Heartbeat,function(dt)
+ if not root.Visible or not animatedSky then return end
+ accumulator=accumulator+dt
+ if accumulator<0.05 then return end
+ elapsed=elapsed+accumulator; accumulator=0
+ skyGradient.Rotation=25+math.sin(elapsed*0.09)*22
+ skyGradient.Offset=Vector2.new(math.sin(elapsed*0.07)*0.17,math.cos(elapsed*0.06)*0.12)
+ if showStars then
+  for _,star in ipairs(stars) do
+   star.object.Position=UDim2.fromScale(star.x,(star.y-elapsed*star.speed)%1)
+   star.object.BackgroundTransparency=0.48+(math.sin(elapsed*0.7+star.phase)+1)*0.2
+  end
+ end
+end)
+
 local top = frame(root,{Size=UDim2.new(1,0,0,56), BackgroundColor3=Color3.fromRGB(27,18,42),BackgroundTransparency=0.15,Active=true})
 tint(frame(top,{Position=UDim2.fromOffset(0,0),Size=UDim2.new(1,0,0,2)}),'BackgroundColor3')
 -- Three stepped pixels form the mark; all shapes are native UI objects.
@@ -58,14 +94,14 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  01',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'PIXEL INTERFACE  /  1.1',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
-local sidebar=frame(root,{Position=UDim2.fromOffset(0,56),Size=UDim2.new(0,166,1,-84),BackgroundColor3=Color3.fromRGB(22,16,34),BackgroundTransparency=0.25})
-local nav=make('ScrollingFrame',{Position=UDim2.fromOffset(12,30),Size=UDim2.new(1,-24,1,-40),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=2,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new()},sidebar)
-make('UIListLayout',{Padding=UDim.new(0,6)},nav)
-label(sidebar,'WORKSPACE',{Position=UDim2.fromOffset(16,10),Size=UDim2.fromOffset(130,14),TextColor3=muted,TextSize=10})
-local body=frame(root,{Position=UDim2.fromOffset(184,72),Size=UDim2.new(1,-202,1,-112),BackgroundTransparency=1})
+local sidebar=frame(root,{Position=UDim2.fromOffset(0,56),Size=UDim2.new(0,136,1,-84),BackgroundColor3=Color3.fromRGB(22,16,34),BackgroundTransparency=0.25})
+local nav=make('ScrollingFrame',{Position=UDim2.fromOffset(8,30),Size=UDim2.new(1,-16,1,-36),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=2,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new()},sidebar)
+make('UIListLayout',{Padding=UDim.new(0,3)},nav)
+label(sidebar,'NAVIGATION',{Position=UDim2.fromOffset(16,10),Size=UDim2.fromOffset(110,14),TextColor3=muted,TextSize=10})
+local body=frame(root,{Position=UDim2.fromOffset(152,72),Size=UDim2.new(1,-168,1,-112),BackgroundTransparency=1})
 local title=label(body,'Overview',{Size=UDim2.new(1,-185,0,26),TextSize=22})
 local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffset(0,31),Size=UDim2.new(1,0,0,16),TextSize=10,TextColor3=muted})
 local search=make('TextBox',{Position=UDim2.new(1,-177,0,0),Size=UDim2.fromOffset(177,28),BackgroundColor3=Color3.fromRGB(39,29,55),BackgroundTransparency=0.15,BorderSizePixel=0,Text='',PlaceholderText='Search this tab...',PlaceholderColor3=muted,TextColor3=ink,Font=Enum.Font.Code,TextSize=12,ClearTextOnFocus=false},body)
@@ -85,17 +121,19 @@ local function choose(name)
  for n,t in pairs(tabs) do
   t.page.Visible=n==name
   t.button.BackgroundTransparency=n==name and 0 or 1
-  t.button.TextColor3=n==name and accent or muted
+  t.button.TextColor3=n==name and ink or muted
+  t.indicator.Visible=n==name
  end
 end
 local order=0
 local function page(name, icon)
- local b=button(nav,icon..'  '..name,{Size=UDim2.new(1,0,0,35),TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1})
+ local b=button(nav,name,{Size=UDim2.new(1,0,0,32),TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1})
  make('UIPadding',{PaddingLeft=UDim.new(0,10)},b)
  local p=make('ScrollingFrame',{Position=UDim2.fromOffset(0,61),Size=UDim2.new(1,0,1,-61),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3=accent,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,Visible=false},body)
  make('UIListLayout',{Padding=UDim.new(0,9),SortOrder=Enum.SortOrder.LayoutOrder},p)
  make('UIPadding',{PaddingRight=UDim.new(0,9),PaddingBottom=UDim.new(0,12)},p)
- tabs[name]={page=p,button=b}; rows[name]={}
+ local indicator=tint(frame(b,{Position=UDim2.fromOffset(0,7),Size=UDim2.fromOffset(2,18),Visible=false}),'BackgroundColor3')
+ tabs[name]={page=p,button=b,indicator=indicator}; rows[name]={}
  connect(b.Activated,function() choose(name) end)
  return p
 end
@@ -121,6 +159,7 @@ local function toggle(p,name,desc,default,callback)
   pixel.Position=UDim2.fromOffset(value and 34 or 4,4)
  end
  connect(b.Activated,function() value=not value; draw(); if callback then callback(value) end end)
+ table.insert(toggleDraws,draw)
  draw(); return draw
 end
 local function action(p,name,desc,caption,callback)
@@ -161,9 +200,9 @@ local function cycle(p,name,desc,options,callback)
  end)
 end
 local home=page('Overview','01')
-section(home,'WELCOME / AMETHYST 1.0')
+section(home,'WELCOME / AMETHYST 1.1')
 local hero=row(home,'A little glass. A little pixel.','A separate canvas for your next interface.',100)
-label(hero,'7 TABS    /    PURPLE GLASS    /    NATIVE UI',{Position=UDim2.fromOffset(14,72),Size=UDim2.new(1,-22,0,15),TextColor3=accent,TextSize=11})
+label(hero,'6 TABS    /    PIXEL SKY    /    AMETHYST 1.1',{Position=UDim2.fromOffset(14,72),Size=UDim2.new(1,-22,0,15),TextColor3=accent,TextSize=11})
 section(home,'QUICK ACCESS')
 action(home,'Appearance','Tune transparency and accent color.','OPEN',function() choose('Appearance') end)
 action(home,'Control gallery','Try switches, sliders, and selectors.','EXPLORE',function() choose('Controls') end)
@@ -173,31 +212,45 @@ section(controls,'CONTROL GALLERY / DEMO STATE ONLY')
 toggle(controls,'Primary switch','A crisp, square toggle with touch support.',true,function(v) notify('Primary switch: '..(v and 'ON' or 'OFF')) end)
 toggle(controls,'Secondary switch','Independent state for each control.',false)
 slider(controls,'Intensity','Drag to adjust. Gamepad A steps the value.',0,100,65)
-cycle(controls,'Profile','Tap to cycle through available profiles.',{'Balanced','Fast','Custom'})
+cycle(controls,'Mode','A sample selector for future controls.',{'Balanced','Fast','Custom'})
 action(controls,'Run preview','An example action button.','RUN')
 local modules=page('Modules','03')
 section(modules,'YOUR FUTURE FEATURES / PLACEHOLDERS')
 for _,m in ipairs({'Collection','Inventory','Travel','Utilities','Custom module'}) do
  toggle(modules,m,'Interface placeholder; no game action attached.',false)
 end
-local profiles=page('Profiles','04')
-section(profiles,'SESSION PRESETS')
-cycle(profiles,'Active profile','A selector mockup for your future profiles.',{'Default','Mobile','Desktop'})
-action(profiles,'Save profile','Placeholder for future persistence.','DEMO')
-action(profiles,'Import profile','Placeholder for a future import flow.','DEMO')
-action(profiles,'Export profile','Placeholder for a future export flow.','DEMO')
 local appearance=page('Appearance','05')
 section(appearance,'MAKE IT YOURS / LIVE CONTROLS')
 slider(appearance,'Transparency','Higher values reveal more of the world.',0,65,18,function(v)
  opacity=v/100; root.BackgroundTransparency=opacity
  for _,s in ipairs(surfaces) do s.BackgroundTransparency=opacity end
 end)
-cycle(appearance,'Accent color','Purple variants, applied immediately.',{'Amethyst','Orchid','Lavender'},function(v)
- accent=({Amethyst=Color3.fromRGB(176,119,255),Orchid=Color3.fromRGB(218,128,234),Lavender=Color3.fromRGB(151,151,255)})[v]
+local function applyAccent(color)
+ accent=color
  for _,t in ipairs(themes) do t[1][t[2]]=accent end
  for _,t in pairs(tabs) do t.page.ScrollBarImageColor3=accent end
+ for _,draw in ipairs(toggleDraws) do draw() end
+ for _,star in ipairs(stars) do star.object.BackgroundColor3=ink:Lerp(accent,0.4) end
+ skyGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(12,11,25)),
+  ColorSequenceKeypoint.new(0.5,Color3.fromRGB(14,12,22):Lerp(accent,0.23)),
+  ColorSequenceKeypoint.new(1,Color3.fromRGB(15,19,38))})
  choose(active)
-end)
+end
+local palette=row(appearance,'Accent palette','Choose a color for the controls and sky.',142)
+local swatches=frame(palette,{Position=UDim2.fromOffset(14,68),Size=UDim2.new(1,-28,0,62),BackgroundTransparency=1})
+make('UIGridLayout',{CellSize=UDim2.new(0.2,-5,0,28),CellPadding=UDim2.fromOffset(5,5),SortOrder=Enum.SortOrder.LayoutOrder},swatches)
+local colors={
+ {'Amethyst',176,119,255},{'Orchid',218,128,234},{'Lavender',151,151,255},
+ {'Rose',245,126,174},{'Coral',255,147,127},{'Amber',240,186,95},
+ {'Mint',119,224,180},{'Teal',88,204,208},{'Ice',120,192,255},{'Silver',193,200,221}}
+for index,c in ipairs(colors) do
+ local color=Color3.fromRGB(c[2],c[3],c[4])
+ local swatch=button(swatches,c[1],{LayoutOrder=index,TextSize=10,TextColor3=color,BackgroundColor3=color:Lerp(Color3.fromRGB(20,15,30),0.8)})
+ make('UIStroke',{Color=color,Thickness=1,Transparency=0.5},swatch)
+ connect(swatch.Activated,function() applyAccent(color) end)
+end
+toggle(appearance,'Animated sky','Slow color movement and twinkling pixel stars.',true,function(v) animatedSky=v end)
+toggle(appearance,'Pixel stars','Show or hide the star field independently.',true,function(v) showStars=v; sky.Visible=v end)
 local status=page('Activity','06')
 section(status,'INTERFACE STATUS')
 row(status,'Standalone mode','No hub files or game systems connected.')
@@ -265,4 +318,7 @@ local function watchCamera()
  fit()
 end
 connect(workspace:GetPropertyChangedSignal('CurrentCamera'),watchCamera)
+for _,child in ipairs(root:GetChildren()) do
+ if child:IsA('GuiObject') and child~=sky then child.ZIndex=2 end
+end
 choose('Overview'); watchCamera()
