@@ -1,5 +1,5 @@
 -- AMETHYST / PIXEL UI 2.8
--- Syndicate Hub migration interface. Farming and Event are connected to the live StorageHunters backend.
+-- Syndicate Hub migration interface backed by the live StorageHunters automation engine.
 -- Remaining tabs are migrated and tested one at a time.
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
@@ -170,8 +170,9 @@ local function snapInside(object,animate)
  local camera=workspace.CurrentCamera; if not camera then return end
  local viewport=camera.ViewportSize
  local multiplier=object==root and scale.Scale or 1
- local size=Vector2.new(object.Size.X.Offset*multiplier,object.Size.Y.Offset*multiplier)
- local current=Vector2.new(object.Position.X.Offset,object.Position.Y.Offset)
+ local scaledPosition=object.Position.X.Scale~=0 or object.Position.Y.Scale~=0
+ local size=scaledPosition and object.AbsoluteSize or Vector2.new(object.Size.X.Offset*multiplier,object.Size.Y.Offset*multiplier)
+ local current=scaledPosition and object.AbsolutePosition or Vector2.new(object.Position.X.Offset,object.Position.Y.Offset)
  local target=Vector2.new(math.clamp(current.X,0,math.max(0,viewport.X-size.X)),
   math.clamp(current.Y,0,math.max(0,viewport.Y-size.Y)))
  cancelSnap(object)
@@ -345,9 +346,9 @@ end)
 local title=label(body,'Account',{Size=UDim2.new(1,-185,0,26),TextSize=22})
 local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffset(0,31),Size=UDim2.new(1,0,0,16),TextSize=10,TextColor3=muted})
 local search=make('TextBox',{Position=UDim2.new(1,-177,0,0),Size=UDim2.fromOffset(177,28),BackgroundColor3=Color3.fromRGB(39,29,55),BackgroundTransparency=0.15,BorderSizePixel=0,Text='',PlaceholderText='Search this tab...',PlaceholderColor3=muted,TextColor3=ink,Font=Enum.Font.Code,TextSize=12,ClearTextOnFocus=false},body)
-local footer=label(root,'  [ TEST GUI ]  /  FARMING · SHOP · PLOT · QUICK SELL · EVENT CONNECTED',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
+local footer=label(root,'  [ TEST GUI ]  /  AMETHYST 2.8',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
 local grip=button(root,'//',{Position=UDim2.new(1,-27,1,-27),Size=UDim2.fromOffset(26,26),BackgroundTransparency=1,TextColor3=muted})
-local restore=button(gui,'♥',{Position=UDim2.fromOffset(18,90),Size=UDim2.fromOffset(48,48),Visible=false,
+local restore=button(gui,'♥',{Position=UDim2.new(0.5,-24,0,14),Size=UDim2.fromOffset(48,48),Visible=false,
  BackgroundColor3=Color3.fromRGB(29,18,44),BackgroundTransparency=0.12,TextSize=27,Font=Enum.Font.Gotham,TextColor3=accent})
 make('UICorner',{CornerRadius=UDim.new(1,0)},restore)
 local restoreRing=tint(make('UIStroke',{Thickness=1.5,Transparency=0.15},restore),'Color')
@@ -367,7 +368,7 @@ connect(Input.InputChanged,function(i)
  if delta.Magnitude>6 then g.dragged=true end
  if g.dragged then
   suppressIconUntil=os.clock()+0.3
-  restore.Position=UDim2.fromOffset(g.position.X.Offset+delta.X,g.position.Y.Offset+delta.Y)
+  restore.Position=UDim2.new(g.position.X.Scale,g.position.X.Offset+delta.X,g.position.Y.Scale,g.position.Y.Offset+delta.Y)
  end
 end)
 connect(Input.InputEnded,function(i)
@@ -634,9 +635,6 @@ section(home,'PERSONALIZE YOUR SPACE')
 action(home,'Appearance','Adjust colors, transparency, and the animated sky.','OPEN',function() choose('Appearance') end)
 -- Dedicated feature pages; game behavior will be connected separately.
 local farming=page('Farming','02')
-section(farming,'FARMING BACKEND')
-row(farming,Backend and 'Automation engine connected' or 'Automation engine unavailable',Backend and 'Using the same StorageHunters farming logic in headless mode, so this tab can be tested without the old hub UI.' or ('Backend error: '..tostring(backendError or 'unknown error')),84)
-
 local function backendState(key,default)
  if Backend and type(Backend.State)=='table' and Backend.State[key]~=nil then return Backend.State[key] end
  return default
@@ -686,7 +684,6 @@ action(farming,'Manual unload','Teleports to your own unload pad, spawns your ve
 end)
 local shop=page('Shop','03')
 section(shop,'SHOP AUTOMATION')
-row(shop,Backend and 'Shop automation connected' or 'Shop automation unavailable',Backend and 'These controls use the existing Syndicate Hub workers while the new interface handles layout and input.' or ('Backend error: '..tostring(backendError or 'unknown error')),78)
 toggle(shop,'Auto Wash','Fills available wash slots and completes brush cleaning with the existing completion checks.',backendState('AutoWash',false),function(value) backendToggle('AutoWash',value) end)
 toggle(shop,'Auto Repair','Repairs broken inventory items with the existing fishing-rod exclusion and paced scan.',backendState('AutoRepair',false),function(value) backendToggle('AutoRepair',value) end)
 toggle(shop,'Auto Open Safes','Starts, opens, and claims available locksmith safe slots automatically.',backendState('AutoOpenSafes',false),function(value) backendToggle('AutoOpenSafes',value) end)
@@ -715,7 +712,6 @@ end)
 
 local plot=page('Plot','03P')
 section(plot,'POTION AUTOMATION')
-row(plot,Backend and 'Plot potion tools connected' or 'Plot potion tools unavailable',Backend and 'Potion loading, placement, and pickup are separated here so Shop stays focused on shop tasks.' or ('Backend error: '..tostring(backendError or 'unknown error')),78)
 toggle(plot,'Auto Load Potions','Moves supported potions from inventory into your equipped vehicle, including favorited potions.',backendState('AutoLoadPotions',false),function(value) backendToggle('AutoLoadPotions',value) end)
 toggle(plot,'Auto Place Potions','Continues your existing potion layout layer-by-layer using the established spacing and placement checks.',backendState('AutoPlacePotions',false),function(value) backendToggle('AutoPlacePotions',value) end)
 toggle(plot,'Pick Up Plot Potions','Rapidly picks your placed potions back up and stops safely if inventory becomes full.',backendState('AutoPickupPlotPotions',false),function(value) backendToggle('AutoPickupPlotPotions',value) end)
@@ -752,11 +748,42 @@ function Engine.Evaluate(data,catalog,settings,guid)
  end
  local name=tostring(conf.Name or id)
  local lower=name:lower()
- if data.Favorite==true or data.Favorited==true or data.IsFavorite==true or data.Equipped==true or data.IsEquipped==true then
+ if data.Favorite==true or data.Favorited==true or data.IsFavorite==true
+  or data.IsFavorited==true or data.Favourite==true or data.IsFavourite==true
+  or data.Equipped==true or data.IsEquipped==true then
   return 'Protected','Favorite or equipped'
  end
- if lower=='luck drink 1' or lower:find('seeds',1,true) or lower:find('fishing rod',1,true) or lower:find('storage crate',1,true) or lower:find('safe',1,true) then
-  return 'Protected','Protected item type'
+ local rawId=data.ItemId or data.ItemID or data.itemId or data.itemID or data.Id or data.ID or data.id
+ if tostring(rawId)=='359' then return 'Protected','Luck Drink 1' end
+ local function protectedLabel(value)
+  if type(value)~='string' then return false end
+  local raw=value:lower()
+  local compact=raw:gsub('[%s_%-]+','')
+  if compact:find('seed',1,true)
+   or compact:find('fishingrod',1,true)
+   or compact:find('fishingpole',1,true)
+   or compact:find('storagecrate',1,true)
+   or compact:find('storagebox',1,true)
+   or compact:find('luckdrink',1,true) then
+   return true
+  end
+  return raw=='safe'
+   or raw:match('^safe%s')~=nil
+   or raw:match('%ssafe$')~=nil
+   or raw:match('%ssafe%s')~=nil
+ end
+ local protectedFields={'Name','name','DisplayName','displayName','ItemName','itemName','Type','type',
+  'ItemType','itemType','Category','category','Interactive','interactive','Class','class'}
+ for _,field in ipairs(protectedFields) do
+  if protectedLabel(data[field]) or protectedLabel(conf[field]) then
+   return 'Protected','Protected item type'
+  end
+ end
+ if data.IsSafe==true or data.isSafe==true or data.Safe==true or data.safe==true
+  or data.IsSafe==1 or data.isSafe==1 or data.Safe==1 or data.safe==1
+  or conf.IsSafe==true or conf.isSafe==true or conf.Safe==true or conf.safe==true
+  or conf.IsSafe==1 or conf.isSafe==1 or conf.Safe==1 or conf.safe==1 then
+  return 'Protected','Safe'
  end
  local normal,event={},{}
  local unknownMutation
@@ -1254,8 +1281,6 @@ end
 
 local event=page('Event','06')
 section(event,'HALLOWEEN EVENT')
-row(event,Backend and 'Halloween automation connected' or 'Halloween automation unavailable',Backend and 'These controls use the same Halloween routines from Syndicate Hub.' or ('Backend error: '..tostring(backendError or 'unknown error')),78)
-
 section(event,'COLLECTION')
 toggle(event,'Auto Trick or Treat','Visits active Halloween houses, retries available prompts, returns to your starting point, and stops if inventory fills.',backendState('AutoTrickOrTreat',false),function(value) backendToggle('AutoTrickOrTreat',value) end)
 toggle(event,'Grave Digger','Runs the existing grave prompt/cooldown tracker and retries failed digs.',backendState('GraveDigger',false),function(value) backendToggle('GraveDigger',value) end)
@@ -1382,7 +1407,7 @@ local function reflow()
    r.Size=UDim2.new(1,0,0,compact and bottom+34 or math.max(66,bottom))
   else r.Size=UDim2.new(1,0,0,math.max(66,bottom)) end
  end
- footer.Text=narrow and '  AMETHYST 2.8 / TEST GUI' or '  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED'
+ footer.Text=narrow and '  AMETHYST 2.8 / TEST GUI' or '  [ TEST GUI ]  /  AMETHYST 2.8'
  for _,hook in ipairs(resizeHooks) do hook(width) end
  updateNavScroll()
  reflowing=false
@@ -1429,8 +1454,9 @@ connect(restore.Activated,function()
 end)
 connect(close.Activated,function() gui:Destroy() end)
 connect(Input.InputBegan,function(i,processed)
- if not processed and i.KeyCode==Enum.KeyCode.RightShift then
-  root.Visible=not root.Visible; restore.Visible=not root.Visible
+ if not processed and i.KeyCode==Enum.KeyCode.Comma then
+  root.Visible=not root.Visible
+  restore.Visible=not root.Visible
  end
 end)
 local cameraConnection
