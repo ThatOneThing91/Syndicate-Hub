@@ -51,6 +51,7 @@ if not (function()
         local verifiedKey = normalizeKey(verifiedSession.key)
         if verifiedKey then
             environment.__SyndicateKeySessionVerified = nil
+            if environment[registryKey] == gate then environment[registryKey] = nil end
             memory[userId] = verifiedKey
             return true
         end
