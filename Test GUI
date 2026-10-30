@@ -827,6 +827,48 @@ function Engine.Evaluate(data,catalog,settings,guid)
  local sell=(settings.Mode=='Sell Selected' and match) or (settings.Mode=='Keep Selected' and not match)
  return sell and 'Would sell' or 'Keep',match and 'Matches selection' or 'Does not match selection'
 end
+function Engine.SelectionMatch(data,catalog,settings,guid)
+ if type(data)~='table' then return false,'Invalid item data' end
+ local id=tostring(data.ItemId or data.itemId or data.ItemID or '')
+ local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
+ if type(conf)~='table' then return false,'Item definition unavailable' end
+ if conf.Category=='Accessories' then
+  if not settings.AllowAccessories then return false,'Accessories excluded' end
+  if settings.WornItems[id] or settings.AccessoryState[tostring(guid)]==true then return false,'Currently worn accessory' end
+ end
+ local selections=settings.Selected
+ local checks={}
+ if next(selections.Consumables)~=nil then checks[#checks+1]=selections.Consumables[id]==true end
+ local normal,event={},{}
+ local function add(value)
+  local key=normalize(value)
+  if not key or key=='' or key=='none' then return end
+  if catalog.EventNames[key] then event[key]=true
+  elseif catalog.MutationNames[key] then normal[key]=true end
+ end
+ if type(data.Mutators)=='table' then
+  for k,v in pairs(data.Mutators) do
+   if type(k)=='string' and v~=false and v~=nil then add(k)
+   elseif type(v)=='string' or type(v)=='table' then add(v) end
+  end
+ end
+ for _,key in ipairs({'CleanMutation','PerfectMutation','TimeMutation','MiningMutation','EventMutation','Mutator'}) do add(data[key]) end
+ for _,group in ipairs({'Event Mutations','Mutations'}) do
+  if next(selections[group])~=nil then
+   local found=false
+   local names=group=='Event Mutations' and event or normal
+   for key in pairs(selections[group]) do if names[key] then found=true;break end end
+   checks[#checks+1]=found
+  end
+ end
+ if next(selections.Rarity)~=nil then
+  local rarity=normalize(conf.Rarity or data.Rarity)
+  checks[#checks+1]=rarity~=nil and selections.Rarity[rarity]==true
+ end
+ if #checks==0 then return false,'No selections' end
+ for _,matched in ipairs(checks) do if matched then return true,'Matches selection' end end
+ return false,'Does not match selection'
+end
 function Engine.Value(data,catalog)
  if type(data)~='table' then return 0 end
  local id=tostring(data.ItemId or '')
@@ -843,6 +885,8 @@ end
 
 local function SetupInventoryFilter(target,filterName)
  local isQuickSell=filterName=='Quick Sell'
+ local isGrading=filterName=='Grading'
+ local gradingMode='Grade All'
  local groups={'Consumables','Event Mutations','Mutations','Rarity'}
  local settings={Mode=isQuickSell and 'Sell Selected' or 'Keep Selected',Match='Any',Selected={},AllowAccessories=false,AccessoryState={},WornItems={}}
  for _,name in ipairs(groups) do settings.Selected[name]={} end
@@ -862,20 +906,27 @@ local function SetupInventoryFilter(target,filterName)
  end
  local intro=newBlock(92)
  label(intro,filterName:upper()..' FILTER',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=15})
- local introText=label(intro,isQuickSell and 'Live Quick Sell filter. Nothing sells unless it matches your current rules. Favorites, protected utility items, worn accessories, and unverified accessories stay protected.' or 'Independent grading preview. Worn and unverified accessories stay protected.',{
+ local introText=label(intro,isQuickSell and 'Live Quick Sell filter. Nothing sells unless it matches your current rules. Favorites, protected utility items, worn accessories, and unverified accessories stay protected.' or 'Use Grade All for every gradable item, or Grade Selected to use the same category filters as Quick Sell.',{
   Position=UDim2.fromOffset(12,36),Size=UDim2.new(1,-24,0,48),TextSize=11,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
  local modeBlock=newBlock(86)
- local modeButton=button(modeBlock,settings.Mode,{Position=UDim2.fromOffset(12,12),Size=UDim2.new(1,-24,0,30),TextSize=11})
- local modeHint=label(modeBlock,settings.Mode=='Keep Selected' and 'Keep anything selected; other eligible items would sell.' or 'Only items matching a selection would sell.',{Position=UDim2.fromOffset(12,48),Size=UDim2.new(1,-24,0,30),TextSize=10,TextColor3=muted,TextWrapped=true})
+ local modeButton=button(modeBlock,isGrading and gradingMode or settings.Mode,{Position=UDim2.fromOffset(12,12),Size=UDim2.new(1,-24,0,30),TextSize=11})
+ local modeHint=label(modeBlock,isGrading and 'Grade All ignores filters. Grade Selected grades only matching filter selections.' or (settings.Mode=='Keep Selected' and 'Keep anything selected; other eligible items would sell.' or 'Only items matching a selection would sell.'),{Position=UDim2.fromOffset(12,48),Size=UDim2.new(1,-24,0,30),TextSize=10,TextColor3=muted,TextWrapped=true})
  connect(modeButton.Activated,function()
-  settings.Mode=settings.Mode=='Keep Selected' and 'Sell Selected' or 'Keep Selected'
-  modeButton.Text=settings.Mode
-  modeHint.Text=settings.Mode=='Keep Selected' and 'Keep anything selected; other eligible items would sell.' or 'Only items matching a selection would sell.'
+  if isGrading then
+   gradingMode=gradingMode=='Grade All' and 'Grade Selected' or 'Grade All'
+   modeButton.Text=gradingMode
+   local controller=Backend and Backend.GradingController
+   if controller and type(controller.SetMode)=='function' then pcall(function() controller:SetMode(gradingMode) end) end
+  else
+   settings.Mode=settings.Mode=='Keep Selected' and 'Sell Selected' or 'Keep Selected'
+   modeButton.Text=settings.Mode
+   modeHint.Text=settings.Mode=='Keep Selected' and 'Keep anything selected; other eligible items would sell.' or 'Only items matching a selection would sell.'
+  end
   refreshPreview()
  end)
  local accessoriesBlock=newBlock(96)
- label(accessoriesBlock,'Allow accessory sales',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=12})
- local accessoriesHint=label(accessoriesBlock,'Worn accessories always stay protected.',{Position=UDim2.fromOffset(12,34),Size=UDim2.new(1,-24,0,25),TextSize=10,TextColor3=muted,TextWrapped=true})
+ label(accessoriesBlock,isGrading and 'Allow accessory grading' or 'Allow accessory sales',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=12})
+ local accessoriesHint=label(accessoriesBlock,isGrading and 'Applies only to Grade Selected. Worn accessories stay excluded.' or 'Worn accessories always stay protected.',{Position=UDim2.fromOffset(12,34),Size=UDim2.new(1,-24,0,25),TextSize=10,TextColor3=muted,TextWrapped=true})
  local accessoryToggle=button(accessoriesBlock,'OFF',{Position=UDim2.new(1,-70,0,64),Size=UDim2.fromOffset(58,24),TextSize=11})
  connect(accessoryToggle.Activated,function()
   settings.AllowAccessories=not settings.AllowAccessories
@@ -914,7 +965,7 @@ local function SetupInventoryFilter(target,filterName)
  end
  local toolsBlock=newBlock(100)
  local refreshButton=button(toolsBlock,'Refresh categories',{Position=UDim2.fromOffset(12,12),Size=UDim2.new(0.5,-18,0,32),TextSize=10})
- local inventoryButton=button(toolsBlock,'Read inventory',{Position=UDim2.new(0.5,6,0,12),Size=UDim2.new(0.5,-18,0,32),TextSize=10})
+ local inventoryButton=button(toolsBlock,isGrading and 'Read gradable items' or 'Read inventory',{Position=UDim2.new(0.5,6,0,12),Size=UDim2.new(0.5,-18,0,32),TextSize=10})
  statusLabel=label(toolsBlock,'Loading definitions...',{Position=UDim2.fromOffset(12,52),Size=UDim2.new(1,-24,0,40),TextSize=10,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
  local preview=newBlock(420)
  summaryLabel=label(preview,'No inventory loaded.',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,54),TextSize=11,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
@@ -925,7 +976,7 @@ local function SetupInventoryFilter(target,filterName)
  make('UICorner',{CornerRadius=UDim.new(0,8)},previewScroll)
  make('UIPadding',{PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),PaddingLeft=UDim.new(0,6),PaddingRight=UDim.new(0,6)},previewScroll)
  make('UIListLayout',{Padding=UDim.new(0,5),SortOrder=Enum.SortOrder.LayoutOrder},previewScroll)
- local previewEmpty=label(previewScroll,isQuickSell and 'Nothing currently matches your SELL rules.' or 'Use Read inventory to preview your selections.',{
+ local previewEmpty=label(previewScroll,isQuickSell and 'Nothing currently matches your SELL rules.' or (isGrading and 'No items are currently queued to grade.' or 'Use Read inventory to preview your selections.'),{
   Size=UDim2.new(1,-8,0,46),TextSize=11,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Center,LayoutOrder=0})
  local previewRows={}
  local function clearPreviewRows()
@@ -936,10 +987,17 @@ local function SetupInventoryFilter(target,filterName)
   clearPreviewRows()
   local visible={}
   for _,result in ipairs(results) do
-   if not isQuickSell or result.status=='Would sell' then visible[#visible+1]=result end
+   if isQuickSell then
+    if result.status=='Would sell' then visible[#visible+1]=result end
+   elseif isGrading then
+    if result.status=='Will grade' then visible[#visible+1]=result end
+   else
+    visible[#visible+1]=result
+   end
   end
   previewEmpty.Visible=#visible==0
-  previewEmpty.Text=isQuickSell and 'Nothing currently matches your SELL rules.' or 'No inventory results to display.'
+  previewEmpty.Text=isQuickSell and 'Nothing currently matches your SELL rules.'
+   or (isGrading and 'No items are currently queued to grade.' or 'No inventory results to display.')
   if #visible==0 then previewScroll.CanvasPosition=Vector2.new();return end
   for index,result in ipairs(visible) do
    local item=frame(previewScroll,{Size=UDim2.new(1,-8,0,54),BackgroundColor3=Color3.fromRGB(31,24,45),
@@ -949,7 +1007,7 @@ local function SetupInventoryFilter(target,filterName)
     TextSize=11,TextTruncate=Enum.TextTruncate.AtEnd})
    local priceLabel=label(item,string.format('$%s',tostring(math.floor(result.value or 0))),{
     Position=UDim2.new(1,-104,0,7),Size=UDim2.fromOffset(92,18),TextSize=11,TextXAlignment=Enum.TextXAlignment.Right})
-   if isQuickSell then tint(priceLabel,'TextColor3') end
+   if isQuickSell or isGrading then tint(priceLabel,'TextColor3') end
    label(item,result.status..'  ·  '..result.reason,{Position=UDim2.fromOffset(10,29),Size=UDim2.new(1,-20,0,17),
     TextSize=9,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
    previewRows[#previewRows+1]=item
@@ -957,32 +1015,57 @@ local function SetupInventoryFilter(target,filterName)
   previewScroll.CanvasPosition=Vector2.new()
  end
  refreshPreview=function()
-  results={};local counts={['Would sell']=0,Keep=0,Protected=0,Unknown=0}
-  for guid,data in pairs(inventory) do
-   local state,reason=Engine.Evaluate(data,catalog,settings,guid)
-   counts[state]=counts[state]+1
-   local id=type(data)=='table' and tostring(data.ItemId or '') or ''
-   local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
-   results[#results+1]={
-    status=state,reason=reason,name=type(conf)=='table' and tostring(conf.Name or id) or ('Unknown item '..id),
-    guid=tostring(guid),value=Engine.Value(data,catalog)
-   }
+  results={}
+  if isGrading then
+   local willGrade,skipped=0,0
+   for guid,data in pairs(inventory) do
+    local matched,reason
+    if gradingMode=='Grade All' then
+     matched,reason=true,'Grade All'
+    else
+     matched,reason=Engine.SelectionMatch(data,catalog,settings,guid)
+    end
+    if matched then willGrade=willGrade+1 else skipped=skipped+1 end
+    local id=type(data)=='table' and tostring(data.ItemId or data.itemId or '') or ''
+    local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
+    results[#results+1]={
+     status=matched and 'Will grade' or 'Skip',reason=reason,
+     name=type(conf)=='table' and tostring(conf.Name or id) or ('Unknown item '..id),
+     guid=tostring(guid),value=Engine.Value(data,catalog)
+    }
+   end
+   table.sort(results,function(a,b)
+    if a.value~=b.value then return a.value>b.value end
+    if a.name~=b.name then return a.name<b.name end
+    return a.guid<b.guid
+   end)
+   summaryLabel.Text=string.format('WILL GRADE %d  ·  SKIP %d\nMode: %s',willGrade,skipped,gradingMode)
+  else
+   local counts={['Would sell']=0,Keep=0,Protected=0,Unknown=0}
+   for guid,data in pairs(inventory) do
+    local state,reason=Engine.Evaluate(data,catalog,settings,guid)
+    counts[state]=counts[state]+1
+    local id=type(data)=='table' and tostring(data.ItemId or '') or ''
+    local conf=catalog.Items[id] or catalog.Items[tonumber(id)]
+    results[#results+1]={
+     status=state,reason=reason,name=type(conf)=='table' and tostring(conf.Name or id) or ('Unknown item '..id),
+     guid=tostring(guid),value=Engine.Value(data,catalog)
+    }
+   end
+   table.sort(results,function(a,b)
+    if a.value~=b.value then return a.value>b.value end
+    if a.name~=b.name then return a.name<b.name end
+    return a.guid<b.guid
+   end)
+   summaryLabel.Text=string.format('WILL SELL %d  ·  KEEP %d  ·  PROTECTED %d\nSale queue below is sorted highest value first.',counts['Would sell'],counts.Keep,counts.Protected)
   end
-  table.sort(results,function(a,b)
-   if a.value~=b.value then return a.value>b.value end
-   if a.name~=b.name then return a.name<b.name end
-   return a.guid<b.guid
-  end)
-  summaryLabel.Text=isQuickSell
-   and string.format('WILL SELL %d  ·  KEEP %d  ·  PROTECTED %d\nSale queue below is sorted highest value first.',counts['Would sell'],counts.Keep,counts.Protected)
-   or string.format('KEEP %d  ·  PROTECTED %d  ·  UNKNOWN %d\nResults are sorted highest value first.',counts.Keep,counts.Protected,counts.Unknown)
   for _,group in ipairs(groups) do
    local selected=0;for _ in pairs(settings.Selected[group]) do selected=selected+1 end
    blocks[group].caption.Text=(blocks[group].expanded and '- ' or '+ ')..group..'  ('..selected..'/'..#(options[group] or {})..')'
   end
   showResults()
  end
- buildOptions=function(group)
+  buildOptions=function(group)
   local block=blocks[group]
   for _,entry in ipairs(block.buttons) do entry.button:Destroy() end
   block.buttons={}
@@ -1062,7 +1145,7 @@ local function SetupInventoryFilter(target,filterName)
      for key in pairs(settings.Selected[group]) do if not seen[group][key] then settings.Selected[group][key]=nil end end
      buildOptions(group)
     end
-    statusLabel.Text=mutationsAvailable and 'Definitions loaded from game modules. New options start unselected. Rejoin for newly deployed module changes.' or 'Item categories loaded. MutatorModule does not expose all mutation definitions; send the path of the mutation definition module. Unrecognized mutations stay protected.'
+    statusLabel.Text=mutationsAvailable and (isGrading and 'Grading categories loaded. Grade All ignores filters; Grade Selected uses the selections below.' or 'Definitions loaded from game modules. New options start unselected. Rejoin for newly deployed module changes.') or 'Item categories loaded. Some mutation definitions are unavailable.'
     layoutFilter(layoutWidth)
    end)
    if not ok and gui.Parent then statusLabel.Text='Catalog unavailable: '..tostring(err) end
@@ -1142,8 +1225,31 @@ local function SetupInventoryFilter(target,filterName)
    if showNotice then notify('Load category definitions first.') end
    return false
   end
+  local RS=game:GetService('ReplicatedStorage')
+  if isGrading then
+   local ok,response=pcall(function()
+    return RS.Events.Grading.GetGradableItems:InvokeServer()
+   end)
+   if not ok or type(response)~='table' then
+    if showNotice then notify('Gradable item read failed: '..tostring(response)) end
+    return false
+   end
+   local entries=response.items or response.Items or response
+   if type(entries)~='table' then return false end
+   local mapped={}
+   for _,entry in pairs(entries) do
+    if type(entry)=='table' then
+     local guid=entry.guid or entry.Guid
+     local data=entry.data or entry.Data
+     if guid and type(data)=='table' then mapped[tostring(guid)]=data end
+    end
+   end
+   inventory=mapped
+   refreshPreview()
+   return true
+  end
+
   local ok,data=pcall(function()
-   local RS=game:GetService('ReplicatedStorage')
    return RS.Events.Pawn.GetSellableItems:InvokeServer()
   end)
   if not ok or type(data)~='table' then
@@ -1159,15 +1265,91 @@ local function SetupInventoryFilter(target,filterName)
   inventory=data;refreshPreview()
   return true
  end
- connect(inventoryButton.Activated,function()
+  connect(inventoryButton.Activated,function()
   if reading then return end
   reading=true;inventoryButton.Text='Reading...'
   task.spawn(function()
    readFreshInventory(true)
-   if gui.Parent then inventoryButton.Text='Read inventory' end
+   if gui.Parent then inventoryButton.Text=isGrading and 'Read gradable items' or 'Read inventory' end
    reading=false
   end)
  end)
+
+ if isGrading then
+  section(target,'GRADING CONTROL')
+  local gradingDesired=false
+  toggle(target,'Auto Grading','Runs the existing Syndicate grading worker: fills open slots, waits for completion, reveals grades, claims items, and continues.',false,function(value)
+   gradingDesired=value
+   local controller=Backend and Backend.GradingController
+   if controller and type(controller.SetEnabled)=='function' then
+    local ok,result=pcall(function() return controller:SetEnabled(value) end)
+    if not ok or result==false then notify('Auto Grading could not be changed yet.') end
+   else
+    notify('Grading backend is still initializing. Try again in a moment.')
+   end
+  end)
+
+  section(target,'GRADING STATUS')
+  local gradingInfo=newBlock(228)
+  local gradingStatus=tint(label(gradingInfo,'Status: Idle',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=11}),'TextColor3')
+  local gradingSlots=label(gradingInfo,'Slots: -',{Position=UDim2.fromOffset(12,34),Size=UDim2.new(1,-24,0,38),TextSize=10,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
+  local gradingLog=make('TextBox',{Position=UDim2.fromOffset(12,78),Size=UDim2.new(1,-24,0,104),
+   BackgroundColor3=Color3.fromRGB(24,18,35),BackgroundTransparency=0.2,BorderSizePixel=0,
+   ClearTextOnFocus=false,TextEditable=false,MultiLine=true,TextWrapped=true,Text='Ready.',
+   Font=Enum.Font.Code,TextSize=10,TextColor3=ink,TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top},gradingInfo)
+  make('UICorner',{CornerRadius=UDim.new(0,7)},gradingLog)
+  local clearLog=button(gradingInfo,'CLEAR LOG',{Position=UDim2.new(1,-104,0,190),Size=UDim2.fromOffset(92,26),TextSize=9})
+  connect(clearLog.Activated,function()
+   local controller=Backend and Backend.GradingController
+   if controller and type(controller.ClearLog)=='function' then pcall(function() controller:ClearLog() end) end
+   gradingLog.Text=''
+  end)
+
+  local matcherInstalled=false
+  local function gradingMatcher(entry)
+   if gradingMode=='Grade All' then return true end
+   local data=type(entry)=='table' and (entry.data or entry.Data)
+   local guid=type(entry)=='table' and (entry.guid or entry.Guid)
+   if type(data)~='table' then return false end
+   local matched=Engine.SelectionMatch(data,catalog,settings,guid)
+   return matched==true
+  end
+
+  task.spawn(function()
+   local previewTimer=0
+   while gui.Parent do
+    if active=='Grading' then
+     local controller=Backend and Backend.GradingController
+     if controller then
+      if not matcherInstalled and type(controller.SetMatcher)=='function' then
+       pcall(function() controller:SetMatcher(gradingMatcher) end)
+       matcherInstalled=true
+      end
+      if type(controller.SetMode)=='function' then pcall(function() controller:SetMode(gradingMode) end) end
+      if type(controller.GetEnabled)=='function' and gradingDesired~=controller:GetEnabled() then
+       pcall(function() controller:SetEnabled(gradingDesired) end)
+      end
+      if type(controller.GetSnapshot)=='function' then
+       local ok,snapshot=pcall(function() return controller:GetSnapshot() end)
+       if ok and type(snapshot)=='table' then
+        gradingStatus.Text=tostring(snapshot.status or 'Status: -')
+        gradingSlots.Text=tostring(snapshot.slots or 'Slots: -')
+        if type(snapshot.messages)=='table' then gradingLog.Text=table.concat(snapshot.messages,'\n') end
+       end
+      end
+     end
+     previewTimer=previewTimer+1
+     if loaded and previewTimer>=4 then
+      previewTimer=0
+      pcall(function() readFreshInventory(false) end)
+     end
+    else
+     previewTimer=4
+    end
+    task.wait(1)
+   end
+  end)
+ end
 
  if isQuickSell then
   section(target,'AUTO QUICK SELL')
