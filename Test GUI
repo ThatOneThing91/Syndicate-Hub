@@ -1,15 +1,16 @@
--- AMETHYST / PIXEL UI 2.8
+-- SYNDICATE HUB / STORAGE HUNTERS UI 2.8
 -- Syndicate Hub migration interface backed by the live StorageHunters automation engine.
--- Remaining tabs are migrated and tested one at a time.
+-- Multi-input Syndicate Hub interface backed by the live StorageHunters automation engine.
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
 local TweenService = game:GetService('TweenService')
+local GuiService = game:GetService('GuiService')
 local TextService = game:GetService('TextService')
 local player = Players.LocalPlayer
-assert(player, 'Run AmethystPixel from a client LocalScript')
+assert(player, 'Run Syndicate Hub from a client LocalScript')
 local parent = player:WaitForChild('PlayerGui')
-local old = parent:FindFirstChild('AmethystPixel')
+local old = parent:FindFirstChild('SyndicateHub') or parent:FindFirstChild('AmethystPixel')
 if old then old:Destroy() end
 local Backend, backendError
 local backendEnv=getgenv and getgenv() or _G
@@ -65,7 +66,7 @@ local function button(host, text, props)
  for k,v in pairs(props or {}) do p[k]=v end
  return make('TextButton', p, host)
 end
-local gui = make('ScreenGui', {Name='AmethystPixel', ResetOnSpawn=false,
+local gui = make('ScreenGui', {Name='SyndicateHub', ResetOnSpawn=false,
  ZIndexBehavior=Enum.ZIndexBehavior.Sibling, IgnoreGuiInset=true, DisplayOrder=30}, parent)
 -- Use the full display, including the top bar and device safe-area edges.
 gui.ScreenInsets=Enum.ScreenInsets.None
@@ -190,8 +191,8 @@ tint(frame(top,{Position=UDim2.fromOffset(0,0),Size=UDim2.new(1,0,0,2)}),'Backgr
 for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
-label(top,'AMETHYST',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(180,20),TextSize=18})
-label(top,'PIXEL INTERFACE  /  2.8',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'SYNDICATE HUB',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(210,20),TextSize=18})
+label(top,'STORAGE HUNTERS  /  2.8',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 -- Slim vertical text navigation, with the original stacked layout.
@@ -348,14 +349,28 @@ end)
 local title=label(body,'Account',{Size=UDim2.new(1,-185,0,26),TextSize=22})
 local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffset(0,31),Size=UDim2.new(1,0,0,16),TextSize=10,TextColor3=muted})
 local search=make('TextBox',{Position=UDim2.new(1,-177,0,0),Size=UDim2.fromOffset(177,28),BackgroundColor3=Color3.fromRGB(39,29,55),BackgroundTransparency=0.15,BorderSizePixel=0,Text='',PlaceholderText='Search this tab...',PlaceholderColor3=muted,TextColor3=ink,Font=Enum.Font.Code,TextSize=12,ClearTextOnFocus=false},body)
-local footer=label(root,'  [ TEST GUI ]  /  AMETHYST 2.8',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
+local footer=label(root,'  [ SYNDICATE HUB ]  /  STORAGE HUNTERS',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
 local grip=button(root,'//',{Position=UDim2.new(1,-27,1,-27),Size=UDim2.fromOffset(26,26),BackgroundTransparency=1,TextColor3=muted})
-local restore=button(gui,'♥',{Position=UDim2.new(0.5,-24,0,14),Size=UDim2.fromOffset(48,48),Visible=false,
- BackgroundColor3=Color3.fromRGB(29,18,44),BackgroundTransparency=0.12,TextSize=27,Font=Enum.Font.Gotham,TextColor3=accent})
-make('UICorner',{CornerRadius=UDim.new(1,0)},restore)
-local restoreRing=tint(make('UIStroke',{Thickness=1.5,Transparency=0.15},restore),'Color')
-tint(restore,'TextColor3')
-make('UIGradient',{Color=ColorSequence.new(Color3.fromRGB(255,255,255),Color3.fromRGB(109,78,151)),Rotation=65},restore)
+local restore=button(gui,'',{Position=UDim2.new(0.5,-28,0,14),Size=UDim2.fromOffset(56,56),Visible=false,
+ BackgroundColor3=Color3.fromRGB(31,17,51),BackgroundTransparency=0.04,Font=Enum.Font.Gotham,
+ ZIndex=245,AutoButtonColor=false})
+make('UICorner',{CornerRadius=UDim.new(0,16)},restore)
+local restoreRing=tint(make('UIStroke',{Thickness=1.6,Transparency=0.08},restore),'Color')
+make('UIGradient',{Color=ColorSequence.new({
+ ColorSequenceKeypoint.new(0,Color3.fromRGB(51,28,81)),
+ ColorSequenceKeypoint.new(0.52,Color3.fromRGB(119,72,181)),
+ ColorSequenceKeypoint.new(1,Color3.fromRGB(45,25,72))}),Rotation=35},restore)
+local restoreInner=frame(restore,{Position=UDim2.fromOffset(5,5),Size=UDim2.new(1,-10,1,-10),
+ BackgroundColor3=Color3.fromRGB(18,11,30),BackgroundTransparency=0.76,ZIndex=246,Active=false})
+make('UICorner',{CornerRadius=UDim.new(0,12)},restoreInner)
+tint(make('UIStroke',{Thickness=1,Transparency=0.68},restoreInner),'Color')
+tint(label(restore,'♥',{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.48),
+ Size=UDim2.fromOffset(38,38),TextSize=29,Font=Enum.Font.GothamBold,
+ TextXAlignment=Enum.TextXAlignment.Center,TextYAlignment=Enum.TextYAlignment.Center,ZIndex=248}),'TextColor3')
+for _,p in ipairs({{8,9},{45,11},{10,43},{44,42}}) do
+ local sparkle=tint(frame(restore,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(3,3),ZIndex=247,Active=false}),'BackgroundColor3')
+ sparkle.BackgroundTransparency=0.18
+end
 local iconGesture, suppressIconUntil = nil, 0
 connect(restore.InputBegan,function(i)
  if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
@@ -454,6 +469,7 @@ local function choose(name)
 end
 local order=0
 local tabOrder=0
+local lastNavButton
 local function page(name, icon)
  tabOrder=tabOrder+1
  local b=button(nav,'',{LayoutOrder=tabOrder,Size=UDim2.new(1,0,0,32),BackgroundTransparency=1,AutoButtonColor=false})
@@ -470,6 +486,8 @@ local function page(name, icon)
  make('UIPadding',{PaddingRight=UDim.new(0,9),PaddingBottom=UDim.new(0,12)},p)
  local indicator=tint(frame(b,{Position=UDim2.fromOffset(0,8),Size=UDim2.fromOffset(2,16),Visible=false}),'BackgroundColor3')
  tabs[name]={page=p,button=b,indicator=indicator,caption=caption,border=border,icon=iconBox,iconParts=iconParts}; rows[name]={}
+ if lastNavButton then lastNavButton.NextSelectionDown=b; b.NextSelectionUp=lastNavButton end
+ lastNavButton=b
  connect(b.MouseEnter,function() paintTab(tabs[name],active==name,true) end)
  connect(b.MouseLeave,function() paintTab(tabs[name],active==name,false) end)
  connect(b.SelectionGained,function() paintTab(tabs[name],active==name,true); revealTab(tabs[name]) end)
@@ -616,6 +634,7 @@ local function dropdown(p,name,desc,options,callback,initial)
   make('UIListLayout',{Padding=UDim.new(0,4),SortOrder=Enum.SortOrder.LayoutOrder},list)
 
   local closed=false
+  local firstOption,currentOption
   local function close()
    if closed then return end
    closed=true
@@ -623,6 +642,7 @@ local function dropdown(p,name,desc,options,callback,initial)
    if blocker then blocker:Destroy() end
    draw(false)
    if openDropdownClose==close then openDropdownClose=nil end
+   if Input.GamepadEnabled and b.Parent then pcall(function() GuiService.SelectedObject=b end) end
   end
   openDropdownClose=close
   connect(blocker.Activated,close)
@@ -643,11 +663,14 @@ local function dropdown(p,name,desc,options,callback,initial)
    connect(option.MouseLeave,function()
     TweenService:Create(option,TweenInfo.new(0.12),{BackgroundTransparency=selected and 0.05 or 0.35}):Play()
    end)
+   if not firstOption then firstOption=option end
+   if selected then currentOption=option end
    connect(option.Activated,function()
     selectValue(value,true)
     close()
    end)
   end
+  if Input.GamepadEnabled then pcall(function() GuiService.SelectedObject=currentOption or firstOption or b end) end
  end)
  return object
 end
@@ -1678,7 +1701,7 @@ local function reflow()
    r.Size=UDim2.new(1,0,0,compact and bottom+34 or math.max(66,bottom))
   else r.Size=UDim2.new(1,0,0,math.max(66,bottom)) end
  end
- footer.Text=narrow and '  AMETHYST 2.8 / TEST GUI' or '  [ TEST GUI ]  /  AMETHYST 2.8'
+ footer.Text=narrow and '  SYNDICATE HUB / 2.8' or '  [ SYNDICATE HUB ]  /  STORAGE HUNTERS'
  for _,hook in ipairs(resizeHooks) do hook(width) end
  updateNavScroll()
  reflowing=false
@@ -1717,17 +1740,37 @@ connect(Input.InputEnded,function(i)
  if gesture and i==gesture.input then gesture=nil; snapInside(root,true) end
  if dragSlider and i==dragSlider.input then dragSlider=nil end
 end)
-local function hide() root.Visible=false; restore.Visible=true end
+local function focusActiveTab()
+ local tab=tabs[active]
+ if Input.GamepadEnabled and tab and tab.button and tab.button.Parent then
+  pcall(function() GuiService.SelectedObject=tab.button end)
+ end
+end
+local function hide()
+ root.Visible=false
+ restore.Visible=true
+ closeDropdown()
+ if Input.GamepadEnabled then pcall(function() GuiService.SelectedObject=restore end) end
+end
 connect(minimize.Activated,hide)
 connect(restore.Activated,function()
  if os.clock()<suppressIconUntil or iconGesture and iconGesture.dragged then return end
- restore.Visible=false; root.Visible=true; fit(); snapInside(root,false)
+ restore.Visible=false; root.Visible=true; fit(); snapInside(root,false); focusActiveTab()
 end)
 connect(close.Activated,function() gui:Destroy() end)
 connect(Input.InputBegan,function(i,processed)
- if not processed and i.KeyCode==Enum.KeyCode.Comma then
-  root.Visible=not root.Visible
-  restore.Visible=not root.Visible
+ if processed then return end
+ local toggleMenu=i.KeyCode==Enum.KeyCode.Comma or i.KeyCode==Enum.KeyCode.ButtonSelect
+ if toggleMenu then
+  if root.Visible then
+   hide()
+  else
+   restore.Visible=false
+   root.Visible=true
+   fit()
+   snapInside(root,false)
+   focusActiveTab()
+  end
  end
 end)
 local cameraConnection
