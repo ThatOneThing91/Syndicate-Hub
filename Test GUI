@@ -270,6 +270,8 @@ local function drawNavIcon(host,name)
   line(9.8,13,8.8,17); line(8.8,17,7.3,20.5)
  elseif name=='Shop' then
   outline(3,7,16,13,2); outline(7,2,8,8,3)
+ elseif name=='Plot' then
+  line(2,10,11,3); line(11,3,20,10); outline(5,9,12,11,2); outline(9,14,4,6,1)
  elseif name=='Quick Sell' then
   line(3,3,12,3); line(12,3,20,11); line(20,11,11,20)
   line(11,20,3,12); line(3,12,3,3); outline(6,6,3,3,2)
@@ -343,7 +345,7 @@ end)
 local title=label(body,'Account',{Size=UDim2.new(1,-185,0,26),TextSize=22})
 local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffset(0,31),Size=UDim2.new(1,0,0,16),TextSize=10,TextColor3=muted})
 local search=make('TextBox',{Position=UDim2.new(1,-177,0,0),Size=UDim2.fromOffset(177,28),BackgroundColor3=Color3.fromRGB(39,29,55),BackgroundTransparency=0.15,BorderSizePixel=0,Text='',PlaceholderText='Search this tab...',PlaceholderColor3=muted,TextColor3=ink,Font=Enum.Font.Code,TextSize=12,ClearTextOnFocus=false},body)
-local footer=label(root,'  [ TEST GUI ]  /  FARMING + EVENT CONNECTED · OTHER TABS MIGRATING',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
+local footer=label(root,'  [ TEST GUI ]  /  FARMING · SHOP · PLOT · QUICK SELL · EVENT CONNECTED',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
 local grip=button(root,'//',{Position=UDim2.new(1,-27,1,-27),Size=UDim2.fromOffset(26,26),BackgroundTransparency=1,TextColor3=muted})
 local restore=button(gui,'♥',{Position=UDim2.fromOffset(18,90),Size=UDim2.fromOffset(48,48),Visible=false,
  BackgroundColor3=Color3.fromRGB(29,18,44),BackgroundTransparency=0.12,TextSize=27,Font=Enum.Font.Gotham,TextColor3=accent})
@@ -489,12 +491,17 @@ local function dropdown(p,name,desc,options,callback,initial)
  for _,value in ipairs(options or {}) do values[#values+1]=value end
  local current=initial
  if current==nil or not table.find(values,current) then current=values[1] end
- local r=row(p,name,desc,78)
- local b=button(r,'',{Position=UDim2.new(1,-176,0,24),Size=UDim2.fromOffset(160,30),TextSize=10,TextTruncate=Enum.TextTruncate.AtEnd})
+ local r=row(p,name,desc,82)
+ local b=button(r,'',{Position=UDim2.new(1,-188,0,24),Size=UDim2.fromOffset(172,34),
+  TextSize=10,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundColor3=Color3.fromRGB(30,23,43),BackgroundTransparency=0.08})
+ make('UICorner',{CornerRadius=UDim.new(0,8)},b)
+ tint(make('UIStroke',{Thickness=1,Transparency=0.7},b),'Color')
  rowSpecs[r].control=b
+ local selectedDot=tint(frame(b,{Position=UDim2.fromOffset(10,14),Size=UDim2.fromOffset(6,6)}),'BackgroundColor3')
+ make('UICorner',{CornerRadius=UDim.new(1,0)},selectedDot)
  local object={}
  local function draw(open)
-  b.Text=tostring(current or 'None')..(open and '  ^' or '  v')
+  b.Text='   '..tostring(current or 'None')..(open and '    ^' or '    v')
  end
  local function selectValue(value,fire)
   if not table.find(values,value) then return false end
@@ -521,29 +528,32 @@ local function dropdown(p,name,desc,options,callback,initial)
   local blocker=button(gui,'',{Position=UDim2.fromScale(0,0),Size=UDim2.fromScale(1,1),
    BackgroundTransparency=1,Text='',AutoButtonColor=false,ZIndex=190})
   local viewport=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920,1080)
-  local width=math.max(190,b.AbsoluteSize.X)
-  local desired=math.min(260,#values*31+8)
-  local x=math.clamp(b.AbsolutePosition.X,8,math.max(8,viewport.X-width-8))
-  local below=b.AbsolutePosition.Y+b.AbsoluteSize.Y+4
-  local above=b.AbsolutePosition.Y-4
+  local width=math.max(224,b.AbsoluteSize.X+32)
+  local desired=math.min(300,44+#values*35)
+  local x=math.clamp(b.AbsolutePosition.X+b.AbsoluteSize.X-width,8,math.max(8,viewport.X-width-8))
+  local below=b.AbsolutePosition.Y+b.AbsoluteSize.Y+7
+  local above=b.AbsolutePosition.Y-7
   local belowSpace=viewport.Y-below-8
   local aboveSpace=above-8
-  local height=math.max(38,math.min(desired,math.max(belowSpace,aboveSpace)))
+  local height=math.max(84,math.min(desired,math.max(belowSpace,aboveSpace)))
   local y
-  if belowSpace>=math.min(desired,110) or belowSpace>=aboveSpace then
+  if belowSpace>=math.min(desired,130) or belowSpace>=aboveSpace then
    y=math.clamp(below,8,math.max(8,viewport.Y-height-8))
   else
    y=math.clamp(above-height,8,math.max(8,viewport.Y-height-8))
   end
 
-  local popup=make('ScrollingFrame',{Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(width,height),
-   BackgroundColor3=Color3.fromRGB(24,18,35),BackgroundTransparency=0.03,BorderSizePixel=0,
-   CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollBarThickness=4,
-   ScrollBarImageColor3=accent,ScrollingDirection=Enum.ScrollingDirection.Y,ZIndex=200},gui)
-  make('UIStroke',{Color=accent,Thickness=1,Transparency=0.25},popup)
-  make('UIPadding',{PaddingTop=UDim.new(0,4),PaddingBottom=UDim.new(0,4),
-   PaddingLeft=UDim.new(0,4),PaddingRight=UDim.new(0,4)},popup)
-  make('UIListLayout',{Padding=UDim.new(0,3),SortOrder=Enum.SortOrder.LayoutOrder},popup)
+  local popup=frame(gui,{Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(width,height),
+   BackgroundColor3=Color3.fromRGB(20,15,31),BackgroundTransparency=0.035,ZIndex=200})
+  make('UICorner',{CornerRadius=UDim.new(0,11)},popup)
+  tint(make('UIStroke',{Thickness=1.2,Transparency=0.32},popup),'Color')
+  local popupTitle=label(popup,'SELECT '..name:upper(),{Position=UDim2.fromOffset(12,8),Size=UDim2.new(1,-24,0,22),
+   TextSize=9,TextColor3=muted,ZIndex=205})
+  local list=make('ScrollingFrame',{Position=UDim2.fromOffset(8,36),Size=UDim2.new(1,-16,1,-44),
+   BackgroundTransparency=1,BorderSizePixel=0,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,
+   ScrollBarThickness=3,ScrollBarImageColor3=accent,ScrollingDirection=Enum.ScrollingDirection.Y,ZIndex=205},popup)
+  make('UIPadding',{PaddingBottom=UDim.new(0,4),PaddingRight=UDim.new(0,3)},list)
+  make('UIListLayout',{Padding=UDim.new(0,4),SortOrder=Enum.SortOrder.LayoutOrder},list)
 
   local closed=false
   local function close()
@@ -558,9 +568,21 @@ local function dropdown(p,name,desc,options,callback,initial)
   connect(blocker.Activated,close)
 
   for index,value in ipairs(values) do
-   local option=button(popup,tostring(value),{LayoutOrder=index,Size=UDim2.new(1,-8,0,28),
-    BackgroundColor3=value==current and accent:Lerp(Color3.fromRGB(24,18,35),0.55) or Color3.fromRGB(39,29,55),
-    TextXAlignment=Enum.TextXAlignment.Left,TextSize=10,ZIndex=210})
+   local selected=value==current
+   local option=button(list,'   '..tostring(value),{LayoutOrder=index,Size=UDim2.new(1,-4,0,31),
+    BackgroundColor3=selected and accent:Lerp(Color3.fromRGB(27,20,40),0.72) or Color3.fromRGB(31,24,45),
+    BackgroundTransparency=selected and 0.05 or 0.35,TextXAlignment=Enum.TextXAlignment.Left,
+    TextSize=10,ZIndex=210,AutoButtonColor=false})
+   make('UICorner',{CornerRadius=UDim.new(0,7)},option)
+   local mark=tint(frame(option,{Position=UDim2.fromOffset(8,12),Size=UDim2.fromOffset(7,7),
+    BackgroundTransparency=selected and 0 or 0.72,ZIndex=211}),'BackgroundColor3')
+   make('UICorner',{CornerRadius=UDim.new(1,0)},mark)
+   connect(option.MouseEnter,function()
+    TweenService:Create(option,TweenInfo.new(0.12),{BackgroundTransparency=selected and 0.02 or 0.16}):Play()
+   end)
+   connect(option.MouseLeave,function()
+    TweenService:Create(option,TweenInfo.new(0.12),{BackgroundTransparency=selected and 0.05 or 0.35}):Play()
+   end)
    connect(option.Activated,function()
     selectValue(value,true)
     close()
@@ -663,8 +685,48 @@ action(farming,'Manual unload','Teleports to your own unload pad, spawns your ve
 end)
 toggle(farming,'Lost & Found Unloader','Keeps the existing Lost & Found claim/unload worker running in the background.',backendState('LostFoundUnloader',false),function(value) backendToggle('LostFoundUnloader',value) end)
 local shop=page('Shop','03')
-section(shop,'SHOP')
-row(shop,'Shop controls','Ready for your shop features to be added.')
+section(shop,'SHOP AUTOMATION')
+row(shop,Backend and 'Shop automation connected' or 'Shop automation unavailable',Backend and 'These controls use the existing Syndicate Hub workers while the new interface handles layout and input.' or ('Backend error: '..tostring(backendError or 'unknown error')),78)
+toggle(shop,'Auto Wash','Fills available wash slots and completes brush cleaning with the existing completion checks.',backendState('AutoWash',false),function(value) backendToggle('AutoWash',value) end)
+toggle(shop,'Auto Repair','Repairs broken inventory items with the existing fishing-rod exclusion and paced scan.',backendState('AutoRepair',false),function(value) backendToggle('AutoRepair',value) end)
+toggle(shop,'Auto Open Safes','Starts, opens, and claims available locksmith safe slots automatically.',backendState('AutoOpenSafes',false),function(value) backendToggle('AutoOpenSafes',value) end)
+
+section(shop,'REWARDS')
+toggle(shop,'Auto Collect Daily Rewards','Claims the daily reward when the game allows it.',backendState('AutoDailyRewards',false),function(value) backendToggle('AutoDailyRewards',value) end)
+toggle(shop,'Auto Collect Museum Gift','Checks the museum gift on the existing five-minute cycle.',backendState('AutoMuseumGift',false),function(value) backendToggle('AutoMuseumGift',value) end)
+
+section(shop,'NPC SHOPPERS')
+local offerThreshold=25
+toggle(shop,'Auto Shop Offers','Accepts shopper offers at or above your selected minimum and declines lower verified offers.',false,function(value)
+ local controller=Backend and Backend.AutoShopOffersController
+ if controller and type(controller.SetActive)=='function' then
+  local ok,result=pcall(function() return controller:SetActive(value) end)
+  if not ok or result==false then notify('Auto Shop Offers could not be changed yet.') end
+ else
+  notify('Auto Shop Offers is still initializing. Try the toggle again in a moment.')
+ end
+end)
+slider(shop,'Minimum shopper offer %','Offers at or above this percentage are accepted; lower verified offers are declined.',-100,100,25,function(value)
+ offerThreshold=value
+ local controller=Backend and Backend.AutoShopOffersController
+ if controller and type(controller.SetPercent)=='function' then pcall(function() controller:SetPercent(value) end) end
+end)
+
+local plot=page('Plot','03P')
+section(plot,'POTION AUTOMATION')
+row(plot,Backend and 'Plot potion tools connected' or 'Plot potion tools unavailable',Backend and 'Potion loading, placement, and pickup are separated here so Shop stays focused on shop tasks.' or ('Backend error: '..tostring(backendError or 'unknown error')),78)
+toggle(plot,'Auto Load Potions','Moves supported potions from inventory into your equipped vehicle, including favorited potions.',backendState('AutoLoadPotions',false),function(value) backendToggle('AutoLoadPotions',value) end)
+toggle(plot,'Auto Place Potions','Continues your existing potion layout layer-by-layer using the established spacing and placement checks.',backendState('AutoPlacePotions',false),function(value) backendToggle('AutoPlacePotions',value) end)
+toggle(plot,'Pick Up Plot Potions','Rapidly picks your placed potions back up and stops safely if inventory becomes full.',backendState('AutoPickupPlotPotions',false),function(value) backendToggle('AutoPickupPlotPotions',value) end)
+
+section(plot,'PLOT TOOLS')
+action(plot,'Launch Plot Studio','Opens your separate Plot Studio / Plot Copier tooling without merging it into the main hub.','LAUNCH',function()
+ local ok,err=pcall(function()
+  loadstring(game:HttpGet('https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/PlotStudio/PlotStudio.lua?v='..os.time()))()
+ end)
+ if not ok then notify('Plot Studio failed to launch: '..tostring(err)) end
+end)
+
 local quickSell=page('Quick Sell','04')
 local grading=page('Grading','05')
 do
@@ -739,8 +801,9 @@ function Engine.Evaluate(data,catalog,settings,guid)
 end
 
 local function SetupInventoryFilter(target,filterName)
+ local isQuickSell=filterName=='Quick Sell'
  local groups={'Consumables','Event Mutations','Mutations','Rarity'}
- local settings={Mode='Keep Selected',Match='Any',Selected={},AllowAccessories=false,AccessoryState={},WornItems={}}
+ local settings={Mode=isQuickSell and 'Sell Selected' or 'Keep Selected',Match='Any',Selected={},AllowAccessories=false,AccessoryState={},WornItems={}}
  for _,name in ipairs(groups) do settings.Selected[name]={} end
  local catalog={Items={},EventNames={},MutationNames={}}
  local options,blocks={},{}
@@ -759,11 +822,11 @@ local function SetupInventoryFilter(target,filterName)
  end
  local intro=newBlock(92)
  label(intro,filterName:upper()..' FILTER',{Position=UDim2.fromOffset(12,10),Size=UDim2.new(1,-24,0,20),TextSize=15})
- local introText=label(intro,'Independent preview. Worn and unverified accessories stay protected. No items are sold or graded.',{
+ local introText=label(intro,isQuickSell and 'Live Quick Sell filter. Nothing sells unless it matches your current rules. Favorites, protected utility items, worn accessories, and unverified accessories stay protected.' or 'Independent grading preview. Worn and unverified accessories stay protected.',{
   Position=UDim2.fromOffset(12,36),Size=UDim2.new(1,-24,0,48),TextSize=11,TextColor3=muted,TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top})
  local modeBlock=newBlock(86)
- local modeButton=button(modeBlock,'Keep Selected',{Position=UDim2.fromOffset(12,12),Size=UDim2.new(1,-24,0,30),TextSize=11})
- local modeHint=label(modeBlock,'Keep anything selected; other eligible items would sell.',{Position=UDim2.fromOffset(12,48),Size=UDim2.new(1,-24,0,30),TextSize=10,TextColor3=muted,TextWrapped=true})
+ local modeButton=button(modeBlock,settings.Mode,{Position=UDim2.fromOffset(12,12),Size=UDim2.new(1,-24,0,30),TextSize=11})
+ local modeHint=label(modeBlock,settings.Mode=='Keep Selected' and 'Keep anything selected; other eligible items would sell.' or 'Only items matching a selection would sell.',{Position=UDim2.fromOffset(12,48),Size=UDim2.new(1,-24,0,30),TextSize=10,TextColor3=muted,TextWrapped=true})
  connect(modeButton.Activated,function()
   settings.Mode=settings.Mode=='Keep Selected' and 'Sell Selected' or 'Keep Selected'
   modeButton.Text=settings.Mode
@@ -841,7 +904,7 @@ local function SetupInventoryFilter(target,filterName)
    results[#results+1]={status=state,reason=reason,name=type(conf)=='table' and tostring(conf.Name or id) or ('Unknown item '..id),guid=tostring(guid)}
   end
   table.sort(results,function(a,b) if a.status~=b.status then return a.status<b.status end; if a.name~=b.name then return a.name<b.name end;return a.guid<b.guid end)
-  summaryLabel.Text=string.format('WOULD SELL %d  /  KEEP %d\nPROTECTED %d  /  UNKNOWN %d\nPreview only; worn/unverified accessories protected.',counts['Would sell'],counts.Keep,counts.Protected,counts.Unknown)
+  summaryLabel.Text=string.format('WOULD SELL %d  /  KEEP %d\nPROTECTED %d  /  UNKNOWN %d\n%s',counts['Would sell'],counts.Keep,counts.Protected,counts.Unknown,isQuickSell and 'Live rules; only WOULD SELL items enter the sale queue.' or 'Grading preview only; worn/unverified accessories protected.')
   for _,group in ipairs(groups) do
    local selected=0;for _ in pairs(settings.Selected[group]) do selected=selected+1 end
    blocks[group].caption.Text=(blocks[group].expanded and '- ' or '+ ')..group..'  ('..selected..'/'..#(options[group] or {})..')'
@@ -988,27 +1051,160 @@ local function SetupInventoryFilter(target,filterName)
   return states,worn
  end
  local reading=false
+ local function readFreshInventory(showNotice)
+  if not loaded then
+   if showNotice then notify('Load category definitions first.') end
+   return false
+  end
+  local ok,data=pcall(function()
+   local RS=game:GetService('ReplicatedStorage')
+   return RS.Events.Pawn.GetSellableItems:InvokeServer()
+  end)
+  if not ok or type(data)~='table' then
+   if showNotice then notify('Inventory read failed: '..tostring(data)) end
+   return false
+  end
+  local states,worn=readAccessoryState()
+  if not gui.Parent then return false end
+  settings.AccessoryState=states;settings.WornItems=worn
+  inventory=data;pageNumber=1;refreshPreview()
+  return true
+ end
  connect(inventoryButton.Activated,function()
   if reading then return end
-  if not loaded then notify('Load category definitions first.');return end
   reading=true;inventoryButton.Text='Reading...'
   task.spawn(function()
-   local ok,data=pcall(function()
-    local RS=game:GetService('ReplicatedStorage')
-    return RS.Events.Pawn.GetSellableItems:InvokeServer()
-   end)
-   if gui.Parent then
-    if ok and type(data)=='table' then
-     local states,worn=readAccessoryState()
-     if not gui.Parent then return end
-     settings.AccessoryState=states;settings.WornItems=worn
-     inventory=data;pageNumber=1;refreshPreview()
-    else notify('Inventory read failed: '..tostring(data)) end
-    inventoryButton.Text='Read inventory'
-   end
+   readFreshInventory(true)
+   if gui.Parent then inventoryButton.Text='Read inventory' end
    reading=false
   end)
  end)
+
+ if isQuickSell then
+  section(target,'AUTO QUICK SELL')
+  local autoInventory=false
+  local autoRate=false
+  local inventoryThreshold=80
+  local rateThreshold=0
+  local currentRate=0
+  local secondsUntilNext=0
+  local selling=false
+  local lastSale=-math.huge
+
+  local monitor=row(target,'Quick Sell monitor','Live inventory and pawn-rate status.',86)
+  local monitorValue=label(monitor,'Loading...',{
+   Position=UDim2.fromOffset(14,56),Size=UDim2.new(1,-28,0,20),TextSize=10,TextColor3=muted,
+   TextTruncate=Enum.TextTruncate.AtEnd})
+  rowSpecs[monitor].value=monitorValue
+
+  local statusRow=row(target,'Sale status','Ready. Select filter options, review WOULD SELL items, then sell manually or arm a trigger.',88)
+  local saleStatus=label(statusRow,'READY',{Position=UDim2.fromOffset(14,58),Size=UDim2.new(1,-28,0,18),
+   TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
+  rowSpecs[statusRow].value=saleStatus
+
+  local function setSaleStatus(textValue)
+   if saleStatus and saleStatus.Parent then saleStatus.Text=tostring(textValue) end
+  end
+
+  local function eligibleGuids()
+   local result={}
+   for guid,data in pairs(inventory) do
+    local state=Engine.Evaluate(data,catalog,settings,guid)
+    if state=='Would sell' then result[#result+1]=tostring(guid) end
+   end
+   table.sort(result)
+   return result
+  end
+
+  local function refreshPawnRate()
+   local ok,state=pcall(function()
+    return game:GetService('ReplicatedStorage').Events.Pawn.GetPawnState:InvokeServer()
+   end)
+   if ok and type(state)=='table' then
+    local raw=tonumber(state.rate)
+    if raw~=nil then currentRate=math.floor(((raw-1)*100)+0.5) end
+    secondsUntilNext=math.max(0,math.floor(tonumber(state.secondsUntilNext) or 0))
+   end
+  end
+
+  local function updateMonitor()
+   local count=tonumber(player:GetAttribute('InventoryCount')) or 0
+   local cap=tonumber(player:GetAttribute('InventoryCap')) or 0
+   local pct=cap>0 and count/cap*100 or 0
+   monitorValue.Text=string.format('Inventory %d/%d (%.0f%%)  ·  Pawn %+d%%  ·  Next %02d:%02d',
+    count,cap,pct,currentRate,math.floor(secondsUntilNext/60),secondsUntilNext%60)
+   return pct
+  end
+
+  local function sellMatching(reason)
+   if selling or not loaded or os.clock()-lastSale<3 then return end
+   selling=true;lastSale=os.clock()
+   setSaleStatus('Reading protected items and sale rules...')
+   task.spawn(function()
+    local sold,earned,remaining=0,0,0
+    local ok,problem=pcall(function()
+     for pass=1,3 do
+      if not gui.Parent then return end
+      if not readFreshInventory(false) then error('Inventory could not be verified.') end
+      local guids=eligibleGuids()
+      remaining=#guids
+      if remaining==0 then break end
+      local batches=math.ceil(#guids/200)
+      for first=1,#guids,200 do
+       local batch={}
+       for i=first,math.min(first+199,#guids) do batch[#batch+1]=guids[i] end
+       setSaleStatus(string.format('Pass %d/3 · batch %d/%d · %d items',pass,math.ceil(first/200),batches,#batch))
+       local saleOK,result=pcall(function()
+        return game:GetService('ReplicatedStorage').Events.Pawn.SellItems:InvokeServer(batch)
+       end)
+       if saleOK and type(result)=='table' and result.success then
+        sold=sold+math.max(0,tonumber(result.sold) or #batch)
+        earned=earned+(tonumber(result.totalEarned) or 0)
+       end
+       task.wait(0.4)
+      end
+     end
+     if readFreshInventory(false) then remaining=#eligibleGuids() end
+    end)
+    selling=false;lastSale=os.clock()
+    if not gui.Parent then return end
+    if not ok then
+     setSaleStatus('Stopped: '..tostring(problem))
+    elseif remaining>0 then
+     setSaleStatus(string.format('Sold %d · %d still eligible after 3 passes',sold,remaining))
+    elseif sold>0 then
+     setSaleStatus(string.format('%s · sold %d · earned $%d',reason or 'Quick Sell',sold,math.floor(earned)))
+     notify(string.format('Quick Sell sold %d matching items for $%d',sold,math.floor(earned)))
+    else
+     setSaleStatus('No items match the current SELL rules.')
+    end
+   end)
+  end
+
+  toggle(target,'Inventory trigger','Automatically runs Quick Sell when inventory reaches the selected percentage.',false,function(value) autoInventory=value end)
+  slider(target,'Inventory threshold %','Inventory percentage required before the automatic inventory trigger runs.',1,100,80,function(value) inventoryThreshold=value end)
+  toggle(target,'Pawn rate trigger','Automatically runs Quick Sell when the current pawn rate reaches your target.',false,function(value) autoRate=value end)
+  slider(target,'Pawn rate threshold %','Minimum pawn-rate bonus required before the rate trigger runs.',-100,100,0,function(value) rateThreshold=value end)
+  action(target,'Sell matching now','Rechecks every rule and sells only current WOULD SELL items in batches of 200, up to three passes.','SELL NOW',function()
+   sellMatching('Manual')
+  end)
+
+  task.spawn(function()
+   local rateTimer=20
+   while gui.Parent do
+    if active=='Quick Sell' or autoInventory or autoRate then
+     if loaded then pcall(function() readFreshInventory(false) end) end
+     rateTimer=rateTimer+3
+     secondsUntilNext=math.max(0,secondsUntilNext-3)
+     if rateTimer>=20 then rateTimer=0;pcall(refreshPawnRate) end
+     local pct=updateMonitor()
+     if autoInventory and pct>=inventoryThreshold then sellMatching(string.format('Inventory %.0f%%',pct)) end
+     if autoRate and currentRate>=rateThreshold then sellMatching('Pawn Rate '..tostring(currentRate)..'%') end
+    end
+    task.wait(3)
+   end
+  end)
+ end
  loadCatalog()
 end
 SetupInventoryFilter(quickSell,'Quick Sell')
