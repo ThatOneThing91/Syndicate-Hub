@@ -1,5 +1,6 @@
--- SYNDICATE HUB / STORAGE HUNTERS UI 2.8
+-- SYNDICATE HUB / STORAGE HUNTERS UI
 -- Syndicate Hub interface for Storage Hunters.
+local HUB_VERSION='2.9'
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
@@ -191,7 +192,7 @@ for i,p in ipairs({{18,20,8,16},{26,16,8,24},{34,20,8,16}}) do
  tint(frame(top,{Position=UDim2.fromOffset(p[1],p[2]),Size=UDim2.fromOffset(p[3],p[4])}),'BackgroundColor3')
 end
 label(top,'SYNDICATE HUB',{Position=UDim2.fromOffset(54,12),Size=UDim2.fromOffset(210,20),TextSize=18})
-label(top,'STORAGE HUNTERS  /  2.8',{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
+label(top,'STORAGE HUNTERS  /  '..HUB_VERSION,{Position=UDim2.fromOffset(55,33),Size=UDim2.fromOffset(230,14),TextSize=10,TextColor3=muted})
 local minimize=button(top,'_',{Position=UDim2.new(1,-80,0,13),Size=UDim2.fromOffset(28,28)})
 local close=button(top,'X',{Position=UDim2.new(1,-44,0,13),Size=UDim2.fromOffset(28,28)})
 -- Slim vertical text navigation, with the original stacked layout.
@@ -1802,7 +1803,7 @@ local function reflow()
    r.Size=UDim2.new(1,0,0,compact and bottom+34 or math.max(66,bottom))
   else r.Size=UDim2.new(1,0,0,math.max(66,bottom)) end
  end
- footer.Text=narrow and '  SYNDICATE HUB / 2.8' or '  [ SYNDICATE HUB ]  /  STORAGE HUNTERS'
+ footer.Text=narrow and ('  SYNDICATE HUB / '..HUB_VERSION) or ('  [ SYNDICATE HUB ]  /  STORAGE HUNTERS  '..HUB_VERSION)
  for _,hook in ipairs(resizeHooks) do hook(width) end
  updateNavScroll()
  reflowing=false
