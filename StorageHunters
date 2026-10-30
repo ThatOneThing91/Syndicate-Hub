@@ -11518,6 +11518,16 @@ local function itemMatches(entry)
         return true
     end
 
+    local customMatcher = ThisHubInstance.GradingMatcher
+    if type(customMatcher) == "function" then
+        local ok, result = pcall(customMatcher, entry)
+        if ok then
+            return result == true
+        end
+        report("Custom grading filter error: " .. tostring(result))
+        return false
+    end
+
     local details = getItemDetails(entry)
 
     if not details then
@@ -11892,6 +11902,53 @@ modeButton = button("\077\079\068\069\058\032\071\114\097\100\101\032\065\108\10
     report("\070\105\108\116\101\114\032\109\111\100\101\058\032" .. filterMode)
 end)
 
+ThisHubInstance.GradingController = {}
+function ThisHubInstance.GradingController:SetEnabled(value)
+    value = value == true
+    enabled = value
+    if toggle then
+        toggle.Text = "AUTO GRADING: " .. (enabled and "ON" or "OFF")
+        toggle.BackgroundColor3 = enabled and Color3.fromRGB(35, 115, 65) or Color3.fromRGB(65, 35, 43)
+    end
+    report("Auto Grading " .. (enabled and "enabled" or "disabled"))
+    return true
+end
+function ThisHubInstance.GradingController:GetEnabled()
+    return enabled == true
+end
+function ThisHubInstance.GradingController:SetMode(value)
+    if value ~= "Grade All" and value ~= "Grade Selected" then
+        return false
+    end
+    filterMode = value
+    if modeButton then modeButton.Text = "MODE: " .. filterMode end
+    report("Filter mode: " .. filterMode)
+    return true
+end
+function ThisHubInstance.GradingController:GetMode()
+    return filterMode
+end
+function ThisHubInstance.GradingController:SetMatcher(callback)
+    ThisHubInstance.GradingMatcher = type(callback) == "function" and callback or nil
+    return true
+end
+function ThisHubInstance.GradingController:GetSnapshot()
+    local copy = {}
+    for index, message in ipairs(messages) do copy[index] = message end
+    return {
+        enabled = enabled == true,
+        mode = filterMode,
+        status = status and status.Text or "Status: -",
+        slots = slotStatus and slotStatus.Text or "Slots: -",
+        messages = copy,
+    }
+end
+function ThisHubInstance.GradingController:ClearLog()
+    table.clear(messages)
+    if log then log.Text = "" end
+    return true
+end
+
                    
 
 addFilterGroup(
@@ -11991,6 +12048,7 @@ end)
 local function stopGrading()
     alive=false
     enabled=false
+    ThisHubInstance.GradingMatcher = nil
 end
 local priorDestroy = ThisHubInstance.Destroy
 ThisHubInstance.Destroy = function(...)
