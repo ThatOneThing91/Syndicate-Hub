@@ -1244,6 +1244,9 @@ local function SetupInventoryFilter(target,filterName)
      if guid and type(data)=='table' then mapped[tostring(guid)]=data end
     end
    end
+   local states,worn=readInventorySafety()
+   settings.AccessoryState=states
+   settings.WornItems=worn
    inventory=mapped
    refreshPreview()
    return true
@@ -1325,9 +1328,13 @@ local function SetupInventoryFilter(target,filterName)
        pcall(function() controller:SetMatcher(gradingMatcher) end)
        matcherInstalled=true
       end
-      if type(controller.SetMode)=='function' then pcall(function() controller:SetMode(gradingMode) end) end
-      if type(controller.GetEnabled)=='function' and gradingDesired~=controller:GetEnabled() then
-       pcall(function() controller:SetEnabled(gradingDesired) end)
+      if type(controller.SetMode)=='function' then
+       local modeOK,currentMode=pcall(function() return type(controller.GetMode)=='function' and controller:GetMode() or nil end)
+       if not modeOK or currentMode~=gradingMode then pcall(function() controller:SetMode(gradingMode) end) end
+      end
+      if type(controller.GetEnabled)=='function' then
+       local enabledOK,currentEnabled=pcall(function() return controller:GetEnabled() end)
+       if enabledOK and gradingDesired~=currentEnabled then pcall(function() controller:SetEnabled(gradingDesired) end) end
       end
       if type(controller.GetSnapshot)=='function' then
        local ok,snapshot=pcall(function() return controller:GetSnapshot() end)
