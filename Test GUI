@@ -1,6 +1,6 @@
 -- AMETHYST / PIXEL UI 2.8
--- Standalone interface prototype. Put in a LocalScript under StarterPlayerScripts.
--- Demo controls change UI state only. No game automation or external dependencies.
+-- Syndicate Hub migration interface. Farming is connected to the live StorageHunters backend.
+-- Remaining tabs are migrated and tested one at a time.
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
@@ -343,7 +343,7 @@ end)
 local title=label(body,'Account',{Size=UDim2.new(1,-185,0,26),TextSize=22})
 local subtitle=label(body,'YOUR SPACE. YOUR CONTROLS.',{Position=UDim2.fromOffset(0,31),Size=UDim2.new(1,0,0,16),TextSize=10,TextColor3=muted})
 local search=make('TextBox',{Position=UDim2.new(1,-177,0,0),Size=UDim2.fromOffset(177,28),BackgroundColor3=Color3.fromRGB(39,29,55),BackgroundTransparency=0.15,BorderSizePixel=0,Text='',PlaceholderText='Search this tab...',PlaceholderColor3=muted,TextColor3=ink,Font=Enum.Font.Code,TextSize=12,ClearTextOnFocus=false},body)
-local footer=label(root,'  [ UI PROTOTYPE ]  /  NO GAME ACTIONS CONNECTED',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
+local footer=label(root,'  [ TEST GUI ]  /  FARMING CONNECTED · OTHER TABS MIGRATING',{Position=UDim2.new(0,0,1,-26),Size=UDim2.new(1,-30,0,24),TextSize=10,TextColor3=muted,TextTruncate=Enum.TextTruncate.AtEnd})
 local grip=button(root,'//',{Position=UDim2.new(1,-27,1,-27),Size=UDim2.fromOffset(26,26),BackgroundTransparency=1,TextColor3=muted})
 local restore=button(gui,'♥',{Position=UDim2.fromOffset(18,90),Size=UDim2.fromOffset(48,48),Visible=false,
  BackgroundColor3=Color3.fromRGB(29,18,44),BackgroundTransparency=0.12,TextSize=27,Font=Enum.Font.Gotham,TextColor3=accent})
