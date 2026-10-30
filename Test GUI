@@ -513,6 +513,21 @@ local function row(p,name,desc,height)
  for n,t in pairs(tabs) do if t.page==p then table.insert(rows[n],{frame=r,text=(name..' '..desc):lower()}) end end
  return r
 end
+local backendToggleViews={}
+local backendKeyByLabel={
+ ['Auto Bid']='AutoBid',['Farming']='Farming',['Pause Auction']='PauseAuction',
+ ['Lost & Found Unloader']='LostFoundUnloader',['Instant Unload']='InstantUnload',
+ ['Auto Unload When Full']='AutoUnloadWhenFull',['Auto Wash']='AutoWash',['Auto Repair']='AutoRepair',
+ ['Auto Open Safes']='AutoOpenSafes',['Auto Collect Daily Rewards']='AutoDailyRewards',
+ ['Auto Collect Museum Gift']='AutoMuseumGift',['Auto Load Potions']='AutoLoadPotions',
+ ['Auto Place Potions']='AutoPlacePotions',['Pick Up Plot Potions']='AutoPickupPlotPotions',
+ ['Auto Trick or Treat']='AutoTrickOrTreat',['Grave Digger']='GraveDigger',
+ ['Zombie Collector']='ZombieCollector',['Auto Market Rolling']='AutoMarketRolling',
+ ['Auto Market Rolling x5']='AutoMarketRollingFive',['Auto Harvest']='AutoHarvest',
+ ['Auto Water Plants']='AutoWaterPlants',['Auto Plant Seeds']='AutoPlantSeeds',
+ ['Auto Basketball']='AutoBasketball',['Auto Fishing']='AutoFishing',['Hay Knocker']='HayCollector',
+ ['Tree Knocker']='TreeKnocker',['Police Auction']='PoliceAuction',['Jump Button 1.5x Size']='MoveJumpButton',
+}
 local function toggle(p,name,desc,default,callback)
  local r=row(p,name,desc); local value=default or false
  local b=button(r,'',{Position=UDim2.new(1,-70,0,22),Size=UDim2.fromOffset(54,24)})
@@ -523,9 +538,28 @@ local function toggle(p,name,desc,default,callback)
   pixel.Position=UDim2.fromOffset(value and 34 or 4,4)
  end
  connect(b.Activated,function() value=not value; draw(); if callback then callback(value) end end)
+ local backendKey=backendKeyByLabel[name]
+ if backendKey then
+  backendToggleViews[backendKey]=function(nextValue)
+   if type(nextValue)~='boolean' or value==nextValue then return end
+   value=nextValue
+   draw()
+  end
+ end
  table.insert(toggleDraws,draw)
  draw(); return draw
 end
+task.spawn(function()
+ while gui.Parent do
+  local state=Backend and Backend.State
+  if type(state)=='table' then
+   for key,update in pairs(backendToggleViews) do
+    if type(state[key])=='boolean' then update(state[key]) end
+   end
+  end
+  task.wait(0.35)
+ end
+end)
 local function action(p,name,desc,caption,callback)
  local r=row(p,name,desc)
  local b=button(r,caption,{Position=UDim2.new(1,-108,0,20),Size=UDim2.fromOffset(92,28)})
@@ -1692,7 +1726,12 @@ action(settings,'Discord Server','Copies the Syndicate Hub Discord invite to you
  local ok=pcall(copy,invite)
  notify(ok and 'Discord invite copied.' or invite)
 end)
-action(settings,'Minimize window','Tap the floating heart to reopen; drag to move it.','HIDE',function() root.Visible=false; restore.Visible=true end)
+action(settings,'Minimize window','Tap the floating heart to reopen; drag to move it.','HIDE',function()
+ root.Visible=false
+ restore.Visible=true
+ closeDropdown()
+ if Input.GamepadEnabled then pcall(function() GuiService.SelectedObject=restore end) end
+end)
 action(settings,'Reset position','Return the window to its initial position.','RESET',function() root.Position=UDim2.fromOffset(30,35) end)
 action(settings,'Close interface','Destroys this standalone interface.','CLOSE',function() gui:Destroy() end)
 connect(search:GetPropertyChangedSignal('Text'),function()
