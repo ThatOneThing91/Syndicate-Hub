@@ -1014,8 +1014,11 @@ end
       
                                                                 
 
-$1    Enabled = HubEnvironment.__SyndicateTestGuiHeadless ~= true,
-$2
+local Gui = New("\083\099\114\101\101\110\071\117\105", {
+    Name = "\083\116\111\114\097\103\101\072\117\110\116\101\114\115\072\117\098",
+    ResetOnSpawn = false,
+    Enabled = HubEnvironment.__SyndicateTestGuiHeadless ~= true,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, CoreGui)
 
 local Main = New("\070\114\097\109\101", {
@@ -1452,7 +1455,69 @@ ThisHubInstance.ToggleObjects = ToggleObjects
 ThisHubInstance.ToggleCallbacks = {}
 ThisHubInstance.State = State
 
-$1
+local function CreateToggle(parent, text, stateKey, callback)
+    local holder = New("\070\114\097\109\101", {
+        Size = UDim2.new(1, -8, 0, 42),
+        BackgroundColor3 = ButtonBackground,
+        BorderSizePixel = 0,
+    }, parent)
+
+    Corner(holder, 7)
+
+    New("\084\101\120\116\076\097\098\101\108", {
+        Size = UDim2.new(1, -80, 1, 0),
+        Position = UDim2.fromOffset(12, 0),
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = TextColor,
+        TextSize = 13,
+        Font = Enum.Font.GothamMedium,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, holder)
+
+    local button = New("\084\101\120\116\066\117\116\116\111\110", {
+        Size = UDim2.fromOffset(58, 28),
+        Position = UDim2.new(1, -68, 0.5, -14),
+        BackgroundColor3 = OffColor,
+        Text = "\079\070\070",
+        TextColor3 = TextColor,
+        TextSize = 11,
+        Font = Enum.Font.GothamBold,
+        BorderSizePixel = 0,
+    }, holder)
+
+    Corner(button, 14)
+
+    local function Update(value)
+        State[stateKey] = value
+
+        button.Text = value and "\079\078" or "\079\070\070"
+        button.BackgroundColor3 = value and ThemeColor or OffColor
+    end
+
+    TrackConnection(
+        button.Activated:Connect(function()
+            if HubDestroyed then
+                return
+            end
+
+            local newValue = not State[stateKey]
+
+            Update(newValue)
+
+            if callback then
+                task.spawn(callback, newValue)
+            end
+        end)
+    )
+
+    ToggleObjects[stateKey] = Update
+    ThisHubInstance.ToggleCallbacks[stateKey] = callback
+
+    Update(State[stateKey])
+
+    return holder
+end
 
 ThisHubInstance.SetToggle = function(stateKey, value)
     if HubDestroyed then return false, "Hub destroyed" end
@@ -6719,7 +6784,7 @@ ThisHubInstance.SetAutoBid = function(value)
     State.AutoBid = value
     UpdateAutoBidStatus()
     if State.AutoBid then StartAutoBidLoop() end
-    Notify("Auto Bid", State.AutoBid and "Enabled" or "Disabled", 1.5)
+    Notify("\065\117\116\111\032\066\105\100", State.AutoBid and "\069\110\097\098\108\101\100" or "\068\105\115\097\098\108\101\100", 1.5)
     return true
 end
 
