@@ -14139,6 +14139,48 @@ return function(cfg)
         toggle.BackgroundColor3=active and purple or off
     end)
     local controller={}
+    function controller:GetActive()
+        return active == true
+    end
+    function controller:GetPercent()
+        return percent
+    end
+    function controller:SetPercent(value)
+        if closed then return false end
+        setPercent(value)
+        return true
+    end
+    function controller:SetActive(value)
+        if closed then return false end
+        value=value==true
+        if active==value then
+            toggle.Text=active and "ON" or "OFF"
+            toggle.BackgroundColor3=active and purple or off
+            return true
+        end
+        if value then
+            active=true
+            local ok,subscribed=pcall(subscribe)
+            if not ok or not subscribed then
+                active=false
+                stopListeners()
+                if not ok then
+                    statusText.Text="Offer setup failed; see executor console"
+                    warn("[Auto Shop Offers] "..tostring(subscribed))
+                end
+                toggle.Text="OFF"
+                toggle.BackgroundColor3=off
+                return false
+            end
+        else
+            active=false
+            stopListeners()
+            statusText.Text="OFF · Requires a verifiable offer percentage"
+        end
+        toggle.Text=active and "ON" or "OFF"
+        toggle.BackgroundColor3=active and purple or off
+        return true
+    end
     function controller:Destroy()
         if closed then return end
         closed=true; active=false
@@ -14170,6 +14212,7 @@ end
         if HubDestroyed then
             module:Destroy()
         else
+            ThisHubInstance.AutoShopOffersController = module
             ThisHubInstance.StopAutoShopOffers = function() module:Destroy() end
         end
     end)
