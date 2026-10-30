@@ -360,7 +360,7 @@ async function recentExecutions(env){
  const rows=await userLabels(r.results||[],"roblox_user_id");
  return reply(rows.length?"📋 **Recent Syndicate Hub executions**\n"+rows.map(x=>"• **"+x.username+"** • Roblox ID `"+x.roblox_user_id+"` • <t:"+Math.floor(Date.parse(x.created_at)/1000)+":R>").join("\n"):"No script executions recorded yet.");
 }
-const EXECUTION_LOGS_PAUSED=true; // TEMP: pause Discord execution notifications without disabling launch recording
+const EXECUTION_LOGS_PAUSED=false; // Discord execution notifications enabled
 async function sendExecutionLogs(env){
  const channel="1563495489662488587";
  if(EXECUTION_LOGS_PAUSED){
