@@ -1,6 +1,6 @@
 -- SYNDICATE HUB / STORAGE HUNTERS UI
 -- Syndicate Hub interface for Storage Hunters.
-local HUB_VERSION='3.7'
+local HUB_VERSION='3.8'
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
@@ -1744,6 +1744,52 @@ for index,c in ipairs(colors) do
 end
 toggle(appearance,'Animated sky','Soft nebula shading, scattered stars, and occasional meteors.',true,function(v) animatedSky=v end)
 toggle(appearance,'Pixel stars','Show or hide the star field independently.',true,function(v) showStars=v; starLayer.Visible=v end)
+local closePrompt
+local function requestHubClose()
+ if closePrompt and closePrompt.Parent then return end
+ closeDropdown()
+ local previousSelection=GuiService.SelectedObject
+ local overlay=frame(gui,{Position=UDim2.fromScale(0,0),Size=UDim2.fromScale(1,1),
+  BackgroundColor3=Color3.fromRGB(0,0,0),BackgroundTransparency=0.38,ZIndex=500,Active=true})
+ closePrompt=overlay
+ local card=frame(overlay,{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),
+  Size=UDim2.fromOffset(380,196),BackgroundColor3=Color3.fromRGB(22,16,31),BackgroundTransparency=0.02,
+  ZIndex=501,Active=true})
+ make('UICorner',{CornerRadius=UDim.new(0,12)},card)
+ tint(make('UIStroke',{Thickness=1.2,Transparency=0.25},card),'Color')
+ label(card,'Close Syndicate Hub?',{Position=UDim2.fromOffset(20,18),Size=UDim2.new(1,-40,0,28),
+  TextSize=18,Font=Enum.Font.GothamBold,ZIndex=502})
+ label(card,'This will stop every running automation and fully destroy the hub. You will need to execute the script again to reopen it.',{
+  Position=UDim2.fromOffset(20,55),Size=UDim2.new(1,-40,0,68),TextSize=11,TextColor3=muted,
+  TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top,ZIndex=502})
+ local cancelButton=button(card,'CANCEL',{Position=UDim2.fromOffset(20,139),Size=UDim2.new(0.5,-26,0,38),
+  BackgroundColor3=Color3.fromRGB(47,39,58),TextSize=11,ZIndex=503})
+ local confirmButton=button(card,'CLOSE HUB',{Position=UDim2.new(0.5,6,0,139),Size=UDim2.new(0.5,-26,0,38),
+  BackgroundColor3=Color3.fromRGB(102,48,64),TextSize=11,ZIndex=503})
+ cancelButton.NextSelectionRight=confirmButton
+ confirmButton.NextSelectionLeft=cancelButton
+ local promptInput
+ local function dismiss()
+  if promptInput then promptInput:Disconnect();promptInput=nil end
+  if overlay and overlay.Parent then overlay:Destroy() end
+  closePrompt=nil
+  if Input.GamepadEnabled and previousSelection and previousSelection.Parent then
+   pcall(function() GuiService.SelectedObject=previousSelection end)
+  end
+ end
+ connect(cancelButton.Activated,dismiss)
+ connect(confirmButton.Activated,function()
+  if promptInput then promptInput:Disconnect();promptInput=nil end
+  closePrompt=nil
+  gui:Destroy()
+ end)
+ promptInput=Input.InputBegan:Connect(function(input,processed)
+  if processed then return end
+  if input.KeyCode==Enum.KeyCode.Escape or input.KeyCode==Enum.KeyCode.ButtonB then dismiss() end
+ end)
+ if Input.GamepadEnabled then pcall(function() GuiService.SelectedObject=cancelButton end) end
+end
+
 local settings=page('Settings','07')
 section(settings,'WINDOW & PREFERENCES')
 toggle(settings,'Notifications','Show interface toast messages.',true,function(v) notifications=v; if not v then toast.Visible=false end end)
@@ -1761,7 +1807,7 @@ action(settings,'Minimize window','Tap the floating heart to reopen; drag to mov
  if Input.GamepadEnabled then pcall(function() GuiService.SelectedObject=restore end) end
 end)
 action(settings,'Reset position','Return the window to its initial position.','RESET',function() root.Position=UDim2.fromOffset(30,35) end)
-action(settings,'Close interface','Destroys this standalone interface.','CLOSE',function() gui:Destroy() end)
+action(settings,'Close interface','Stops all automations and fully destroys Syndicate Hub.','CLOSE',requestHubClose)
 connect(search:GetPropertyChangedSignal('Text'),function()
  local query=search.Text:lower()
  for _,r in ipairs(rows[active]) do r.frame.Visible=query=='' or r.text:find(query,1,true)~=nil end
@@ -1885,7 +1931,7 @@ connect(restore.Activated,function()
  if os.clock()<suppressIconUntil or iconGesture and iconGesture.dragged then return end
  restore.Visible=false; root.Visible=true; fit(); snapInside(root,false); focusActiveTab()
 end)
-connect(close.Activated,function() gui:Destroy() end)
+connect(close.Activated,requestHubClose)
 connect(Input.InputBegan,function(i,processed)
  if processed then return end
  local toggleMenu=i.KeyCode==Enum.KeyCode.Comma or i.KeyCode==Enum.KeyCode.ButtonSelect
