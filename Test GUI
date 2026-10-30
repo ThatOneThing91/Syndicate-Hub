@@ -1,6 +1,6 @@
 -- SYNDICATE HUB / STORAGE HUNTERS UI
 -- Syndicate Hub interface for Storage Hunters.
-local HUB_VERSION='3.8'
+local HUB_VERSION='3.9'
 local Players = game:GetService('Players')
 local Input = game:GetService('UserInputService')
 local RunService = game:GetService('RunService')
@@ -39,7 +39,7 @@ do
  backendEnv.__SyndicateTestGuiHeadless=true
  backendEnv.__SyndicateKeySessionVerified={userId=tostring(player.UserId),key=KeySession.key}
  local ok,err=pcall(function()
-  local source=game:HttpGet('https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/StorageHunters?v='..tostring(os.time()))
+  local source=game:HttpGet('https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/StorageHuntersBackend?v='..tostring(os.time()))
   local chunk,compileError=loadstring(source)
   assert(chunk,compileError or 'StorageHunters backend failed to compile')
   chunk()
