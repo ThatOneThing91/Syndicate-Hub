@@ -1,5 +1,5 @@
 --[[
-  PLOT COPIER V3.8 | Storage Hunters
+  PLOT COPIER V3.9 | Storage Hunters
   Replaces the old Plot Studio interface (backed up in PlotStudio/Archive).
   Captures replicated builds as relative JSON blueprints.
   Local JSON: SyndicateHub/SavedBases/<name>.json
@@ -14,7 +14,7 @@ local UIS=game:GetService("UserInputService")
 local CoreGui=game:GetService("CoreGui")
 local player=Players.LocalPlayer
 if not player then return end
-local VERSION="3.8"
+local VERSION="3.9"
 local GUI_NAME="Syndicate_PlotCopier"
 local ENV=_G
 pcall(function() if type(getgenv)=="function" then ENV=getgenv() end end)
@@ -936,8 +936,13 @@ end
 local function remote(name)
     local e=RS:FindFirstChild("Events")
     local p=e and e:FindFirstChild("Plot")
-    local r=p and p:FindFirstChild("Place"..name)
-    return r and r:IsA("RemoteEvent") and r or nil
+    if not p then return nil end
+    -- Placement remotes use Place* names, while finish remotes are named
+    -- ColorItem/MaterialItem directly. Check the exact event before fallback.
+    local direct=p:FindFirstChild(name)
+    if direct and direct:IsA("RemoteEvent") then return direct end
+    local placement=p:FindFirstChild("Place"..name)
+    return placement and placement:IsA("RemoteEvent") and placement or nil
 end
 local function placeOne(part,origin,storey)
     local cf=expectedCf(part,origin)
