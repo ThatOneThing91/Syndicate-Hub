@@ -1,5 +1,5 @@
 --[[
-  PLOT COPIER V3.7 | Storage Hunters
+  PLOT COPIER V3.8 | Storage Hunters
   Replaces the old Plot Studio interface (backed up in PlotStudio/Archive).
   Captures replicated builds as relative JSON blueprints.
   Local JSON: SyndicateHub/SavedBases/<name>.json
@@ -14,7 +14,7 @@ local UIS=game:GetService("UserInputService")
 local CoreGui=game:GetService("CoreGui")
 local player=Players.LocalPlayer
 if not player then return end
-local VERSION="3.7"
+local VERSION="3.8"
 local GUI_NAME="Syndicate_PlotCopier"
 local ENV=_G
 pcall(function() if type(getgenv)=="function" then ENV=getgenv() end end)
@@ -1270,7 +1270,8 @@ local function paste()
             end
             -- First pass is fast. Unconfirmed targets go into a later retry
             -- pass rather than blocking a successful transfer for 2 seconds.
-            for pass=1,3 do
+            local previousCount=confirmedCount()
+            for pass=1,2 do
                 if not alive or cancel then break end
                 scan()
                 local targets={}
@@ -1289,9 +1290,9 @@ local function paste()
                     end
                 end
                 if #targets==0 then break end
-                local batch=pass==1 and 7 or pass==2 and 4 or 2
-                local spacing=pass==1 and .075 or pass==2 and .13 or .22
-                local settle=pass==1 and .4 or pass==2 and .7 or 1.1
+                local batch=pass==1 and 7 or 4
+                local spacing=pass==1 and .075 or .13
+                local settle=pass==1 and .4 or .7
                 local rejected={}
                 log("Pass "..pass.." starts: "..#targets.." pending, batch "..batch)
                 for offset=1,#targets,batch do
@@ -1326,13 +1327,23 @@ local function paste()
                 end
                 scan()
                 local rest=missing()
-                log("Pass "..pass.." done: "..confirmedCount()..
+                local currentCount=confirmedCount()
+                log("Pass "..pass.." done: "..currentCount..
                     " verified, "..#rest.." missing.")
                 for j=1,math.min(#rejected,15) do log(rejected[j]) end
                 checkpoint()
                 if #rest==0 then break end
-                -- A short pause before retries lets late replication arrive.
-                if pass<3 and alive and not cancel then task.wait(.65*pass) end
+
+                -- Repeating a remote call for every unresolved object after
+                -- a pass produced no confirmed placements only hammers the
+                -- same blocked locations. Allow one smaller retry only when
+                -- the previous pass made measurable progress.
+                if currentCount<=previousCount then
+                    log("No new placements verified; stopping retries to avoid repeated blocked requests.")
+                    break
+                end
+                previousCount=currentCount
+                if pass<2 and alive and not cancel then task.wait(.65) end
             end
             scan()
             local rest=missing()
