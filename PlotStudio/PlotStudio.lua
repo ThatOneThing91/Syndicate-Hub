@@ -1,5 +1,5 @@
 --[[
-  PLOT COPIER V3.6 | Storage Hunters
+  PLOT COPIER V3.7 | Storage Hunters
   Replaces the old Plot Studio interface (backed up in PlotStudio/Archive).
   Captures replicated builds as relative JSON blueprints.
   Local JSON: SyndicateHub/SavedBases/<name>.json
@@ -14,7 +14,7 @@ local UIS=game:GetService("UserInputService")
 local CoreGui=game:GetService("CoreGui")
 local player=Players.LocalPlayer
 if not player then return end
-local VERSION="3.6"
+local VERSION="3.7"
 local GUI_NAME="Syndicate_PlotCopier"
 local ENV=_G
 pcall(function() if type(getgenv)=="function" then ENV=getgenv() end end)
@@ -852,8 +852,7 @@ end
 -- Spatial index makes validation close to O(n) on large furnished plots;
 -- scanning every source piece against every model caused avoidable lag.
 local function reconcile(bp,origin,physical)
-    local used,matched,links={},{},{}
-    local count=0
+    local matched,links={},{}
     local buckets={}
     local function bucketKey(x,y,z)
         return tostring(x)..":"..tostring(y)..":"..tostring(z)
@@ -872,9 +871,14 @@ local function reconcile(bp,origin,physical)
         end
         list[#list+1]=j
     end
+
+    -- Build candidate edges first, then assign the most constrained blueprint
+    -- pieces before ambiguous repeated shapes. A greedy pass can consume the
+    -- only nearby match for a later piece and falsely report it missing.
+    local candidates,order={},{}
     for i,p in ipairs(bp.parts) do
+        local edges={}
         local desired=expectedCf(p,origin)
-        local best,bestDistance=nil,math.huge
         if desired then
             local x,y,z=bucketCoord(desired.Position)
             for dx=-1,1 do for dy=-1,1 do for dz=-1,1 do
@@ -882,23 +886,50 @@ local function reconcile(bp,origin,physical)
                 if list then
                     for _,j in ipairs(list) do
                         local real=physical[j]
-                        if not used[j] and matches(p,desired,real) then
+                        if matches(p,desired,real) then
                             local observed=p.legacyBounds and real.boundsCf or real.cf
-                            local distance=(desired.Position-observed.Position).Magnitude
-                            if distance<bestDistance then
-                                best,bestDistance=j,distance
-                            end
+                            edges[#edges+1]={index=j,
+                                distance=(desired.Position-observed.Position).Magnitude}
                         end
                     end
                 end
             end end end
         end
-        if best then
-            used[best]=true
-            matched[i]=true
-            links[i]=physical[best].object
-            count=count+1
+        table.sort(edges,function(a,b)return a.distance<b.distance end)
+        candidates[i]=edges
+        order[#order+1]=i
+    end
+    table.sort(order,function(a,b)
+        local ac,bc=#candidates[a],#candidates[b]
+        if ac==bc then return a<b end
+        return ac<bc
+    end)
+
+    -- Kuhn-style augmenting assignment finds a maximum-cardinality match,
+    -- while sorted edges prefer the nearest physical object.
+    local assignedToPhysical={}
+    local function assign(partIndex,seen)
+        for _,edge in ipairs(candidates[partIndex]) do
+            local physicalIndex=edge.index
+            if not seen[physicalIndex] then
+                seen[physicalIndex]=true
+                local previous=assignedToPhysical[physicalIndex]
+                if not previous or assign(previous,seen) then
+                    assignedToPhysical[physicalIndex]=partIndex
+                    return true
+                end
+            end
         end
+        return false
+    end
+    for _,partIndex in ipairs(order) do
+        assign(partIndex,{})
+    end
+    local count=0
+    for physicalIndex,partIndex in pairs(assignedToPhysical) do
+        matched[partIndex]=true
+        links[partIndex]=physical[physicalIndex].object
+        count=count+1
     end
     return matched,count,links
 end
