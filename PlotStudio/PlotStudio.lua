@@ -1,5 +1,5 @@
 --[[
-  PLOT COPIER V3.5 | Storage Hunters
+  PLOT COPIER V3.6 | Storage Hunters
   Replaces the old Plot Studio interface (backed up in PlotStudio/Archive).
   Captures replicated builds as relative JSON blueprints.
   Local JSON: SyndicateHub/SavedBases/<name>.json
@@ -14,7 +14,7 @@ local UIS=game:GetService("UserInputService")
 local CoreGui=game:GetService("CoreGui")
 local player=Players.LocalPlayer
 if not player then return end
-local VERSION="3.5"
+local VERSION="3.6"
 local GUI_NAME="Syndicate_PlotCopier"
 local ENV=_G
 pcall(function() if type(getgenv)=="function" then ENV=getgenv() end end)
@@ -367,17 +367,26 @@ local function classify(rootName,category,id,name,wallCf,wallLength,roofStyle)
             (category=="Structures" or category=="Furniture")) then
         return "Floor"
     end
-    if category=="Roofs" or rootName=="Roofs" or roofStyle~=nil then
+
+    -- Some roof pieces carry an ItemId and live under Structures instead
+    -- of the Rooves folder. Detect those before the generic Item fallback.
+    local objectName=tostring(name or ""):lower()
+    local itemId=tostring(id or "")
+    if category=="Roofs" or rootName=="Roofs" or roofStyle~=nil or
+        itemId:match("^Roof_") then
         return "Roof"
     end
-    -- An item with category Shelves/Shapes/Decor must not become a floor
-    -- just because its instance name contains the word "floor".
-    if id~=nil then return "Item" end
     if category=="Structures" then
-        local n=tostring(name or ""):lower()
-        if n:find("roof",1,true) then return "Roof" end
-        if n:find("floor",1,true) then return "Floor" end
+        if objectName=="roof" or objectName:match("^roof[%s_%-]") then
+            return "Roof"
+        end
+        if objectName=="floor" or objectName:match("^floor[%s_%-]") then
+            return "Floor"
+        end
     end
+
+    -- Preserve all other identified items as furniture/shapes/decor.
+    if id~=nil then return "Item" end
     return nil
 end
 local function extractFinish(object)
