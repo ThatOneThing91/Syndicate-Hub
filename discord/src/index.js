@@ -443,22 +443,18 @@ function modal(i){if(!hasPremiumRole(i))return premiumRequired();return new Resp
 function keyAccessPanelPayload(){
  return {
   embeds:[{
-   author:{name:"✦ SHADOW SYNDICATES  •  ELITE ACCESS"},
-   title:"👑  THE PREMIUM VAULT",
-   description:"**SYNDICATE HUB**  ·  Private Member Access\n\nWelcome to the Inner Circle. Generate your private lifetime key below.\n\n**━━━━━━━━━━  ✦  ━━━━━━━━━━**",
-   color:0xE4B65D,
+   title:"Syndicate Hub | Premium Keys",
+   description:"Premium members can generate or retrieve their lifetime key here. Keys are sent privately; keep yours secure.",
+   color:0x7651A8,
    fields:[
-    {name:"💎  PREMIUM  ·  LIFETIME",value:"<@&1564481287710974062> members\n**♾️ No expiration**",inline:true},
-    {name:"🔐  YOUR ACCESS, SECURED",value:"One active key per Discord member and Roblox ID. Delivered **privately** — never share it.",inline:false}
+    {name:"Premium access",value:"Lifetime key • No expiration",inline:true},
+    {name:"Key limit",value:"One active key per member and Roblox account.",inline:true}
    ],
-   footer:{text:"SHADOW SYNDICATES  ✦  AUTHORIZED MEMBERS ONLY"}
+   footer:{text:"Syndicate Hub • Premium"}
   }],
   components:[
    {type:1,components:[
-    {type:2,style:1,label:"Premium Lifetime",custom_id:"syndicate_generate_key",emoji:{name:"👑"}}
-   ]},
-   {type:1,components:[
-    {type:2,style:2,label:"View My Key",custom_id:"syndicate_free_view",emoji:{name:"🔑"}},
+    {type:2,style:1,label:"Get Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}},
     {type:2,style:2,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}},
     {type:2,style:4,label:"Revoke Key",custom_id:"syndicate_revoke_own_key",emoji:{name:"🚫"}}
    ]}
@@ -469,7 +465,7 @@ function keyAccessPanelPayload(){
 // Upgrade the existing bot-owned lifetime panel once, without posting duplicates.
 async function syncExistingKeyAccessPanel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS key_access_panel_layout(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,channel_id TEXT,message_id TEXT,checked_at TEXT NOT NULL)").run();
- const revision="premium-vault-lifetime-v4";
+ const revision="premium-simple-lifetime-v5";
  const current=await env.DB.prepare("SELECT revision,status,channel_id,message_id FROM key_access_panel_layout WHERE id=1").first();
  if(current?.revision===revision&&current.status==="updated")return;
  const panelId = current?.message_id;
