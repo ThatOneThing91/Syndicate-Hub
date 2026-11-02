@@ -1081,14 +1081,14 @@ async function maintainFeatureChannel(env){
 
 async function removeObsoleteGetKeyDescription(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS bot_description_updates(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,before_description TEXT,after_description TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
- const revision="remove-getkey-reference-v1";
+ const revision="remove-getkey-reference-v2";
  const previous=await env.DB.prepare("SELECT revision,status FROM bot_description_updates WHERE id=1").first();
  if(previous?.revision===revision&&previous.status==="completed")return;
  try{
   const app=await discordApi(env,"/applications/@me");
   if(app.status!==200||app.data?.id!==APPLICATION_ID||typeof app.data.description!=="string")throw Error("Cannot verify bot application description");
   const before=app.data.description;
-  const after=before.replace(/<\/getkey(?::[0-9]+)?>|`\/getkey`|\/getkey\b/gi,"the Get Key button");
+  const after=/^(?:`?\/getkey`?|the Get Key button)$/i.test(before.trim())?"":before.replace(/<\/getkey(?::[0-9]+)?>|`\/getkey`|\/getkey\b/gi,"the Get Key button");
   if(after!==before){
    const result=await discordApi(env,"/applications/@me","PATCH",{description:after});
    if(result.status!==200||result.data?.id!==APPLICATION_ID||result.data?.description!==after)throw Error("Bot description edit failed: "+result.status);
