@@ -192,6 +192,67 @@ function executorBoards(rows,successAt,stale,checkedAt,sources=[]) {
  return boards;
 }
 
+const EXECUTOR_PLATFORMS=[
+ {key:"windows",platform:"Windows",emoji:"🖥️"},
+ {key:"android",platform:"Android",emoji:"📱"},
+ {key:"ios",platform:"iOS",emoji:"🍎"},
+ {key:"mac",platform:"macOS",emoji:"💻"}
+];
+function executorVisibleRows(rows){
+ return rows.filter(row=>row.kind!=="External"&&!row.evidence?.reports?.some(report=>report.kind==="External"));
+}
+function executorPlatformButtons(selected){
+ return {type:1,components:EXECUTOR_PLATFORMS.map(p=>({type:2,style:p.key===selected?1:2,label:p.platform,emoji:{name:p.emoji},custom_id:"syndicate_executor_"+p.key+"_0"}))};
+}
+function executorMenuBoard(rows,checkedAt,stale){
+ const visible=executorVisibleRows(rows);
+ return {key:"menu",payload:{allowed_mentions:{parse:[]},embeds:[{
+  author:{name:"SYNDICATE HUB  /  EXECUTOR WATCH"},title:"Executor Status",
+  description:"Choose your platform below to view its executor information privately.\n\n"+EXECUTOR_PLATFORMS.map(p=>p.emoji+" **"+p.platform+"** · "+visible.filter(r=>r.platform===p.platform).length+" listed").join("\n")+"\n\nExternal executors are hidden. Status information refreshes every 5 minutes."+(stale?"\n⚠️ Primary tracker unavailable; saved data may be stale.":""),
+  color:stale?0xF0B232:0x9B72CF,footer:{text:"Source reports do not guarantee safety."},timestamp:checkedAt
+ }],components:[executorPlatformButtons(null)]}};
+}
+async function executorPlatformPayload(env,key,page=0){
+ const platform=EXECUTOR_PLATFORMS.find(p=>p.key===key);
+ if(!platform)return {content:"Choose a platform from the executor menu.",embeds:[],components:[]};
+ const cached=await env.DB.prepare("SELECT success_at,snapshot,checked_at FROM executor_feed_state WHERE id=1").first();
+ if(!cached?.snapshot)return {content:"Executor information is still loading. Try again shortly.",embeds:[],components:[executorPlatformButtons(key)]};
+ const snapshot=JSON.parse(cached.snapshot);
+ if(!Array.isArray(snapshot))throw Error("Invalid executor snapshot");
+ const now=Date.now();
+ const recent=Number.isFinite(Date.parse(cached.checked_at))&&now-Date.parse(cached.checked_at)<600000;
+ const saved=await env.DB.prepare("SELECT source_id,checked_at,success_at,last_error FROM executor_source_state").all();
+ const sources=EXECUTOR_SOURCES.map(source=>{
+  const state=(saved.results||[]).find(s=>s.source_id===source.id);
+  return {...source,checkedAt:state?.checked_at,successAt:state?.success_at,error:state?.last_error,fresh:recent&&!!state?.success_at&&!state.last_error&&state.success_at===state.checked_at};
+ });
+ const rows=executorVisibleRows(snapshot).filter(row=>row.platform===platform.platform);
+ if(!rows.length)return {content:"No non-external executors are currently listed for "+platform.platform+".",embeds:[],components:[executorPlatformButtons(key)],allowed_mentions:{parse:[]}};
+ const stale=!recent||!sources.some(s=>s.kind==="weao"&&s.fresh);
+ const boards=executorBoards(rows,cached.success_at,stale,cached.checked_at,sources);
+ const selected=Math.max(0,Math.min(boards.length-1,Number.isInteger(page)?page:0));
+ const payload={...boards[selected].payload,content:"",components:[executorPlatformButtons(key)]};
+ if(boards.length>1)payload.components.push({type:1,components:[
+  {type:2,style:2,label:"Previous",custom_id:"syndicate_executor_"+key+"_"+Math.max(0,selected-1),disabled:selected===0},
+  {type:2,style:2,label:"Page "+(selected+1)+" / "+boards.length,custom_id:"syndicate_executor_page",disabled:true},
+  {type:2,style:2,label:"Next",custom_id:"syndicate_executor_"+key+"_"+(selected+1),disabled:selected===boards.length-1}
+ ]});
+ return payload;
+}
+function executorPlatformInteraction(i,env,ctx){
+ const match=/^syndicate_executor_(windows|android|ios|mac)_([0-9]{1,3})$/.exec(i.data?.custom_id||"");
+ if(!match)return reply("Choose a platform from the executor menu.");
+ ctx.waitUntil((async()=>{
+  let body;
+  try{body=await executorPlatformPayload(env,match[1],Number(match[2]));}
+  catch(e){console.error("executor platform view",String(e));body={content:"Executor information could not be loaded. Try again shortly.",embeds:[],components:[executorPlatformButtons(match[1])]};}
+  body.allowed_mentions={parse:[]};
+  const r=await fetch("https://discord.com/api/v10/webhooks/"+APPLICATION_ID+"/"+i.token+"/messages/@original",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(10000)});
+  if(!r.ok)console.error("executor platform response",r.status);
+ })().catch(e=>console.error("executor platform delivery",String(e))));
+ return discordResponse(i.message?.flags&64?{type:6}:{type:5,data:{flags:64}});
+}
+
 async function executorDiscord(env, path, method, body) {
  for(let attempt=0;attempt<3;attempt++){
   const r=await fetch("https://discord.com/api/v10"+path,{method,headers:{Authorization:"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(10000)});
@@ -220,7 +281,7 @@ async function refreshExecutorStatus(env) {
  const successAt=primaryLive?checkedAt:cached.success_at;
  const error=sources.filter(s=>s.error).map(s=>s.id+": "+s.error).join("; ")||null;
  await env.DB.prepare("UPDATE executor_feed_state SET success_at=?,snapshot=?,last_error=?,checked_at=? WHERE id=1").bind(successAt,JSON.stringify(rows),error,checkedAt).run();
- const boards=executorBoards(rows,successAt,!primaryLive,checkedAt,sources);
+ const boards=[executorMenuBoard(rows,checkedAt,!primaryLive)];
  for (const board of boards) {
   const key = EXECUTOR_CHANNEL + ":" + board.key;
   const prior = await env.DB.prepare("SELECT message_id FROM executor_status_messages WHERE panel_key=?").bind(key).first();
@@ -246,7 +307,7 @@ async function refreshExecutorStatus(env) {
   await env.DB.prepare("DELETE FROM executor_status_messages WHERE panel_key=?").bind(row.panel_key).run();
  }
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS executor_display_state(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,board_count INTEGER NOT NULL,updated_at TEXT NOT NULL)").run();
- await env.DB.prepare("INSERT INTO executor_display_state(id,revision,board_count,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,board_count=excluded.board_count,updated_at=excluded.updated_at").bind("hide-external-v1",boards.length,new Date().toISOString()).run();
+ await env.DB.prepare("INSERT INTO executor_display_state(id,revision,board_count,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,board_count=excluded.board_count,updated_at=excluded.updated_at").bind("platform-menu-v1",boards.length,new Date().toISOString()).run();
 }
 
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -1144,6 +1205,7 @@ export default {
   if(needsBetaAccess(i)&&!hasBetaAccess(i))return reply("🔒 The Beta Tester role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
   try {
+   if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_executor_"))return executorPlatformInteraction(i,env,ctx);
    if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_platform_"))return delayedReply(i,env,ctx,()=>togglePlatformRole(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("mg_"))return discordResponse(await deferredManagement(i,env,ctx));
    if(i.type===5&&i.data?.custom_id==="mg_revoke_modal")return discordResponse(await managementModal(i));
