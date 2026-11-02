@@ -1281,6 +1281,200 @@ async function removeObsoleteGetKeyDescription(env){
  }
 }
 
+
+const ROBLOX_UPDATES_CHANNEL = "1563199116182425690";
+const ROBLOX_RELEASE_INDEX = "https://create.roblox.com/docs/release-notes";
+const ROBLOX_NEWSROOM_INDEXES = [
+ "https://about.roblox.com/newsroom?filter=news",
+ "https://about.roblox.com/newsroom?filter=product",
+ "https://about.roblox.com/newsroom?filter=community"
+];
+const ROBLOX_FEED_REVISION = "official-roblox-updates-v1";
+
+function robloxDecodeHtml(value) {
+ return String(value ?? "")
+  .replace(/&amp;/gi,"&").replace(/&quot;/gi,'"').replace(/&#39;|&apos;/gi,"'")
+  .replace(/&lt;/gi,"<").replace(/&gt;/gi,">").replace(/&#(\d+);/g,(_,n)=>String.fromCodePoint(Number(n)))
+  .replace(/&#x([0-9a-f]+);/gi,(_,n)=>String.fromCodePoint(parseInt(n,16)));
+}
+function robloxPlainText(value,max=1000) {
+ return robloxDecodeHtml(String(value ?? "").replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim()).slice(0,max);
+}
+function robloxSafeUrl(value,base) {
+ try {
+  const u=new URL(String(value),base);
+  return u.protocol==="https:"&&!u.username&&!u.password?u.href:null;
+ } catch { return null; }
+}
+async function robloxFetchText(url,maxBytes=900000) {
+ const r=await fetch(url,{headers:{Accept:"text/html,application/xhtml+xml","User-Agent":"Syndicate-Hub-Roblox-Updates/1.0"},signal:AbortSignal.timeout(15000)});
+ if(!r.ok)throw Error("HTTP "+r.status+" for "+url);
+ const length=Number(r.headers.get("content-length")||0);
+ if(length>maxBytes)throw Error("Response too large for "+url);
+ const text=await r.text();
+ if(text.length>maxBytes)throw Error("Response too large for "+url);
+ return text;
+}
+function robloxNextData(html) {
+ const match=String(html).match(/<script[^>]+id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+ if(!match)throw Error("Roblox release page did not expose structured data");
+ try { return JSON.parse(match[1]); } catch { throw Error("Roblox release structured data was invalid"); }
+}
+function robloxReleaseVersions(html) {
+ const found=new Set();
+ for(const match of String(html).matchAll(/\/release-notes\/release-notes-(\d+)/g))found.add(Number(match[1]));
+ return [...found].filter(Number.isFinite).sort((a,b)=>b-a).slice(0,4);
+}
+function robloxMeta(html,name) {
+ const safe=String(name).replace(/[^a-zA-Z0-9:_-]/g,"");
+ const match=String(html).match(new RegExp("<meta[^>]+(?:property|name)=[\"']"+safe+"[\"'][^>]+content=[\"']([^\"']*)[\"'][^>]*>","i"));
+ return match?robloxPlainText(match[1],1400):"";
+}
+function robloxReleaseEmbed(item) {
+ return {
+  author:{name:"SYNDICATE HUB  /  ROBLOX UPDATES"},
+  title:item.title.slice(0,256),url:item.url,
+  description:"Official Roblox Creator Hub release notes. Details are grouped by the update category shown on Roblox.",
+  fields:(item.fields||[]).slice(0,4).map(field=>({name:String(field.name).slice(0,256),value:String(field.value).slice(0,1024),inline:false})),
+  color:0x9B72CF,
+  footer:{text:"Roblox Creator Hub · official source"}
+ };
+}
+function robloxNewsEmbed(item) {
+ return {
+  author:{name:"SYNDICATE HUB  /  ROBLOX UPDATES"},
+  title:item.title.slice(0,256),url:item.url,
+  description:(item.description||"Official Roblox Newsroom announcement.").slice(0,3500),
+  color:0x9B72CF,
+  footer:{text:"Roblox Newsroom · official source"},
+  ...(item.published_at?{timestamp:item.published_at}:{})
+ };
+}
+async function robloxReleaseItems() {
+ const index=await robloxFetchText(ROBLOX_RELEASE_INDEX);
+ const versions=robloxReleaseVersions(index);
+ if(!versions.length)throw Error("No Roblox release note versions found");
+ const queue=[...versions];
+ const seen=new Set(),items=[];
+ while(queue.length&&seen.size<4) {
+  const version=queue.shift();
+  if(seen.has(version))continue;
+  seen.add(version);
+  const url=ROBLOX_RELEASE_INDEX+"/release-notes-"+version;
+  try {
+   const data=robloxNextData(await robloxFetchText(url))?.props?.pageProps?.data?.releaseNoteContents;
+   if(!data||!Array.isArray(data.content))continue;
+   const groups=new Map();
+   for(const note of data.content) {
+    const text=robloxPlainText(note?.ReleaseNotesText,700);
+    if(!text)continue;
+    const group=robloxPlainText(note?.ReleaseNotesType||"Updates",120)||"Updates";
+    if(!groups.has(group))groups.set(group,[]);
+    if(groups.get(group).length<6)groups.get(group).push("• "+text);
+   }
+   const fields=[...groups.entries()].filter(([,values])=>values.length).slice(0,4).map(([name,values])=>({name,value:values.join("\n").slice(0,1024)}));
+   if(!fields.length)continue;
+   const title=robloxPlainText(data.title||("Release notes for "+version),256);
+   items.push({key:"release:"+version,source:"release_notes",title,url,fields,order:version,published_at:null});
+   const next=String(data.next||"").match(/release-notes-(\d+)/);
+   if(next&&!seen.has(Number(next[1])))queue.push(Number(next[1]));
+  } catch(e) {
+   console.error("Roblox release page",version,String(e));
+  }
+ }
+ return items;
+}
+async function robloxNewsroomItems() {
+ const urls=new Set();
+ const sourceErrors=[];
+ for(const index of ROBLOX_NEWSROOM_INDEXES) {
+  try {
+   const html=await robloxFetchText(index);
+   for(const match of String(html).matchAll(/href=["'](\/newsroom\/20\d{2}\/\d{2}\/[a-z0-9-]+)["']/gi))urls.add(match[1]);
+  } catch(e) { sourceErrors.push(String(e).slice(0,180)); }
+ }
+ const items=[];
+ for(const path of [...urls].slice(0,8)) {
+  const url=robloxSafeUrl(path,"https://about.roblox.com");
+  if(!url)continue;
+  try {
+   const html=await robloxFetchText(url);
+   const title=robloxMeta(html,"og:title");
+   if(!title)continue;
+   const description=robloxMeta(html,"og:description")||"Official Roblox Newsroom announcement.";
+   const published=robloxMeta(html,"article:published_time");
+   const publishedAt=Number.isFinite(Date.parse(published))?new Date(published).toISOString():null;
+   items.push({key:"newsroom:"+path,source:"newsroom",title,url,description,published_at:publishedAt,order:publishedAt?Date.parse(publishedAt):0});
+  } catch(e) { sourceErrors.push(String(e).slice(0,180)); }
+ }
+ items._sourceErrors=sourceErrors;
+ return items;
+}
+async function robloxPostItem(env,item) {
+ const channel=await discordApi(env,"/channels/"+ROBLOX_UPDATES_CHANNEL);
+ if(channel.status!==200||channel.data?.guild_id!==GUILD_ID||![0,5].includes(channel.data?.type))throw Error("Roblox updates channel is unavailable or is not a text/news channel");
+ const digest=await sha("roblox-feed:"+item.key);
+ const nonce=BigInt("0x"+digest.slice(0,18)).toString();
+ const payload={allowed_mentions:{parse:[]},embeds:[item.source==="release_notes"?robloxReleaseEmbed(item):robloxNewsEmbed(item)],nonce,enforce_nonce:true};
+ const result=await discordApi(env,"/channels/"+ROBLOX_UPDATES_CHANNEL+"/messages","POST",payload);
+ if(result.status!==200||!result.data?.id)throw Error("Roblox update message failed: "+result.status);
+ return result.data.id;
+}
+async function refreshRobloxUpdates(env) {
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_feed_items(item_key TEXT PRIMARY KEY,source TEXT NOT NULL,title TEXT NOT NULL,url TEXT NOT NULL,published_at TEXT,posted_at TEXT,message_id TEXT)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_feed_state(id INTEGER PRIMARY KEY CHECK(id=1),next_run INTEGER NOT NULL DEFAULT 0,initialized INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0,last_error TEXT,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO roblox_feed_state(id,next_run,initialized,lease_until,updated_at) VALUES(1,0,0,0,?)").bind(new Date().toISOString()).run();
+ const now=Date.now();
+ const state=await env.DB.prepare("SELECT next_run,initialized,lease_until FROM roblox_feed_state WHERE id=1").first();
+ if(Number(state?.next_run||0)>now||Number(state?.lease_until||0)>now)return;
+ const claim=await env.DB.prepare("UPDATE roblox_feed_state SET lease_until=?,updated_at=? WHERE id=1 AND next_run<=? AND lease_until<=?").bind(now+180000,new Date().toISOString(),now,now).run();
+ if(!claim.meta?.changes)return;
+ try {
+  const channel=await discordApi(env,"/channels/"+ROBLOX_UPDATES_CHANNEL);
+  if(channel.status!==200||channel.data?.guild_id!==GUILD_ID||![0,5].includes(channel.data?.type))throw Error("Roblox updates channel is unavailable or is not a text/news channel");
+  const results=await Promise.allSettled([robloxReleaseItems(),robloxNewsroomItems()]);
+  const release=results[0].status==="fulfilled"?results[0].value:[];
+  const newsroom=results[1].status==="fulfilled"?results[1].value:[];
+  const errors=results.filter(x=>x.status==="rejected").map(x=>String(x.reason).slice(0,180));
+  if(newsroom._sourceErrors?.length)errors.push(...newsroom._sourceErrors);
+  const items=[...release,...newsroom].filter(x=>x&&x.key&&x.title&&x.url);
+  if(!items.length)throw Error("No official Roblox updates were found"+(errors.length?": "+errors.join(" | "):""));
+  const existingRows=await env.DB.prepare("SELECT item_key,message_id FROM roblox_feed_items").all();
+  const existing=new Map((existingRows.results||[]).map(row=>[row.item_key,row]));
+  for(const item of items) {
+   await env.DB.prepare("INSERT OR IGNORE INTO roblox_feed_items(item_key,source,title,url,published_at,posted_at,message_id) VALUES(?,?,?,?,?,?,?)").bind(item.key,item.source,item.title,item.url,item.published_at,null,null).run();
+  }
+  const pending=items.filter(item=>!existing.has(item.key)||existing.get(item.key).message_id===null);
+  const isFirst=!Number(state?.initialized);
+  const publishLimit=isFirst?2:8;
+  const ordered=pending.sort((a,b)=>Number(b.order||0)-Number(a.order||0));
+  let selected=[];
+  if(isFirst) {
+   for(const source of ["release_notes","newsroom"]) {
+    const candidate=ordered.find(item=>item.source===source);
+    if(candidate)selected.push(candidate);
+   }
+   for(const candidate of ordered) {
+    if(selected.length>=publishLimit)break;
+    if(!selected.includes(candidate))selected.push(candidate);
+   }
+  } else selected=ordered.slice(0,publishLimit);
+  const selectedKeys=new Set(selected.map(item=>item.key));
+  for(const item of pending) {
+   if(selectedKeys.has(item.key))continue;
+   if(isFirst)await env.DB.prepare("UPDATE roblox_feed_items SET posted_at=?,message_id=COALESCE(message_id,'suppressed') WHERE item_key=? AND message_id IS NULL").bind(new Date().toISOString(),item.key).run();
+  }
+  for(const item of selected) {
+   const messageId=await robloxPostItem(env,item);
+   await env.DB.prepare("UPDATE roblox_feed_items SET posted_at=?,message_id=? WHERE item_key=?").bind(new Date().toISOString(),messageId,item.key).run();
+  }
+  await env.DB.prepare("UPDATE roblox_feed_state SET initialized=1,next_run=?,lease_until=0,last_error=?,updated_at=? WHERE id=1").bind(now+600000,errors.length?errors.join(" | ").slice(0,1500):null,new Date().toISOString()).run();
+ } catch(e) {
+  await env.DB.prepare("UPDATE roblox_feed_state SET next_run=?,lease_until=0,last_error=?,updated_at=? WHERE id=1").bind(now+60000,String(e).slice(0,1500),new Date().toISOString()).run();
+  throw e;
+ }
+}
+
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
@@ -1291,6 +1485,7 @@ export default {
   ctx.waitUntil(ensurePlatformPanel(env).catch(e=>console.error("platform panel",String(e))));
   ctx.waitUntil(syncExistingKeyAccessPanel(env).catch(e=>console.error("key panel layout sync",String(e))));
   ctx.waitUntil(refreshExecutorStatus(env).catch(async e=>{console.error("executor status refresh",String(e));await env.DB.prepare("UPDATE executor_feed_state SET last_error=?,next_run=? WHERE id=1").bind("Panel delivery: "+String(e).slice(0,1400),Date.now()+60000).run();}));
+  ctx.waitUntil(refreshRobloxUpdates(env).catch(e=>console.error("Roblox updates",String(e))));
   try{await sendExecutionLogs(env)}catch(e){console.error("execution logging",e)}
   try{await managementPost(env)}catch(e){console.error("management panel",e)}
   try{await postFreePanel(env)}catch(e){console.error("free panel",e)}
