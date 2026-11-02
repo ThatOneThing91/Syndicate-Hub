@@ -239,9 +239,36 @@ async function executorPlatformPayload(env,key,page=0){
  ]});
  return payload;
 }
+async function cacheWindowsExecutorPages(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS executor_windows_pages(page INTEGER PRIMARY KEY,payload TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ const first=await executorPlatformPayload(env,"windows",0);
+ const pageLabel=first.components?.[1]?.components?.find(b=>/^Page [0-9]+ \/ [0-9]+$/.test(b.label||""))?.label;
+ const count=pageLabel?Number(pageLabel.split(" / ")[1]):1;
+ if(!Number.isInteger(count)||count<1||count>100)throw Error("Invalid Windows executor page count");
+ const payloads=[first];
+ for(let page=1;page<count;page++)payloads.push(await executorPlatformPayload(env,"windows",page));
+ const updatedAt=new Date().toISOString();
+ const statements=payloads.map((payload,page)=>env.DB.prepare("INSERT INTO executor_windows_pages(page,payload,updated_at) VALUES(?,?,?) ON CONFLICT(page) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at").bind(page,JSON.stringify(payload),updatedAt));
+ statements.push(env.DB.prepare("DELETE FROM executor_windows_pages WHERE page>=?").bind(count));
+ await env.DB.batch(statements);
+}
+async function executorWindowsInteraction(i,env,page){
+ let body;
+ try{
+  const saved=await env.DB.prepare("SELECT payload FROM executor_windows_pages ORDER BY ABS(page-?) LIMIT 1").bind(page).first();
+  body=saved?.payload?JSON.parse(saved.payload):await executorPlatformPayload(env,"windows",page);
+ }catch(e){
+  console.error("Windows executor result",String(e));
+  body={content:"Windows information could not be loaded. Tap Windows to try again.",embeds:[],components:[executorPlatformButtons("windows")]};
+ }
+ body.allowed_mentions={parse:[]};
+ return discordResponse({type:i.message?.flags&64?7:4,data:{...body,...(i.message?.flags&64?{}:{flags:64})}});
+}
+
 function executorPlatformInteraction(i,env,ctx){
  const match=/^syndicate_executor_(windows|android|ios|mac)_([0-9]{1,3})$/.exec(i.data?.custom_id||"");
  if(!match)return reply("Choose a platform from the executor menu.");
+ if(match[1]==="windows")return executorWindowsInteraction(i,env,Number(match[2]));
  ctx.waitUntil((async()=>{
   let body;
   try{body=await executorPlatformPayload(env,match[1],Number(match[2]));}
@@ -281,6 +308,7 @@ async function refreshExecutorStatus(env) {
  const successAt=primaryLive?checkedAt:cached.success_at;
  const error=sources.filter(s=>s.error).map(s=>s.id+": "+s.error).join("; ")||null;
  await env.DB.prepare("UPDATE executor_feed_state SET success_at=?,snapshot=?,last_error=?,checked_at=? WHERE id=1").bind(successAt,JSON.stringify(rows),error,checkedAt).run();
+ await cacheWindowsExecutorPages(env);
  const boards=[executorMenuBoard(rows,checkedAt,!primaryLive)];
  for (const board of boards) {
   const key = EXECUTOR_CHANNEL + ":" + board.key;
@@ -307,7 +335,7 @@ async function refreshExecutorStatus(env) {
   await env.DB.prepare("DELETE FROM executor_status_messages WHERE panel_key=?").bind(row.panel_key).run();
  }
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS executor_display_state(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,board_count INTEGER NOT NULL,updated_at TEXT NOT NULL)").run();
- await env.DB.prepare("INSERT INTO executor_display_state(id,revision,board_count,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,board_count=excluded.board_count,updated_at=excluded.updated_at").bind("platform-menu-v1",boards.length,new Date().toISOString()).run();
+ await env.DB.prepare("INSERT INTO executor_display_state(id,revision,board_count,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,board_count=excluded.board_count,updated_at=excluded.updated_at").bind("platform-menu-windows-fast-v2",boards.length,new Date().toISOString()).run();
 }
 
 import { WorkerEntrypoint } from "cloudflare:workers";
