@@ -1079,9 +1079,33 @@ async function maintainFeatureChannel(env){
  }
 }
 
+async function removeObsoleteGetKeyDescription(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS bot_description_updates(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,before_description TEXT,after_description TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
+ const revision="remove-getkey-reference-v1";
+ const previous=await env.DB.prepare("SELECT revision,status FROM bot_description_updates WHERE id=1").first();
+ if(previous?.revision===revision&&previous.status==="completed")return;
+ try{
+  const app=await discordApi(env,"/applications/@me");
+  if(app.status!==200||app.data?.id!==APPLICATION_ID||typeof app.data.description!=="string")throw Error("Cannot verify bot application description");
+  const before=app.data.description;
+  const after=before.replace(/<\/getkey(?::[0-9]+)?>|`\/getkey`|\/getkey\b/gi,"the Get Key button");
+  if(after!==before){
+   const result=await discordApi(env,"/applications/@me","PATCH",{description:after});
+   if(result.status!==200||result.data?.id!==APPLICATION_ID||result.data?.description!==after)throw Error("Bot description edit failed: "+result.status);
+  }
+  const verified=await discordApi(env,"/applications/@me");
+  if(verified.status!==200||verified.data?.id!==APPLICATION_ID||verified.data.description!==after||/\/getkey\b/i.test(verified.data.description))throw Error("Bot description update was not confirmed");
+  await env.DB.prepare("INSERT INTO bot_description_updates(id,revision,status,before_description,after_description,updated_at) VALUES(1,?,'completed',?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,status=excluded.status,before_description=excluded.before_description,after_description=excluded.after_description,last_error=NULL,updated_at=excluded.updated_at").bind(revision,before,after,new Date().toISOString()).run();
+ }catch(e){
+  await env.DB.prepare("INSERT INTO bot_description_updates(id,revision,status,last_error,updated_at) VALUES(1,?,'error',?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,status=excluded.status,last_error=excluded.last_error,updated_at=excluded.updated_at").bind(revision,String(e).slice(0,1200),new Date().toISOString()).run();
+  throw e;
+ }
+}
+
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
+  ctx.waitUntil(removeObsoleteGetKeyDescription(env).catch(e=>console.error("bot description update",String(e))));
   ctx.waitUntil(maintainFeatureChannel(env).catch(e=>console.error("features maintenance",String(e))));
   ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium channel setup",String(e))));
   ctx.waitUntil(ensureBetaHubAccess(env).catch(e=>console.error("beta hub access",String(e))));
