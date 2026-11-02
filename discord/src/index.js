@@ -233,9 +233,9 @@ async function executorPlatformPayload(env,key,page=0){
  const selected=Math.max(0,Math.min(boards.length-1,Number.isInteger(page)?page:0));
  const payload={...boards[selected].payload,content:"",components:[executorPlatformButtons(key)]};
  if(boards.length>1)payload.components.push({type:1,components:[
-  {type:2,style:2,label:"Previous",custom_id:"syndicate_executor_"+key+"_"+Math.max(0,selected-1),disabled:selected===0},
+  {type:2,style:2,label:"Previous",custom_id:"syndicate_executor_nav_"+key+"_"+Math.max(0,selected-1),disabled:selected===0},
   {type:2,style:2,label:"Page "+(selected+1)+" / "+boards.length,custom_id:"syndicate_executor_page",disabled:true},
-  {type:2,style:2,label:"Next",custom_id:"syndicate_executor_"+key+"_"+(selected+1),disabled:selected===boards.length-1}
+  {type:2,style:2,label:"Next",custom_id:"syndicate_executor_nav_"+key+"_"+(selected+1),disabled:selected===boards.length-1}
  ]});
  return payload;
 }
@@ -247,6 +247,10 @@ async function cacheWindowsExecutorPages(env){
  if(!Number.isInteger(count)||count<1||count>100)throw Error("Invalid Windows executor page count");
  const payloads=[first];
  for(let page=1;page<count;page++)payloads.push(await executorPlatformPayload(env,"windows",page));
+ for(const payload of payloads){
+  const ids=(payload.components||[]).flatMap(row=>row.components||[]).map(button=>button.custom_id).filter(Boolean);
+  if(new Set(ids).size!==ids.length)throw Error("Duplicate Windows result button IDs");
+ }
  const updatedAt=new Date().toISOString();
  const statements=payloads.map((payload,page)=>env.DB.prepare("INSERT INTO executor_windows_pages(page,payload,updated_at) VALUES(?,?,?) ON CONFLICT(page) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at").bind(page,JSON.stringify(payload),updatedAt));
  statements.push(env.DB.prepare("DELETE FROM executor_windows_pages WHERE page>=?").bind(count));
@@ -266,7 +270,7 @@ async function executorWindowsInteraction(i,env,page){
 }
 
 function executorPlatformInteraction(i,env,ctx){
- const match=/^syndicate_executor_(windows|android|ios|mac)_([0-9]{1,3})$/.exec(i.data?.custom_id||"");
+ const match=/^syndicate_executor_(?:nav_)?(windows|android|ios|mac)_([0-9]{1,3})$/.exec(i.data?.custom_id||"");
  if(!match)return reply("Choose a platform from the executor menu.");
  if(match[1]==="windows")return executorWindowsInteraction(i,env,Number(match[2]));
  ctx.waitUntil((async()=>{
@@ -335,7 +339,7 @@ async function refreshExecutorStatus(env) {
   await env.DB.prepare("DELETE FROM executor_status_messages WHERE panel_key=?").bind(row.panel_key).run();
  }
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS executor_display_state(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,board_count INTEGER NOT NULL,updated_at TEXT NOT NULL)").run();
- await env.DB.prepare("INSERT INTO executor_display_state(id,revision,board_count,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,board_count=excluded.board_count,updated_at=excluded.updated_at").bind("platform-menu-windows-fast-v2",boards.length,new Date().toISOString()).run();
+ await env.DB.prepare("INSERT INTO executor_display_state(id,revision,board_count,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,board_count=excluded.board_count,updated_at=excluded.updated_at").bind("platform-menu-windows-buttons-v3",boards.length,new Date().toISOString()).run();
 }
 
 import { WorkerEntrypoint } from "cloudflare:workers";
