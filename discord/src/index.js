@@ -482,9 +482,12 @@ function keyAccessPanelPayload(){
 // Upgrade the existing bot-owned lifetime panel once, without posting duplicates.
 async function syncExistingKeyAccessPanel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS key_access_panel_layout(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,channel_id TEXT,message_id TEXT,checked_at TEXT NOT NULL)").run();
- const revision="premium-simple-lifetime-v5";
+ const revision="premium-simple-lifetime-v6";
  const current=await env.DB.prepare("SELECT revision,status,channel_id,message_id FROM key_access_panel_layout WHERE id=1").first();
  if(current?.revision===revision&&current.status==="updated")return;
+ const channelName="💎・premium-script";
+ const renamed=await discordApi(env,"/channels/1563145457910153319","PATCH",{name:channelName});
+ if(renamed.status!==200||renamed.data?.name!==channelName)throw Error("Premium script channel rename failed: "+renamed.status);
  const panelId = current?.message_id;
  if(current?.channel_id==="1563145457910153319" && panelId){
   const direct=await discordApi(env,"/channels/"+current.channel_id+"/messages/"+panelId,"PATCH",keyAccessPanelPayload());
@@ -740,11 +743,11 @@ async function freeAccessKey(i,env,input,ctx){
 async function postFreePanel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS syndicate_free_panel(id INTEGER PRIMARY KEY CHECK(id=1),message_id TEXT NOT NULL,created_at TEXT NOT NULL)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS syndicate_free_panel_layout(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,message_id TEXT NOT NULL,channel_name TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
- const revision="free-simple-script-v1";
+ const revision="free-simple-script-v2";
  const current=await env.DB.prepare("SELECT revision FROM syndicate_free_panel_layout WHERE id=1").first();
  if(current?.revision===revision)return;
  const exists=await env.DB.prepare("SELECT message_id FROM syndicate_free_panel WHERE id=1").first();
- const payload={"embeds":[{"title":"Syndicate Hub • Free Access","description":"Free access for 24 hours.\n\nUse **Get Key** to create your key or retrieve your existing one. Your key is shown privately.\n\nYou can request a new key after yours expires.","color":8414381}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Get Key","custom_id":"syndicate_free_generate"},{"type":2,"style":2,"label":"Get Script","custom_id":"syndicate_get_script"}]}],"allowed_mentions":{"parse":[]}};
+ const payload={"embeds":[{"title":"Syndicate Hub • Free Access","description":"Free access for 24 hours.\n\nUse **Get Key** to create your key or retrieve your existing one. Your key is shown privately.\n\nYou can request a new key after yours expires.","color":8414381}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Get Key","custom_id":"syndicate_free_generate"},{"type":2,"style":2,"label":"Get Script","custom_id":"syndicate_get_script"},{"type":2,"style":2,"label":"Revoke Key","custom_id":"syndicate_revoke_own_key"}]}],"allowed_mentions":{"parse":[]}};
  let result;
  if(exists){
   result=await discordApi(env,"/channels/"+FREE_PANEL_CHANNEL+"/messages/"+exists.message_id,"PATCH",payload);
