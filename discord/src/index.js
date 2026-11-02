@@ -350,6 +350,17 @@ const PUBLIC_KEY = "1eb2b56f7eaa6faf6180f687e9bca30369c0073718fd93247e743c36b5f1
 const GUILD_ID = "1563067666170646558";
 const PREMIUM_ROLE_ID = "1564481287710974062";
 const APPLICATION_ID = "1563150574805983252";
+const PURGE_COMMAND = Object.freeze({
+ name:"purge",
+ description:"Delete recent messages in this channel",
+ type:1,
+ dm_permission:false,
+ default_member_permissions:"8192",
+ options:[
+  {type:4,name:"amount",description:"Number of messages to delete",required:true,min_value:1,max_value:100},
+  {type:6,name:"user",description:"Only delete messages from this user",required:false}
+ ]
+});
 const enc = new TextEncoder();
 const hexBytes = s => new Uint8Array(s.match(/../g).map(x=>parseInt(x,16)));
 const sha = async s => [...new Uint8Array(await crypto.subtle.digest("SHA-256",enc.encode(s)))].map(x=>x.toString(16).padStart(2,"0")).join("");
@@ -1037,6 +1048,79 @@ const BETA_HUB_CATEGORY_ID = "1563112370950246440";
 const BETA_INVITE_CODE = "6K2qGPpuEH";
 const hasBetaAccess = i => i.guild_id===GUILD_ID &&
  (isAdmin(i)||Array.isArray(i.member?.roles)&&i.member.roles.includes(BETA_TESTER_ROLE_ID));
+
+const MANAGE_MESSAGES_PERMISSION = 8192n;
+const hasManageMessages = i => {
+ const permissions=BigInt(i.member?.permissions||"0");
+ return i.guild_id===GUILD_ID && ((permissions&8n)!==0n || (permissions&MANAGE_MESSAGES_PERMISSION)!==0n);
+};
+const interactionOption = (i,name) => (i.data?.options||[]).find(option=>option.name===name);
+function purgeMessageTimestamp(message) {
+ const parsed=Date.parse(message?.timestamp||"");
+ if(Number.isFinite(parsed))return parsed;
+ try{return Number((BigInt(String(message.id))>>22n)+1420070400000n)}catch{return 0}
+}
+async function purgeDiscord(env,path,method="GET",body) {
+ for(let attempt=0;attempt<3;attempt++){
+  const result=await discordApi(env,path,method,body);
+  if(result.status!==429||attempt===2)return result;
+  const retry=Number(result.data?.retry_after);
+  await new Promise(resolve=>setTimeout(resolve,Math.min(5000,Math.max(250,Number.isFinite(retry)?retry*1000:1000))));
+ }
+}
+async function purgeMessages(i,env) {
+ if(!hasManageMessages(i))return reply("⛔ You need Manage Messages permission to use /purge.");
+ const amount=Number(interactionOption(i,"amount")?.value);
+ if(!Number.isInteger(amount)||amount<1||amount>100)return reply("Choose a purge amount from 1 to 100.");
+ const userId=String(interactionOption(i,"user")?.value||"");
+ if(userId&&!isUserId(userId))return reply("That user could not be resolved.");
+ const channelId=String(i.channel_id||"");
+ if(!isUserId(channelId))return reply("This command can only run inside a Discord text channel.");
+ const selected=[];
+ let before="";
+ const pages=userId?20:1;
+ for(let page=0;page<pages&&selected.length<amount;page++){
+  const query="/channels/"+channelId+"/messages?limit=100"+(before?"&before="+encodeURIComponent(before):"");
+  const result=await purgeDiscord(env,query);
+  if(result.status!==200||!Array.isArray(result.data))return reply("I couldn't read this channel's messages. Check my View Channel and Read Message History permissions.");
+  const batch=result.data;
+  if(!batch.length)break;
+  for(const message of batch){
+   if(!userId||message.author?.id===userId)selected.push(message);
+   if(selected.length>=amount)break;
+  }
+  before=batch[batch.length-1]?.id||"";
+  if(batch.length<100)break;
+ }
+ if(!selected.length)return reply(userId?"No messages from <@"+userId+"> were found in the recent history I scanned.":"There were no messages to purge in this channel.");
+ const cutoff=Date.now()-14*24*60*60*1000;
+ const recent=[],individual=[];
+ for(const message of selected){
+  if(purgeMessageTimestamp(message)>=cutoff)recent.push(message);
+  else individual.push(message);
+ }
+ let deleted=0,failed=0;
+ const deleteIndividually=async message=>{
+  const result=await purgeDiscord(env,"/channels/"+channelId+"/messages/"+message.id,"DELETE");
+  if(result.status===204||result.status===200){deleted++;return}
+  failed++;
+ };
+ for(let index=0;index<recent.length;index+=100){
+  const chunk=recent.slice(index,index+100);
+  if(chunk.length<2){
+   for(const message of chunk)await deleteIndividually(message);
+   continue;
+  }
+  const result=await purgeDiscord(env,"/channels/"+channelId+"/messages/bulk-delete","POST",{messages:chunk.map(message=>message.id)});
+  if(result.status===204||result.status===200)deleted+=chunk.length;
+  else for(const message of chunk)await deleteIndividually(message);
+ }
+ for(const message of individual)await deleteIndividually(message);
+ const scope=userId?" from <@"+userId+">":"";
+ const suffix=failed?" "+failed+" message(s) could not be deleted; check my Manage Messages permission.":"";
+ return reply("🧹 Deleted **"+deleted+"** message"+(deleted===1?"":"s")+scope+"."+suffix);
+}
+
 function needsBetaAccess(i) {
  if(i.type===2)return i.data?.name==="getkey";
  if(i.type===5)return ["syndicate_key_modal","syndicate_free_modal"].includes(i.data?.custom_id);
@@ -1098,22 +1182,22 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v1";
+ const revision="premium-only-buttons-v2-purge-command";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
  if(!claim.meta?.changes)return;
  try {
-  // Only this application's commands are removed; panel components do not
-  // depend on slash command registration.
-  const paths=["/applications/"+APPLICATION_ID+"/commands","/applications/"+APPLICATION_ID+"/guilds/"+GUILD_ID+"/commands"];
-  for(const path of paths)await platformDiscord(env,path,"PUT",[]);
-  const counts=[];
-  for(const path of paths){
-   const commands=(await platformDiscord(env,path)).data;
-   if(!Array.isArray(commands)||commands.length)throw Error("Slash command removal was not confirmed.");
-   counts.push(commands.length);
-  }
+  const globalPath="/applications/"+APPLICATION_ID+"/commands";
+  const guildPath="/applications/"+APPLICATION_ID+"/guilds/"+GUILD_ID+"/commands";
+  await platformDiscord(env,globalPath,"PUT",[]);
+  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND]);
+  const globalCommands=(await platformDiscord(env,globalPath)).data;
+  const guildCommands=(await platformDiscord(env,guildPath)).data;
+  if(!Array.isArray(globalCommands)||globalCommands.length)throw Error("Global slash command removal was not confirmed.");
+  if(!Array.isArray(guildCommands))throw Error("Guild slash command registration was not confirmed.");
+  const purgeCommand=guildCommands.find(command=>command.name==="purge"&&command.type===1);
+  if(!purgeCommand)throw Error("Purge slash command registration was not confirmed.");
   const channel=(await platformDiscord(env,"/channels/1563145457910153319")).data;
   if(channel.guild_id!==GUILD_ID)throw Error("Premium channel is not in this server.");
   const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
@@ -1128,14 +1212,13 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const beta=changed.permission_overwrites?.find(o=>o.type===0&&o.id===BETA_TESTER_ROLE_ID);
   if(!(BigInt(everyone?.deny||"0")&1024n)||!(BigInt(premiumOverwrite?.allow||"0")&1024n)
    ||BigInt(beta?.allow||"0")&1024n)throw Error("Premium-only channel visibility was not confirmed.");
-  const details={channel_id:channel.id,channel_name:channel.name,required_role:premium.id,global_commands:counts[0],guild_commands:counts[1]};
+  const details={channel_id:channel.id,channel_name:channel.name,required_role:premium.id,global_commands:globalCommands.length,guild_commands:guildCommands.length,purge_command_id:purgeCommand.id};
   await env.DB.prepare("UPDATE premium_channel_setup SET revision=?,status='ready',details=?,last_error=NULL,lease_until=0,updated_at=? WHERE id=1").bind(revision,JSON.stringify(details),new Date().toISOString()).run();
  }catch(e){
   await env.DB.prepare("UPDATE premium_channel_setup SET status='error',last_error=?,lease_until=?,updated_at=? WHERE id=1").bind(String(e).slice(0,1500),Date.now()+60000,new Date().toISOString()).run();
   throw e;
  }
 }
-
 async function maintainFeatureChannel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS feature_channel_maintenance(id INTEGER PRIMARY KEY CHECK(id=1),snapshot TEXT,status TEXT NOT NULL,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
  const state=await env.DB.prepare("SELECT snapshot,status,details FROM feature_channel_maintenance WHERE id=1").first();
@@ -1233,9 +1316,13 @@ export default {
   let i;try{i=JSON.parse(raw)}catch{return new Response("Invalid JSON",{status:400})}
   if(i.type===1)return new Response(JSON.stringify({type:1}),{headers:{"content-type":"application/json"}});
   if(![2,3,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
-  if(i.type===2)return reply("Slash commands have been removed. Please use the server panels and buttons.");
+  if(i.type===2){
+   if(i.data?.name==="purge")return delayedReply(i,env,ctx,()=>purgeMessages(i,env));
+   return reply("That slash command is not available.");
+  }
   if(needsBetaAccess(i)&&!hasBetaAccess(i))return reply("🔒 The Beta Tester role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
+   ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
    if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_executor_"))return executorPlatformInteraction(i,env,ctx);
    if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_platform_"))return delayedReply(i,env,ctx,()=>togglePlatformRole(i,env));
