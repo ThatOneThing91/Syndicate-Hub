@@ -137,8 +137,9 @@ function executorSourceLine(source) {
 }
 
 function executorBoards(rows,successAt,stale,checkedAt,sources=[]) {
+ rows=rows.filter(row=>row.kind!=="External"&&!row.evidence?.reports?.some(report=>report.kind==="External"));
  const trackedCount=rows.length;
- // Show every monitored executor, not only those passing the former undetected-only filter.
+ // Filter both live and cached entries before grouping, counting, and pagination.
  const groups=new Map(),icons={Windows:"🖥️",Android:"📱",iOS:"🍎",macOS:"💻"};
  for(const row of rows){if(!groups.has(row.platform))groups.set(row.platform,[]);groups.get(row.platform).push(row);}
  if(!rows.length)groups.set("Executor status",[]);
@@ -174,7 +175,7 @@ function executorBoards(rows,successAt,stale,checkedAt,sources=[]) {
    return {title:x.title,...(x.website?{url:x.website}:{}),description,color:!ev.currentGroups?0x747F8D:ev.conflict||ev.detectionConflict?0xF0B232:ev.detection===true?0xED4245:x.updated===false?0xF0B232:0x9B72CF,...(x.logo?{thumbnail:{url:x.logo}}:{})};
   });
   const health=sources.map(executorSourceLine).join("\n");
-  const headerText=(stale?"⚠️ **Primary tracker unavailable · saved data may be stale**\n":"")+"**"+entries.length+" executors listed**  ·  **"+trackedCount+" monitored**  ·  Every 5 min\n\n"+(entries.length?"":"**No executor data currently available from the trackers.**\n\n")+"The complete monitored catalog is shown, including reported working, detected, outdated, uncertain and conflicting entries. These are source reports, not guarantees of safety.\n\n"+health+"\n*Detection: WEAO only; mirror is the same source. Other checks cover compatibility. Retrieval time is not detection assessment time. No report guarantees safety.*";
+  const headerText=(stale?"⚠️ **Primary tracker unavailable · saved data may be stale**\n":"")+"**"+entries.length+" executors listed**  ·  **"+trackedCount+" monitored**  ·  Every 5 min\n\n"+(entries.length?"":"**No executor data currently available from the trackers.**\n\n")+"External executors are hidden. Listed executors include reported working, detected, outdated, uncertain and conflicting entries. These are source reports, not guarantees of safety.\n\n"+health+"\n*Detection: WEAO only; mirror is the same source. Other checks cover compatibility. Retrieval time is not detection assessment time. No report guarantees safety.*";
   const pages=[[]];let pageChars=0;
   const reserve=headerText.length+400;
   for(const card of cards){const chars=card.title.length+card.description.length;if(chars+reserve>5800)throw Error("Executor card exceeds Discord size budget");if(pages.at(-1).length>=7||pageChars+chars+reserve>5800){pages.push([]);pageChars=0;}pages.at(-1).push(card);pageChars+=chars;}
@@ -244,6 +245,8 @@ async function refreshExecutorStatus(env) {
   await executorDiscord(env,"/channels/"+EXECUTOR_CHANNEL+"/messages/"+row.message_id,"DELETE");
   await env.DB.prepare("DELETE FROM executor_status_messages WHERE panel_key=?").bind(row.panel_key).run();
  }
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS executor_display_state(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,board_count INTEGER NOT NULL,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("INSERT INTO executor_display_state(id,revision,board_count,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,board_count=excluded.board_count,updated_at=excluded.updated_at").bind("hide-external-v1",boards.length,new Date().toISOString()).run();
 }
 
 import { WorkerEntrypoint } from "cloudflare:workers";
