@@ -720,9 +720,9 @@ async function freeAccessKey(i,env,input,ctx){
  if(!account)return reply("Roblox account not found. Use username (not display name) or numeric ID.");
  const rid=account.id,now=new Date().toISOString();
  const owner=await env.DB.prepare("SELECT d.discord_user_id FROM member_keys m LEFT JOIN discord_key_issuance d ON d.key_hash=m.key_hash WHERE m.user_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(rid,now).first();
- if(owner)return reply(owner.discord_user_id===did?"You already have an active key. Use View Key to retrieve it.":"An active key already exists for that Roblox account.");
+ if(owner)return reply(owner.discord_user_id===did?"You already have an active key. Use Get Key to retrieve it.":"An active key already exists for that Roblox account.");
  const active=await env.DB.prepare("SELECT m.user_id FROM discord_key_issuance d JOIN member_keys m ON m.key_hash=d.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(did,GUILD_ID,now).first();
- if(active)return reply("You already have an active key for Roblox ID "+active.user_id+". Use View Key.");
+ if(active)return reply("You already have an active key for Roblox ID "+active.user_id+". Use Get Key.");
  const bytes=crypto.getRandomValues(new Uint8Array(16));
  const hex=[...bytes].map(x=>x.toString(16).padStart(2,"0").toUpperCase()).join("");
  const key="SYND-"+hex.match(/.{8}/g).join("-");
@@ -739,13 +739,27 @@ async function freeAccessKey(i,env,input,ctx){
 }
 async function postFreePanel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS syndicate_free_panel(id INTEGER PRIMARY KEY CHECK(id=1),message_id TEXT NOT NULL,created_at TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS syndicate_free_panel_layout(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,message_id TEXT NOT NULL,channel_name TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ const revision="free-simple-script-v1";
+ const current=await env.DB.prepare("SELECT revision FROM syndicate_free_panel_layout WHERE id=1").first();
+ if(current?.revision===revision)return;
  const exists=await env.DB.prepare("SELECT message_id FROM syndicate_free_panel WHERE id=1").first();
- if(exists)return;
- const payload={embeds:[{title:"💜 SYNDICATE HUB | FREE ACCESS",description:"**Try Syndicate Hub free for 24 hours!**\n\nClick **Get Free Key** to generate a 24-hour key. Already have an active key? Choose **View Key** instead.\n\nKeys expire automatically after 24 hours. Request a new free key after expiry. Lifetime access is never downgraded.",color:8073395,footer:{text:"Syndicate Hub • Free 24-Hour Access"}}],components:[{type:1,components:[{type:2,style:1,label:"Get Free Key",custom_id:"syndicate_free_generate",emoji:{name:"🔑"}},{type:2,style:2,label:"View Key",custom_id:"syndicate_free_view"},{type:2,style:2,label:"Get Script",custom_id:"syndicate_get_script"}]}]};
- const r=await fetch("https://discord.com/api/v10/channels/"+FREE_PANEL_CHANNEL+"/messages",{method:"POST",headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},body:JSON.stringify(payload)});
- if(!r.ok)throw Error("Free panel post failed "+r.status+" "+(await r.text()).slice(0,250));
- const message=await r.json();
- await env.DB.prepare("INSERT OR IGNORE INTO syndicate_free_panel(id,message_id,created_at) VALUES(1,?,?)").bind(message.id,new Date().toISOString()).run();
+ const payload={"embeds":[{"title":"Syndicate Hub • Free Access","description":"Free access for 24 hours.\n\nUse **Get Key** to create your key or retrieve your existing one. Your key is shown privately.\n\nYou can request a new key after yours expires.","color":8414381}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Get Key","custom_id":"syndicate_free_generate"},{"type":2,"style":2,"label":"Get Script","custom_id":"syndicate_get_script"}]}],"allowed_mentions":{"parse":[]}};
+ let result;
+ if(exists){
+  result=await discordApi(env,"/channels/"+FREE_PANEL_CHANNEL+"/messages/"+exists.message_id,"PATCH",payload);
+  if(result.status!==200&&result.status!==404)throw Error("Free panel edit failed: "+result.status);
+ }
+ if(!exists||result.status===404){
+  result=await discordApi(env,"/channels/"+FREE_PANEL_CHANNEL+"/messages","POST",payload);
+  if(result.status!==200&&result.status!==201)throw Error("Free panel post failed: "+result.status);
+ }
+ if(!result.data?.id)throw Error("Free panel message ID unavailable");
+ await env.DB.prepare("INSERT INTO syndicate_free_panel(id,message_id,created_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET message_id=excluded.message_id").bind(result.data.id,new Date().toISOString()).run();
+ const channelName="📜・script";
+ const channel=await discordApi(env,"/channels/"+FREE_PANEL_CHANNEL,"PATCH",{name:channelName});
+ if(channel.status!==200||channel.data?.name!==channelName)throw Error("Script channel rename failed: "+channel.status);
+ await env.DB.prepare("INSERT INTO syndicate_free_panel_layout(id,revision,message_id,channel_name,updated_at) VALUES(1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,message_id=excluded.message_id,channel_name=excluded.channel_name,updated_at=excluded.updated_at").bind(revision,result.data.id,channel.data.name,new Date().toISOString()).run();
 }
 
 
