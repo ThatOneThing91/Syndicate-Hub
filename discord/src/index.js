@@ -442,25 +442,42 @@ function confirmOwnRevoke(){
 function modal(i){if(!hasPremiumRole(i))return premiumRequired();return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_key_modal",title:"Generate Syndicate Hub Key",components:[{type:1,components:[{type:4,custom_id:"roblox_id",label:"Roblox Username or User ID",style:1,min_length:1,max_length:20,required:true,placeholder:"Username (not display name) or numeric ID"}]}]}}),{headers:{"content-type":"application/json"}})}
 function keyAccessPanelPayload(){
  return {
-  embeds:[{
-   title:"Syndicate Hub | Premium Keys",
-   description:"Premium members can generate or retrieve their lifetime key here. Keys are sent privately; keep yours secure.",
-   color:0x7651A8,
-   fields:[
-    {name:"Premium access",value:"Lifetime key • No expiration",inline:true},
-    {name:"Key limit",value:"One active key per member and Roblox account.",inline:true}
-   ],
-   footer:{text:"Syndicate Hub • Premium"}
-  }],
-  components:[
-   {type:1,components:[
-    {type:2,style:1,label:"Get Key",custom_id:"syndicate_generate_key",emoji:{name:"🔑"}},
-    {type:2,style:2,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}},
-    {type:2,style:4,label:"Revoke Key",custom_id:"syndicate_revoke_own_key",emoji:{name:"🚫"}}
-   ]}
+  "embeds": [
+    {
+      "title": "Syndicate Hub • Premium",
+      "description": "Lifetime access for Premium members.\n\nUse **Get Key** to create your key or retrieve your existing one. Your key is shown privately.",
+      "color": 8414381
+    }
   ],
-  allowed_mentions:{parse:[]}
- };
+  "components": [
+    {
+      "type": 1,
+      "components": [
+        {
+          "type": 2,
+          "style": 1,
+          "label": "Get Key",
+          "custom_id": "syndicate_generate_key"
+        },
+        {
+          "type": 2,
+          "style": 2,
+          "label": "Get Script",
+          "custom_id": "syndicate_get_script"
+        },
+        {
+          "type": 2,
+          "style": 2,
+          "label": "Revoke Key",
+          "custom_id": "syndicate_revoke_own_key"
+        }
+      ]
+    }
+  ],
+  "allowed_mentions": {
+    "parse": []
+  }
+};
 }
 // Upgrade the existing bot-owned lifetime panel once, without posting duplicates.
 async function syncExistingKeyAccessPanel(env){
