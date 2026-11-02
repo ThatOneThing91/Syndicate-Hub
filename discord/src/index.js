@@ -1040,13 +1040,52 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
  }
 }
 
+async function maintainFeatureChannel(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS feature_channel_maintenance(id INTEGER PRIMARY KEY CHECK(id=1),snapshot TEXT,status TEXT NOT NULL,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
+ const state=await env.DB.prepare("SELECT snapshot,status,details FROM feature_channel_maintenance WHERE id=1").first();
+ const revision="features-current-5.23-v1";
+ if(state?.status==="completed"&&JSON.parse(state.details||"{}").revision===revision)return;
+ if(!state?.snapshot)throw Error("Feature channel snapshot unavailable");
+ try{
+  const snapshot=JSON.parse(state.snapshot);
+  const featureId="1564527153108750366";
+  const messageId="1566059206811848775";
+  const expected=snapshot.messages.find(m=>m.id===messageId);
+  if(!expected||snapshot.features.id!==featureId||snapshot.changelog.id!==SCRIPT_UPDATES_CHANNEL)throw Error("Unexpected channel snapshot");
+  const channel=await discordApi(env,"/channels/"+featureId);
+  if(channel.status!==200||channel.data.guild_id!==GUILD_ID)throw Error("Features channel unavailable or wrong server");
+  const message=await discordApi(env,"/channels/"+featureId+"/messages/"+messageId);
+  const content="💜 SYNDICATE HUB — STORAGE HUNTERS\n\n**AUCTION FARMING**\n• Garage priorities, retries, affordability checks, and vehicle-full stop\n• Auto Bid, Pause Auction, and Lost & Found collection\n\n**UNLOADING**\n• Instant Unload and Auto Unload When Full\n• Manual Unload spawns your vehicle before moving to your unload pad\n• Draggable sale-rate badge for Manual Unload\n\n**SHOP**\n• Auto Wash, Auto Repair, and Auto Open Safes\n• Daily reward and Museum gift collection\n• Auto Buy drinks with stock, prices, and restock timer\n• Continuous Auto Drink and one-tap Luck 1, 2, 3 + Rush\n• Auto Shop Offers with a minimum offer setting\n\n**GRADING & QUICK SELL**\n• Grade All or Grade Selected with separate filters\n• Sell Selected / Keep Selected by rarity, mutation, and drink/potion\n• Quick Sell Preset, Keep All Mutations, and accessory sale control\n• Protects favorites, worn items, consumables, seeds, rods, crates, and safes\n• Sales in batches of 200, pawn-rate trigger, and queue-item restore\n• Live sale rate, countdown, filter diagnostics, and scroll-position memory\n\n**PLOT & GARDEN**\n• Load, place, and pick up plot potions\n• Auto Plant, Auto Water, and Auto Harvest\n• Launch separate Plot Studio tools\n\n**EVENTS**\n• Auto Trick or Treat, Grave Digger, and Auto Cauldron\n• Zombie Collector and Turn In Zombies\n• Halloween Market rolls, including x5\n\n**ACTIVITIES & TOOLS**\n• Auto Basketball, Auto Fishing, Hay Knocker, Tree Knocker, and Police Auction\n• Favorite Toggle, Ore Deposit, and Instant Auction Entry\n• Mobile jump button size control\n\n**MENU & ACCESS**\n• Draggable, resizable menu with a collapsible sidebar and minimize icon\n• Touch, controller, mouse, and keyboard support\n• Accent colors, transparency, animated sky, and pixel stars\n• Comma key menu toggle and confirmation before closing\n• Free 24-hour and Premium lifetime key access";
+  if(message.status!==200||message.data.author?.id!==APPLICATION_ID)throw Error("Features message unavailable or wrong author");
+  if(message.data.content!==expected.content&&message.data.content!==content)throw Error("Features message changed since inspection");
+  const changed=await discordApi(env,"/channels/"+featureId+"/messages/"+messageId,"PATCH",{content,allowed_mentions:{parse:[]}});
+  if(changed.status!==200||changed.data.content!==content)throw Error("Feature list update was not confirmed");
+  const channelName="📋・features";
+  const renamed=await discordApi(env,"/channels/"+featureId,"PATCH",{name:channelName});
+  if(renamed.status!==200||renamed.data.name!==channelName)throw Error("Features channel rename was not confirmed");
+  const changelog=await discordApi(env,"/channels/"+SCRIPT_UPDATES_CHANNEL);
+  if(changelog.status===200){
+   if(changelog.data.guild_id!==GUILD_ID||changelog.data.id!==snapshot.changelog.id||changelog.data.name!==snapshot.changelog.name)throw Error("Changelog identity changed");
+   const removed=await discordApi(env,"/channels/"+SCRIPT_UPDATES_CHANNEL,"DELETE");
+   if(removed.status!==200&&removed.status!==204)throw Error("Changelog deletion failed: "+removed.status);
+  }else if(changelog.status!==404)throw Error("Changelog lookup failed: "+changelog.status);
+  const verified=await discordApi(env,"/channels/"+SCRIPT_UPDATES_CHANNEL);
+  if(verified.status!==404)throw Error("Changelog deletion was not confirmed");
+  const details={revision,feature_channel:featureId,channel_name:channelName,message_id:messageId,content_length:content.length,changelog_channel:SCRIPT_UPDATES_CHANNEL,changelog_deleted:true};
+  await env.DB.prepare("UPDATE feature_channel_maintenance SET status='completed',details=?,last_error=NULL,updated_at=? WHERE id=1").bind(JSON.stringify(details),new Date().toISOString()).run();
+ }catch(e){
+  await env.DB.prepare("UPDATE feature_channel_maintenance SET status='error',last_error=?,updated_at=? WHERE id=1").bind(String(e).slice(0,1200),new Date().toISOString()).run();
+  throw e;
+ }
+}
+
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
+  ctx.waitUntil(maintainFeatureChannel(env).catch(e=>console.error("features maintenance",String(e))));
   ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium channel setup",String(e))));
   ctx.waitUntil(ensureBetaHubAccess(env).catch(e=>console.error("beta hub access",String(e))));
   ctx.waitUntil(ensurePlatformPanel(env).catch(e=>console.error("platform panel",String(e))));
-  ctx.waitUntil(sendScriptUpdates(env).catch(e=>console.error("script updates",String(e))));
   ctx.waitUntil(syncExistingKeyAccessPanel(env).catch(e=>console.error("key panel layout sync",String(e))));
   ctx.waitUntil(refreshExecutorStatus(env).catch(async e=>{console.error("executor status refresh",String(e));await env.DB.prepare("UPDATE executor_feed_state SET last_error=?,next_run=? WHERE id=1").bind("Panel delivery: "+String(e).slice(0,1400),Date.now()+60000).run();}));
   try{await sendExecutionLogs(env)}catch(e){console.error("execution logging",e)}
