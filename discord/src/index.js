@@ -1335,7 +1335,19 @@ async function sendPremiumPaymentLink(i,env){
   cash_app:{name:"Cash App",link:cashAppLink,button:"Pay $10 with Cash App",note:""},
   paypal:{name:"PayPal",link:"https://www.paypal.me/ThatOneThing91/10",button:"Pay $10 with PayPal",note:""},
  }
- if(method==="bitcoin")return reply("Bitcoin isn't set up yet. Add a wallet address and network before using this option.");
+ if(method==="bitcoin"){
+  const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
+   content:"<@"+ticket.discord_user_id+">",
+   embeds:[{
+    title:"Bitcoin Payment · $10",
+    description:"Send the Bitcoin equivalent of $10 USD on the Bitcoin network. Ask staff to confirm the current BTC amount before sending.\\n\\nOn-chain address:\\n`3LxMtojegenRhbhJ4Y4aPCzHJ8ckzwWxVd`\\n\\nAfter paying, reply here so staff can confirm your payment.",
+    color:0x9B72CF
+   }],
+   allowed_mentions:{users:[ticket.discord_user_id]}
+  });
+  if(![200,201].includes(posted.status))return reply("I couldn't post the Bitcoin address. Check the bot's permissions in this ticket.");
+  return reply("Bitcoin payment details posted in this ticket.");
+ }
  if(method==="apple_pay"){
   const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
    content:"<@"+ticket.discord_user_id+">",
