@@ -325,14 +325,20 @@ const PURGE_COMMAND = Object.freeze({
 });
 const ROLE_COMMAND = Object.freeze({
  name:"role",
- description:"Add a role to a server member",
+ description:"Add or remove a role for a server member",
  type:1,
  dm_permission:false,
  default_member_permissions:"268435456",
- options:[{type:1,name:"add",description:"Add a role to a member",options:[
-  {type:6,name:"member",description:"Member who should receive the role",required:true},
-  {type:3,name:"role",description:"Search the available roles",required:true,autocomplete:true}
- ]}]
+ options:[
+  {type:1,name:"add",description:"Add a role to a member",options:[
+   {type:6,name:"member",description:"Member who should receive the role",required:true},
+   {type:3,name:"role",description:"Search the available roles",required:true,autocomplete:true}
+  ]},
+  {type:1,name:"remove",description:"Remove a role from a member",options:[
+   {type:6,name:"member",description:"Member who should lose the role",required:true},
+   {type:3,name:"role",description:"Search the available roles",required:true,autocomplete:true}
+  ]}
+ ]
 });
 const CLOSE_COMMAND = Object.freeze({
  name:"close",
@@ -1280,6 +1286,24 @@ async function addRoleToMember(i,env){
  if(assigned.status!==204)return reply("I couldn't assign that role. Check that I have Manage Roles permission and that my role is above it.");
  return reply("✅ Added <@&"+roleId+"> to <@"+memberId+">.");
 }
+async function removeRoleFromMember(i,env){
+ if(!hasManageRoles(i))return reply("⛔ You need Manage Roles permission to use /role remove.");
+ const memberId=String(interactionOption(i,"member")?.value||"");
+ const roleId=String(interactionOption(i,"role")?.value||"");
+ if(!isUserId(memberId)||!isUserId(roleId))return reply("Choose a server member and a role from the lists.");
+ let context;
+ try{context=await roleAssignmentContext(env)}catch(e){console.error("role removal setup",String(e));return reply("I couldn't load the available roles. Check that I have Manage Roles permission.");}
+ const role=context.roles.find(item=>item.id===roleId);
+ if(!role)return reply("That role is no longer available. Run /role remove again and select a role from the list.");
+ if(role.id===GUILD_ID||role.managed||(BigInt(role.permissions||"0")&8n)===8n||Number(role.position)>=context.botPosition)
+  return reply("I can't remove that role. Choose an unmanaged, non-administrator role below my highest role.");
+ const target=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+memberId);
+ if(target.status!==200)return reply("That member isn't currently in this server.");
+ if(!Array.isArray(target.data?.roles)||!target.data.roles.includes(roleId))return reply("That member doesn't have this role.");
+ const removed=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+memberId+"/roles/"+roleId,"DELETE");
+ if(removed.status!==204)return reply("I couldn't remove that role. Check that I have Manage Roles permission and that my role is above it.");
+ return reply("✅ Removed <@&"+roleId+"> from <@"+memberId+">.");
+}
 
 function needsBetaAccess(i) {
  if(i.type===2)return i.data?.name==="getkey";
@@ -1342,7 +1366,7 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v5-moderator-close";
+ const revision="premium-only-buttons-v6-role-add-remove";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
@@ -1717,7 +1741,8 @@ export default {
   if(i.type===4){if(i.data?.name==="role")return roleAutocomplete(i,env);return autocompleteResponse();}
   if(i.type===2){
    if(i.data?.name==="purge")return delayedReply(i,env,ctx,()=>purgeMessages(i,env));
-   if(i.data?.name==="role"&&interactionOptions(i)[0]?.name==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
+   if(i.data?.name==="role"&&i.data?.options?.[0]?.name==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
+   if(i.data?.name==="role"&&i.data?.options?.[0]?.name==="remove")return delayedReply(i,env,ctx,()=>removeRoleFromMember(i,env));
    if(i.data?.name==="close")return delayedReply(i,env,ctx,()=>deletePremiumTicket(i,env));
    return reply("That slash command is not available.");
   }
