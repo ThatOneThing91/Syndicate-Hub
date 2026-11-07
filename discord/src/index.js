@@ -1104,64 +1104,6 @@ function betaOverwrites(channel,roles,botId,accessRoleId=VIP_ROLE_ID) {
  if(!overwrites.some(o=>o.type===1&&o.id===botId))overwrites.push({id:botId,type:1,allow:"1024",deny:"0"});
  return overwrites;
 }
-async function applyRequestedServerRoleCleanup(env){
- const migrationId="vip-role-cleanup-v1",now=Date.now(),nowIso=new Date(now).toISOString();
- await env.DB.prepare("CREATE TABLE IF NOT EXISTS server_role_migrations(id TEXT PRIMARY KEY,status TEXT NOT NULL DEFAULT 'pending',lease_until INTEGER NOT NULL DEFAULT 0,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
- await env.DB.prepare("INSERT OR IGNORE INTO server_role_migrations(id,status,lease_until,updated_at) VALUES(?,'pending',0,?)").bind(migrationId,nowIso).run();
- const claim=await env.DB.prepare("UPDATE server_role_migrations SET status='running',lease_until=?,last_error=NULL,updated_at=? WHERE id=? AND status!='done' AND lease_until<=?").bind(now+180000,nowIso,migrationId,now).run();
- if(!(claim.meta?.changes>0))return;
- try{
-  const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
-  if(!Array.isArray(roles))throw Error("Could not read server roles.");
-  const syndicates=roles.filter(r=>r.name.toLowerCase()==="syndicate");
-  const purpleSyndicates=syndicates.filter(r=>{
-   const color=Number(r.color)||0,red=(color>>16)&255,green=(color>>8)&255,blue=color&255;
-   return red>=60&&blue>=80&&blue>=red*0.72&&red>=blue*0.45&&green<=Math.min(red,blue)*0.85;
-  });
-  if(purpleSyndicates.length!==1||purpleSyndicates[0].managed)throw Error("Expected exactly one editable purple Syndicate role to preserve; found "+purpleSyndicates.length+".");
-  const preservedSyndicate=purpleSyndicates[0];
-  const vip=roles.find(r=>r.id===VIP_ROLE_ID);
-  if(!vip||vip.managed||!["beta tester","vip"].includes(vip.name.toLowerCase()))throw Error("Could not safely identify the configured VIP role by its existing ID.");
-  const divaTargets=["Diva 3","Diva Premium 3"].map(name=>{
-   const matches=roles.filter(r=>r.name.toLowerCase()===name.toLowerCase());
-   if(matches.length>1)throw Error("Multiple roles named "+name+"; no roles changed.");
-   return matches[0]||null;
-  }).filter(Boolean);
-  const targets=[...divaTargets,...syndicates.filter(r=>r.id!==preservedSyndicate.id)];
-  const blocked=targets.filter(r=>r.managed).map(r=>({id:r.id,name:r.name,reason:"managed by another integration"}));
-  const removable=targets.filter(r=>!r.managed);
-  if(vip.name!=="VIP"||vip.color!==0x7F8C6D)await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles/"+VIP_ROLE_ID,"PATCH",{name:"VIP",color:0x7F8C6D});
-  const deleted=[];
-  for(const role of removable){
-   await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles/"+role.id,"DELETE");
-   deleted.push({id:role.id,name:role.name,administrator:!!(BigInt(role.permissions||"0")&8n)});
-  }
-  const details={vip:{id:vip.id,name:"VIP",color:0x7F8C6D},preservedSyndicate:{id:preservedSyndicate.id,name:preservedSyndicate.name,color:preservedSyndicate.color},deleted,notDeleted:blocked};
-  await env.DB.prepare("UPDATE server_role_migrations SET status='done',lease_until=0,details=?,last_error=NULL,updated_at=? WHERE id=?").bind(JSON.stringify(details),new Date().toISOString(),migrationId).run();
- }catch(e){
-  const message=String(e).slice(0,1200);
-  await env.DB.prepare("UPDATE server_role_migrations SET status='error',lease_until=?,last_error=?,updated_at=? WHERE id=?").bind(Date.now()+60000,message,new Date().toISOString(),migrationId).run();
-  throw e;
- }
-}
-
-async function inspectManagedRoleOwners(env){
- const auditId="managed-role-owner-audit-v1",now=new Date().toISOString();
- await env.DB.prepare("CREATE TABLE IF NOT EXISTS server_role_audits(id TEXT PRIMARY KEY,status TEXT NOT NULL,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
- await env.DB.prepare("INSERT OR IGNORE INTO server_role_audits(id,status,updated_at) VALUES(?,'pending',?)").bind(auditId,now).run();
- const current=await env.DB.prepare("SELECT status FROM server_role_audits WHERE id=?").bind(auditId).first();
- if(current?.status==="done")return;
- try{
-  const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
-  const names=new Set(["Diva 3","Diva Premium 3","Syndicate"]);
-  const report=(roles||[]).filter(r=>names.has(r.name)).map(r=>({id:r.id,name:r.name,managed:!!r.managed,color:r.color,position:r.position,permissions:r.permissions,botId:r.tags?.bot_id||null,integrationId:r.tags?.integration_id||null}));
-  await env.DB.prepare("UPDATE server_role_audits SET status='done',details=?,last_error=NULL,updated_at=? WHERE id=?").bind(JSON.stringify(report),new Date().toISOString(),auditId).run();
- }catch(e){
-  await env.DB.prepare("UPDATE server_role_audits SET status='error',last_error=?,updated_at=? WHERE id=?").bind(String(e).slice(0,1200),new Date().toISOString(),auditId).run();
-  throw e;
- }
-}
-
 async function ensureBetaHubAccess(env) {
  const revision="vip-hub-access-v2";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS beta_hub_access(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
@@ -1509,8 +1451,6 @@ export default {
   try{await sendExecutionLogs(env)}catch(e){console.error("execution logging",e)}
   try{await managementPost(env)}catch(e){console.error("management panel",e)}
   try{await postFreePanel(env)}catch(e){console.error("free panel",e)}
-  try{await applyRequestedServerRoleCleanup(env)}catch(e){console.error("server role cleanup",String(e))}
-  try{await inspectManagedRoleOwners(env)}catch(e){console.error("managed role audit",String(e))}
   try{await checkDepartedIssuances(env);await backfillMemberRoles(env);await syncMemberRoles(env)}catch(e){console.error("role maintenance",e)}
 
  },
