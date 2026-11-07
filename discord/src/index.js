@@ -816,21 +816,26 @@ function discordResponse(value){
  if(value instanceof Response)return value;
  return new Response(JSON.stringify(value),{headers:{"content-type":"application/json"}});
 }
-async function delayedReply(i,env,ctx,work){
+async function delayedReply(i,env,ctx,work,ephemeral=true){
  ctx.waitUntil((async()=>{
   let response;
   try{response=await work()}catch(e){console.error("delayed interaction",e);response=reply("Something went wrong. Please try again.")}
   let payload;
   try{payload=response instanceof Response?await response.json():response}catch(e){console.error("delayed parse",e);payload=null}
   const data=payload?.data||{content:"Could not load the requested information."};
-  const body={content:data.content||"Processing your request…",components:data.components||[],allowed_mentions:{parse:[]}};
+  const body={
+   ...(typeof data.content==="string"?{content:data.content}:{}),
+   ...(Array.isArray(data.embeds)?{embeds:data.embeds}:{}),
+   components:data.components||[],
+   allowed_mentions:data.allowed_mentions||{parse:[]}
+  };
   const url="https://discord.com/api/v10/webhooks/"+APPLICATION_ID+"/"+i.token+"/messages/@original";
   try{
    const r=await fetch(url,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
    if(!r.ok)console.error("delayed response",r.status,(await r.text()).slice(0,250));
   }catch(e){console.error("delayed response network",e)}
  })());
- return discordResponse({type:5,data:{flags:64}});
+ return discordResponse({type:5,data:ephemeral?{flags:64}:{}});
 }
 async function deferredManagement(i,env,ctx){
  if(!isAdmin(i)||i.channel_id!==MANAGEMENT)return reply("Administrator-only panel.");
@@ -1291,7 +1296,18 @@ async function verifyTicketMember(i,env){
    return reply("I couldn't remove the VIP role, so the role change was rolled back where possible.");
   }
  }
- return reply("✅ Verified <@"+memberId+">: Premium added and VIP removed.");
+ return {
+  type:4,
+  data:{
+   embeds:[{
+    title:"Welcome to Premium",
+    description:"Congratulations <@"+memberId+>, you’re now a Premium member!\\n\\nThank you for your contribution. You now have access to <#1563145457910153319>.",
+    color:0x9B72CF,
+    footer:{text:"Syndicate Hub • Premium access"}
+   }],
+   allowed_mentions:{users:[memberId]}
+  }
+ };
 }
 async function roleAutocomplete(i,env){
  if(!hasManageRoles(i))return autocompleteResponse();
@@ -1783,7 +1799,7 @@ export default {
    if(i.data?.name==="role"&&interactionOption(i,"action")?.value==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
    if(i.data?.name==="role"&&interactionOption(i,"action")?.value==="remove")return delayedReply(i,env,ctx,()=>removeRoleFromMember(i,env));
    if(i.data?.name==="close")return delayedReply(i,env,ctx,()=>deletePremiumTicket(i,env));
-   if(i.data?.name==="verified")return delayedReply(i,env,ctx,()=>verifyTicketMember(i,env));
+   if(i.data?.name==="verified")return delayedReply(i,env,ctx,()=>verifyTicketMember(i,env),false);
    return reply("That slash command is not available.");
   }
   if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
