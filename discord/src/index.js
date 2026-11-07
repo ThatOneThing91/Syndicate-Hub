@@ -526,11 +526,35 @@ function confirmOwnRevoke(){
  return new Response(JSON.stringify({type:4,data:{flags:64,content:"⚠️ **Revoke your Syndicate Hub key?** This will disable your current key and stop the hub at its next verification check. This only affects the key issued to your Discord account.",components:[{type:1,components:[{type:2,style:4,label:"Yes, Revoke My Key",custom_id:"syndicate_confirm_self_revoke"},{type:2,style:2,label:"Cancel",custom_id:"syndicate_cancel_self_revoke"}]}],allowed_mentions:{parse:[]}}}),{headers:{"content-type":"application/json"}});
 }
 function modal(i){if(!hasPremiumRole(i))return premiumRequired();return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_key_modal",title:"Generate Syndicate Hub Key",components:[{type:1,components:[{type:4,custom_id:"roblox_id",label:"Roblox Username or User ID",style:1,min_length:1,max_length:20,required:true,placeholder:"Username (not display name) or numeric ID"}]}]}}),{headers:{"content-type":"application/json"}})}
+const PREMIUM_PAYMENT_OPTIONS=[
+ {label:"Cash App",value:"cash_app"},
+ {label:"PayPal",value:"paypal"},
+ {label:"Apple Pay",value:"apple_pay"},
+ {label:"Bitcoin",value:"bitcoin"}
+];
+async function ensurePremiumSupportTables(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_support_tickets(discord_user_id TEXT PRIMARY KEY,channel_id TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,payment_method TEXT)").run();
+ const columns=await env.DB.prepare("PRAGMA table_info(premium_support_tickets)").all();
+ if(!(columns.results||[]).some(column=>column.name==="payment_method"))await env.DB.prepare("ALTER TABLE premium_support_tickets ADD COLUMN payment_method TEXT").run();
+}
+function ticketOpeningPayload(userId,paymentMethod){
+ const method=PREMIUM_PAYMENT_OPTIONS.find(option=>option.value===paymentMethod);
+ const description="$10 · Lifetime Premium\n\n"+(method?"Payment option: **"+method.label+"**\n\n":"Choose a payment option below.\n\n")+"A staff member will be with you shortly.";
+ return {
+  content:"<@"+userId+">",
+  embeds:[{title:"Premium Pricing",description,color:0x9B72CF}],
+  components:[
+   {type:1,components:[{type:3,custom_id:"syndicate_premium_payment_select",placeholder:"Choose a payment option",min_values:1,max_values:1,options:PREMIUM_PAYMENT_OPTIONS}]},
+   {type:1,components:[{type:2,style:2,label:"Close Ticket",custom_id:"syndicate_premium_ticket_close"}]}
+  ],
+  allowed_mentions:{users:[userId]}
+ };
+}
 async function createPremiumTicket(i,env){
  const user=i.member?.user;
  const userId=user?.id;
  if(!userId)return reply("I couldn't identify your Discord account.");
- await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_support_tickets(discord_user_id TEXT PRIMARY KEY,channel_id TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL)").run();
+ await ensurePremiumSupportTables(env);
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_ticket_locks(discord_user_id TEXT PRIMARY KEY,lease_until INTEGER NOT NULL)").run();
  const now=Date.now();
  const locked=await env.DB.prepare("INSERT INTO premium_ticket_locks(discord_user_id,lease_until) VALUES(?,?) ON CONFLICT(discord_user_id) DO UPDATE SET lease_until=excluded.lease_until WHERE premium_ticket_locks.lease_until<=?").bind(userId,now+60000,now).run();
@@ -541,7 +565,7 @@ async function createPremiumTicket(i,env){
    const current=await discordApi(env,"/channels/"+existing.channel_id);
    if(current.status===200)return reply("You already have an open premium request: <#"+existing.channel_id+">");
    if(current.status!==404)throw Error("Could not check your existing premium request: "+current.status);
-   await env.DB.prepare("UPDATE premium_support_tickets SET status='closed' WHERE discord_user_id=?").bind(userId).run();
+   await env.DB.prepare("DELETE FROM premium_support_tickets WHERE discord_user_id=?").bind(userId).run();
   }
   const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
   if(channels.status!==200||!Array.isArray(channels.data))throw Error("Could not list server channels: "+channels.status);
@@ -565,19 +589,9 @@ async function createPremiumTicket(i,env){
   if(created.status!==201||!created.data?.id)throw Error("Could not create the private premium request channel: "+created.status);
   const channelId=created.data.id;
   try{
-   const intro=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
-    content:"<@"+userId+">",
-    embeds:[{
-     title:"Premium access request",
-     description:"Tell us what you’re looking for and an admin will follow up here. Only you and the server admins can see this ticket.\n\nYou can close it any time with the button below.",
-     color:0x9B72CF,
-     footer:{text:"Syndicate Hub • Private support"}
-    }],
-    components:[{type:1,components:[{type:2,style:2,label:"Close Ticket",custom_id:"syndicate_premium_ticket_close"}]}],
-    allowed_mentions:{users:[userId]}
-   });
+   const intro=await discordApi(env,"/channels/"+channelId+"/messages","POST",ticketOpeningPayload(userId,null));
    if(![200,201].includes(intro.status))throw Error("Ticket channel was created, but its opening message failed: "+intro.status);
-   await env.DB.prepare("INSERT INTO premium_support_tickets(discord_user_id,channel_id,status,created_at) VALUES(?,?,'open',?) ON CONFLICT(discord_user_id) DO UPDATE SET channel_id=excluded.channel_id,status='open',created_at=excluded.created_at").bind(userId,channelId,new Date().toISOString()).run();
+   await env.DB.prepare("INSERT INTO premium_support_tickets(discord_user_id,channel_id,status,created_at,payment_method) VALUES(?,?,'open',?,NULL) ON CONFLICT(discord_user_id) DO UPDATE SET channel_id=excluded.channel_id,status='open',created_at=excluded.created_at,payment_method=NULL").bind(userId,channelId,new Date().toISOString()).run();
   }catch(e){
    await discordApi(env,"/channels/"+channelId,"DELETE");
    throw e;
@@ -587,25 +601,32 @@ async function createPremiumTicket(i,env){
   await env.DB.prepare("DELETE FROM premium_ticket_locks WHERE discord_user_id=?").bind(userId).run();
  }
 }
+async function selectPremiumPayment(i,env){
+ const userId=i.member?.user?.id,channelId=i.channel_id;
+ const value=i.data?.values?.[0];
+ const option=PREMIUM_PAYMENT_OPTIONS.find(item=>item.value===value);
+ if(!userId||!channelId||!option)return reply("Choose a payment option from this ticket.");
+ await ensurePremiumSupportTables(env);
+ const ticket=await env.DB.prepare("SELECT discord_user_id,status FROM premium_support_tickets WHERE channel_id=?").bind(channelId).first();
+ if(!ticket||ticket.status!=="open")return reply("This ticket is no longer active.");
+ if(ticket.discord_user_id!==userId)return reply("Only the person who opened this ticket can choose the payment option.");
+ await env.DB.prepare("UPDATE premium_support_tickets SET payment_method=? WHERE channel_id=? AND status='open'").bind(option.value,channelId).run();
+ return discordResponse({type:7,data:ticketOpeningPayload(userId,option.value)});
+}
 function confirmPremiumTicketClose(){
- return {type:4,data:{flags:64,content:"Close this request? The channel will be hidden from you, while admins keep access to the conversation.",components:[{type:1,components:[{type:2,style:4,label:"Close Ticket",custom_id:"syndicate_premium_ticket_confirm_close"},{type:2,style:2,label:"Keep Open",custom_id:"syndicate_premium_ticket_cancel_close"}]}]}};
+ return {type:4,data:{flags:64,content:"Delete this ticket and its messages? This can't be undone.",components:[{type:1,components:[{type:2,style:4,label:"Delete Ticket",custom_id:"syndicate_premium_ticket_confirm_close"},{type:2,style:2,label:"Keep Open",custom_id:"syndicate_premium_ticket_cancel_close"}]}]}};
 }
 async function closePremiumTicket(i,env){
  const userId=i.member?.user?.id,channelId=i.channel_id;
  if(!userId||!channelId)return reply("I couldn't identify this ticket.");
- const ticket=await env.DB.prepare("SELECT discord_user_id,status FROM premium_support_tickets WHERE channel_id=?").bind(channelId).first();
- if(!ticket||ticket.status!=="open")return reply("This ticket is already closed or isn't a premium ticket.");
+ await ensurePremiumSupportTables(env);
+ const ticket=await env.DB.prepare("SELECT discord_user_id FROM premium_support_tickets WHERE channel_id=?").bind(channelId).first();
+ if(!ticket)return reply("This channel isn't an active premium ticket.");
  if(ticket.discord_user_id!==userId&&!isAdmin(i))return reply("Only the ticket owner or an administrator can close this ticket.");
- const denied=await discordApi(env,"/channels/"+channelId+"/permissions/"+ticket.discord_user_id,"PUT",{type:1,allow:"0",deny:"1024"});
- if(denied.status!==204)throw Error("Could not hide the closed ticket from its owner: "+denied.status);
- await env.DB.prepare("UPDATE premium_support_tickets SET status='closed' WHERE channel_id=? AND status='open'").bind(channelId).run();
- const channel=await discordApi(env,"/channels/"+channelId);
- if(channel.status===200){
-  const name=("closed-"+String(channel.data.name||"premium-ticket").replace(/^closed-/,"")).slice(0,100);
-  const renamed=await discordApi(env,"/channels/"+channelId,"PATCH",{name});
-  if(renamed.status!==200)console.error("closed ticket rename",renamed.status);
- }
- return reply("Ticket closed. You no longer have access to it, but the admins can still see the conversation.");
+ const deleted=await discordApi(env,"/channels/"+channelId,"DELETE");
+ if(deleted.status!==204&&deleted.status!==404)throw Error("Could not delete this ticket: "+deleted.status);
+ await env.DB.prepare("DELETE FROM premium_support_tickets WHERE channel_id=?").bind(channelId).run();
+ return reply("Ticket deleted.");
 }
 function keyAccessPanelPayload(){
  return {
@@ -1680,6 +1701,7 @@ export default {
    if(i.type===3&&i.data?.custom_id?.startsWith("mg_"))return discordResponse(await deferredManagement(i,env,ctx));
    if(i.type===5&&i.data?.custom_id==="mg_revoke_modal")return discordResponse(await managementModal(i));
    if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket")return delayedReply(i,env,ctx,()=>createPremiumTicket(i,env));
+   if(i.type===3&&i.data?.custom_id==="syndicate_premium_payment_select")return selectPremiumPayment(i,env);
    if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket_close")return discordResponse(confirmPremiumTicketClose());
    if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket_cancel_close")return reply("Your ticket is still open.");
    if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket_confirm_close")return delayedReply(i,env,ctx,()=>closePremiumTicket(i,env));
