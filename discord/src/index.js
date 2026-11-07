@@ -345,6 +345,14 @@ const CLOSE_COMMAND = Object.freeze({
  dm_permission:false,
  default_member_permissions:"8192"
 });
+const VERIFIED_COMMAND = Object.freeze({
+ name:"verified",
+ description:"Give the premium role to the member in this ticket",
+ type:1,
+ dm_permission:false,
+ default_member_permissions:"268435456"
+});
+
 const enc = new TextEncoder();
 const hexBytes = s => new Uint8Array(s.match(/../g).map(x=>parseInt(x,16)));
 const sha = async s => [...new Uint8Array(await crypto.subtle.digest("SHA-256",enc.encode(s)))].map(x=>x.toString(16).padStart(2,"0")).join("");
@@ -1249,6 +1257,42 @@ async function roleAssignmentContext(env){
  const botPosition=Math.max(0,...(member.roles||[]).map(id=>positions.get(id)||0));
  return {roles,botPosition};
 }
+async function verifyTicketMember(i,env){
+ if(!hasManageRoles(i))return reply("⛔ You need Manage Roles permission to use /verified.");
+ const channelId=i.channel_id;
+ if(!channelId)return reply("Use /verified inside the member's premium ticket.");
+ await ensurePremiumSupportTables(env);
+ const ticket=await env.DB.prepare("SELECT discord_user_id,status FROM premium_support_tickets WHERE channel_id=?").bind(channelId).first();
+ if(!ticket||ticket.status!=="open")return reply("Use /verified inside an open premium ticket.");
+ const memberId=ticket.discord_user_id;
+ const member=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+memberId);
+ if(member.status!==200)return reply("The ticket owner is no longer in the server.");
+ let context;
+ try{context=await roleAssignmentContext(env)}catch(e){console.error("verified role setup",String(e));return reply("I couldn't check the role setup. Check that I have Manage Roles permission.");}
+ const vip=context.roles.find(role=>role.id===VIP_ROLE_ID);
+ const premium=context.roles.find(role=>role.id===PREMIUM_ROLE_ID);
+ const canManage=role=>role&&!role.managed&&(BigInt(role.permissions||"0")&8n)===0n&&Number(role.position)<context.botPosition;
+ if(!canManage(vip)||!canManage(premium))return reply("I can't manage the VIP or Premium role. Check that both are below my highest role and aren't administrator or integration-managed roles.");
+ const currentRoles=Array.isArray(member.data?.roles)?member.data.roles:[];
+ const alreadyPremium=currentRoles.includes(PREMIUM_ROLE_ID);
+ const hasVip=currentRoles.includes(VIP_ROLE_ID);
+ if(alreadyPremium&&!hasVip)return reply("That member is already verified.");
+ if(!alreadyPremium){
+  const added=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+memberId+"/roles/"+PREMIUM_ROLE_ID,"PUT");
+  if(added.status!==204)return reply("I couldn't add the Premium role. Check my Manage Roles permission and role position.");
+ }
+ if(hasVip){
+  const removed=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+memberId+"/roles/"+VIP_ROLE_ID,"DELETE");
+  if(removed.status!==204){
+   if(!alreadyPremium){
+    const rollback=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+memberId+"/roles/"+PREMIUM_ROLE_ID,"DELETE");
+    if(rollback.status!==204)console.error("verified role rollback",rollback.status,memberId);
+   }
+   return reply("I couldn't remove the VIP role, so the role change was rolled back where possible.");
+  }
+ }
+ return reply("✅ Verified <@"+memberId+">: Premium added and VIP removed.");
+}
 async function roleAutocomplete(i,env){
  if(!hasManageRoles(i))return autocompleteResponse();
  try{
@@ -1359,7 +1403,7 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v9-role-action-choice";
+ const revision="premium-only-buttons-v10-verified-ticket-command";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
@@ -1368,7 +1412,7 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const globalPath="/applications/"+APPLICATION_ID+"/commands";
   const guildPath="/applications/"+APPLICATION_ID+"/guilds/"+GUILD_ID+"/commands";
   await platformDiscord(env,globalPath,"PUT",[]);
-  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND,ROLE_COMMAND,CLOSE_COMMAND]);
+  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND,ROLE_COMMAND,CLOSE_COMMAND,VERIFIED_COMMAND]);
   const globalCommands=(await platformDiscord(env,globalPath)).data;
   const guildCommands=(await platformDiscord(env,guildPath)).data;
   if(!Array.isArray(globalCommands)||globalCommands.length)throw Error("Global slash command removal was not confirmed.");
@@ -1376,9 +1420,11 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const purgeCommand=guildCommands.find(command=>command.name==="purge"&&command.type===1);
   const roleCommand=guildCommands.find(command=>command.name==="role"&&command.type===1);
   const closeCommand=guildCommands.find(command=>command.name==="close"&&command.type===1);
+  const verifiedCommand=guildCommands.find(command=>command.name==="verified"&&command.type===1);
   if(!purgeCommand)throw Error("Purge slash command registration was not confirmed.");
   if(!roleCommand)throw Error("Role slash command registration was not confirmed.");
   if(!closeCommand)throw Error("Close slash command registration was not confirmed.");
+  if(!verifiedCommand)throw Error("Verified slash command registration was not confirmed.");
   const channel=(await platformDiscord(env,"/channels/1563145457910153319")).data;
   if(channel.guild_id!==GUILD_ID)throw Error("Premium channel is not in this server.");
   const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
@@ -1737,6 +1783,7 @@ export default {
    if(i.data?.name==="role"&&interactionOption(i,"action")?.value==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
    if(i.data?.name==="role"&&interactionOption(i,"action")?.value==="remove")return delayedReply(i,env,ctx,()=>removeRoleFromMember(i,env));
    if(i.data?.name==="close")return delayedReply(i,env,ctx,()=>deletePremiumTicket(i,env));
+   if(i.data?.name==="verified")return delayedReply(i,env,ctx,()=>verifyTicketMember(i,env));
    return reply("That slash command is not available.");
   }
   if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
