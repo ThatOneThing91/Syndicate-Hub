@@ -334,6 +334,12 @@ const ROLE_COMMAND = Object.freeze({
   {type:3,name:"role",description:"Search the available roles",required:true,autocomplete:true}
  ]}]
 });
+const CLOSE_COMMAND = Object.freeze({
+ name:"close",
+ description:"Close this premium support ticket",
+ type:1,
+ dm_permission:false
+});
 const enc = new TextEncoder();
 const hexBytes = s => new Uint8Array(s.match(/../g).map(x=>parseInt(x,16)));
 const sha = async s => [...new Uint8Array(await crypto.subtle.digest("SHA-256",enc.encode(s)))].map(x=>x.toString(16).padStart(2,"0")).join("");
@@ -1287,7 +1293,7 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v3-role-command";
+ const revision="premium-only-buttons-v4-close-command";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
@@ -1296,15 +1302,17 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const globalPath="/applications/"+APPLICATION_ID+"/commands";
   const guildPath="/applications/"+APPLICATION_ID+"/guilds/"+GUILD_ID+"/commands";
   await platformDiscord(env,globalPath,"PUT",[]);
-  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND,ROLE_COMMAND]);
+  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND,ROLE_COMMAND,CLOSE_COMMAND]);
   const globalCommands=(await platformDiscord(env,globalPath)).data;
   const guildCommands=(await platformDiscord(env,guildPath)).data;
   if(!Array.isArray(globalCommands)||globalCommands.length)throw Error("Global slash command removal was not confirmed.");
   if(!Array.isArray(guildCommands))throw Error("Guild slash command registration was not confirmed.");
   const purgeCommand=guildCommands.find(command=>command.name==="purge"&&command.type===1);
   const roleCommand=guildCommands.find(command=>command.name==="role"&&command.type===1);
+  const closeCommand=guildCommands.find(command=>command.name==="close"&&command.type===1);
   if(!purgeCommand)throw Error("Purge slash command registration was not confirmed.");
   if(!roleCommand)throw Error("Role slash command registration was not confirmed.");
+  if(!closeCommand)throw Error("Close slash command registration was not confirmed.");
   const channel=(await platformDiscord(env,"/channels/1563145457910153319")).data;
   if(channel.guild_id!==GUILD_ID)throw Error("Premium channel is not in this server.");
   const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
@@ -1660,6 +1668,7 @@ export default {
   if(i.type===2){
    if(i.data?.name==="purge")return delayedReply(i,env,ctx,()=>purgeMessages(i,env));
    if(i.data?.name==="role"&&interactionOptions(i)[0]?.name==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
+   if(i.data?.name==="close")return delayedReply(i,env,ctx,()=>closePremiumTicket(i,env));
    return reply("That slash command is not available.");
   }
   if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
