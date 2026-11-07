@@ -628,6 +628,15 @@ async function closePremiumTicket(i,env){
  await env.DB.prepare("DELETE FROM premium_support_tickets WHERE channel_id=?").bind(channelId).run();
  return reply("Ticket deleted.");
 }
+async function cleanupClosedPremiumTickets(env){
+ await ensurePremiumSupportTables(env);
+ const rows=await env.DB.prepare("SELECT discord_user_id,channel_id FROM premium_support_tickets WHERE status='closed'").all();
+ for(const ticket of rows.results||[]){
+  const removed=await discordApi(env,"/channels/"+ticket.channel_id,"DELETE");
+  if(removed.status!==204&&removed.status!==404)throw Error("Could not remove archived premium ticket "+ticket.channel_id+": "+removed.status);
+  await env.DB.prepare("DELETE FROM premium_support_tickets WHERE channel_id=? AND status='closed'").bind(ticket.channel_id).run();
+ }
+}
 function keyAccessPanelPayload(){
  return {
   "embeds": [
@@ -1658,6 +1667,7 @@ export default {
   ctx.waitUntil(ensurePlatformPanel(env).catch(e=>console.error("platform panel",String(e))));
   ctx.waitUntil(syncExistingKeyAccessPanel(env).catch(e=>console.error("key panel layout sync",String(e))));
   ctx.waitUntil(maintainCommunitySetup(env).catch(e=>console.error("community setup",String(e))));
+  ctx.waitUntil(cleanupClosedPremiumTickets(env).catch(e=>console.error("closed ticket cleanup",String(e))));
   ctx.waitUntil(refreshExecutorStatus(env).catch(async e=>{console.error("executor status refresh",String(e));await env.DB.prepare("UPDATE executor_feed_state SET last_error=?,next_run=? WHERE id=1").bind("Panel delivery: "+String(e).slice(0,1400),Date.now()+60000).run();}));
   ctx.waitUntil(refreshRobloxUpdates(env).catch(e=>console.error("Roblox updates",String(e))));
   try{await sendExecutionLogs(env)}catch(e){console.error("execution logging",e)}
