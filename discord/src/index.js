@@ -1340,7 +1340,7 @@ async function sendPremiumPaymentLink(i,env){
    content:"<@"+ticket.discord_user_id+">",
    embeds:[{
     title:"Bitcoin Payment · $10",
-    description:"Send the Bitcoin equivalent of $10 USD on the Bitcoin network. Ask staff to confirm the current BTC amount before sending.\\n\\nOn-chain address:\\n`3LxMtojegenRhbhJ4Y4aPCzHJ8ckzwWxVd`\\n\\nAfter paying, reply here so staff can confirm your payment.",
+    description:"Send the Bitcoin equivalent of $10 USD on the Bitcoin network. Ask staff to confirm the current BTC amount before sending.\n\nOn-chain address:\n\`3LxMtojegenRhbhJ4Y4aPCzHJ8ckzwWxVd\`\n\nAfter paying, reply here so staff can confirm your payment.",
     color:0x9B72CF
    }],
    allowed_mentions:{users:[ticket.discord_user_id]}
