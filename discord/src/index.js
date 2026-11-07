@@ -1330,25 +1330,26 @@ async function sendPremiumPaymentLink(i,env){
  const ticket=await env.DB.prepare("SELECT discord_user_id,status FROM premium_support_tickets WHERE channel_id=?").bind(channelId).first();
  if(!ticket||ticket.status!=="open")return reply("Use /payment inside an open premium ticket.");
  const method=String(interactionOption(i,"method")?.value||"");
- const unavailable={
-  paypal:"PayPal isn't set up yet. A permanent PayPal.Me link can be added once you send it.",
-  bitcoin:"Bitcoin isn't set up yet. Add a wallet address and network before using this option.",
-  apple_pay:"Apple Pay isn't set up yet. Add the Apple Cash phone number or email before using this option."
+ const methods={
+  cash_app:{name:"Cash App",link:"https://cash.app/pay/link/5naenms2",button:"Pay $10 with Cash App"},
+  paypal:{name:"PayPal",link:"https://www.paypal.me/ThatOneThing91/10",button:"Pay $10 with PayPal"}
  };
- if(method!=="cash_app")return reply(unavailable[method]||"Choose a payment method.");
- const link="https://cash.app/pay/link/5naenms2";
+ if(method==="bitcoin")return reply("Bitcoin isn't set up yet. Add a wallet address and network before using this option.");
+ if(method==="apple_pay")return reply("Apple Pay isn't set up yet. Add the Apple Cash phone number or email before using this option.");
+ const payment=methods[method];
+ if(!payment)return reply("Choose a payment method.");
  const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
   content:"<@"+ticket.discord_user_id+">",
   embeds:[{
    title:"Premium Payment · $10",
-   description:"Send $10 for lifetime Premium using Cash App.\n\n[Pay with Cash App]("+link+")\n\nAfter paying, reply here so staff can confirm your payment.",
+   description:"Send $10 for lifetime Premium using "+payment.name+".\n\n[Pay with "+payment.name+"]("+payment.link+")\n\nAfter paying, reply here so staff can confirm your payment.",
    color:0x9B72CF
   }],
-  components:[{type:1,components:[{type:2,style:5,label:"Pay $10 with Cash App",url:link}]}],
+  components:[{type:1,components:[{type:2,style:5,label:payment.button,url:payment.link}]}],
   allowed_mentions:{users:[ticket.discord_user_id]}
  });
  if(![200,201].includes(posted.status))return reply("I couldn't post the payment link. Check the bot's permissions in this ticket.");
- return reply("Payment link posted in this ticket.");
+ return reply(payment.name+" payment link posted in this ticket.");
 }
 async function roleAutocomplete(i,env){
  if(!hasManageRoles(i))return autocompleteResponse();
