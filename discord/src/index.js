@@ -1,3 +1,57 @@
+
+import { DurableObject } from "cloudflare:workers";
+async function handleMemberJoin(env,state,member){
+ const user=member?.user;if(!user?.id||member.guild_id!==GUILD_ID)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_join_welcomes(user_id TEXT PRIMARY KEY,role_assigned INTEGER NOT NULL DEFAULT 0,welcome_sent INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
+ const prior=await env.DB.prepare("SELECT role_assigned,welcome_sent FROM member_join_welcomes WHERE user_id=?").bind(user.id).first();
+ if(prior?.role_assigned&&prior?.welcome_sent)return;
+ const [rr,cr,gr]=await Promise.all([discordApi(env,"/guilds/"+GUILD_ID+"/roles"),discordApi(env,"/guilds/"+GUILD_ID+"/channels"),discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=true")]);
+ const initiate=rr.status===200&&Array.isArray(rr.data)?rr.data.find(r=>String(r.name||"").trim().toLowerCase()==="initiate"):null;
+ let roleDone=!!prior?.role_assigned;
+ if(!roleDone&&initiate){const r=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+user.id+"/roles/"+initiate.id,"PUT");roleDone=r.status===204;if(!roleDone)console.error("join role assignment failed",user.id,r.status,r.data);}
+ else if(!initiate)console.error("join role assignment failed: Initiate role not found");
+ const norm=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+ const intro=cr.status===200&&Array.isArray(cr.data)?cr.data.find(c=>[0,5].includes(c.type)&&norm(c.name)==="introductions"):null;
+ let welcomeDone=!!prior?.welcome_sent;
+ if(!welcomeDone&&intro){
+  const guild=gr.status===200?gr.data:{};
+  const icon=guild.icon?"https://cdn.discordapp.com/icons/"+GUILD_ID+"/"+guild.icon+"."+(String(guild.icon).startsWith("a_")?"gif":"png")+"?size=128":null;
+  const avatar=user.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+"."+(String(user.avatar).startsWith("a_")?"gif":"png")+"?size=256":"https://cdn.discordapp.com/embed/avatars/"+Number((BigInt(user.id)>>22n)%6n)+".png";
+  const count=Number(member.memberCount||guild.approximate_member_count||0);
+  const description=["👋 <@"+user.id+"> just joined the server.","",...(count>0?["Member **#"+count+"**"]:[])].join("\n");
+  const embed={title:"Welcome!",description,color:0x9B72CF,author:{name:"Welcome to "+String(guild.name||"the server"),...(icon?{icon_url:icon}:{})},thumbnail:{url:avatar},footer:{text:"Glad you're here."},timestamp:new Date().toISOString()};
+  const sent=await discordApi(env,"/channels/"+intro.id+"/messages","POST",{allowed_mentions:{parse:[],users:[user.id]},embeds:[embed]});
+  welcomeDone=sent.status===200;if(!welcomeDone)console.error("join welcome message failed",user.id,sent.status,sent.data);
+ }else if(!intro&&!welcomeDone)console.error("join welcome failed: introductions channel not found");
+ await env.DB.prepare("INSERT INTO member_join_welcomes(user_id,role_assigned,welcome_sent,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET role_assigned=MAX(role_assigned,excluded.role_assigned),welcome_sent=MAX(welcome_sent,excluded.welcome_sent),updated_at=excluded.updated_at").bind(user.id,roleDone?1:0,welcomeDone?1:0,new Date().toISOString()).run();
+}
+export class MemberJoinGateway extends DurableObject{
+ constructor(ctx,env){super(ctx,env);this.socket=null;this.heartbeatTimer=null;this.heartbeatMs=45000;this.waitingForAck=false;this.seq=null;this.session=null;this.memberCount=0;}
+ async fetch(){try{await this.connect();return new Response("Gateway listener starting",{status:202});}catch(e){console.error("Discord member gateway connect failed",String(e));return new Response("Gateway listener unavailable",{status:503});}}
+ async alarm(){try{await this.connect();}catch(e){console.error("Discord member gateway reconnect failed",String(e));await this.ctx.storage.setAlarm(Date.now()+15000);}}
+ async connect(){
+  if(this.socket&&(this.socket.readyState===0||this.socket.readyState===1))return;
+  const saved=await this.ctx.storage.get("discord_session")||null;this.session=saved;this.seq=saved?.seq??null;this.memberCount=Number(await this.ctx.storage.get("member_count")||0);
+  const root=saved?.resume_gateway_url||"wss://gateway.discord.gg/",url=root+(root.includes("?")?"&":"?")+"v=10&encoding=json",ws=new WebSocket(url);this.socket=ws;
+  ws.addEventListener("message",e=>this.ctx.waitUntil(this.onMessage(ws,e.data).catch(x=>console.error("Discord gateway message error",String(x)))));
+  ws.addEventListener("close",e=>{if(this.socket===ws)this.socket=null;if(this.heartbeatTimer){clearTimeout(this.heartbeatTimer);this.heartbeatTimer=null;}this.waitingForAck=false;this.ctx.waitUntil(this.ctx.storage.setAlarm(Date.now()+15000).catch(()=>{}));console.error("Discord gateway closed",e.code,e.reason||"");});
+  ws.addEventListener("error",()=>{try{ws.close();}catch{}});
+ }
+ send(ws,p){if(ws===this.socket&&ws.readyState===1)ws.send(JSON.stringify(p));}
+ scheduleHeartbeat(ws,delay){if(this.heartbeatTimer)clearTimeout(this.heartbeatTimer);this.heartbeatTimer=setTimeout(()=>{if(ws!==this.socket||ws.readyState!==1)return;if(this.waitingForAck){try{ws.close(4000,"Heartbeat acknowledgement timeout");}catch{}return;}this.waitingForAck=true;this.send(ws,{op:1,d:this.seq});this.scheduleHeartbeat(ws,this.heartbeatMs);},delay);}
+ async onMessage(ws,raw){
+  if(ws!==this.socket)return;const p=JSON.parse(typeof raw==="string"?raw:new TextDecoder().decode(raw));
+  if(p.s!==null&&p.s!==undefined){this.seq=p.s;if(this.session){this.session.seq=this.seq;await this.ctx.storage.put("discord_session",this.session);}}
+  if(p.op===10){this.heartbeatMs=Number(p.d?.heartbeat_interval)||45000;this.scheduleHeartbeat(ws,Math.floor(Math.random()*this.heartbeatMs));if(this.session?.session_id&&this.seq!==null)this.send(ws,{op:6,d:{token:this.env.DISCORD_BOT_TOKEN,session_id:this.session.session_id,seq:this.seq}});else this.send(ws,{op:2,d:{token:this.env.DISCORD_BOT_TOKEN,intents:3,properties:{os:"cloudflare-workers",browser:"syndicate-hub",device:"syndicate-hub"}}});return;}
+  if(p.op===11){this.waitingForAck=false;return;}if(p.op===1){this.waitingForAck=true;this.send(ws,{op:1,d:this.seq});return;}if(p.op===7){try{ws.close(4001,"Gateway requested reconnect");}catch{}return;}
+  if(p.op===9){this.session=null;this.seq=null;await this.ctx.storage.delete("discord_session");setTimeout(()=>{if(ws===this.socket)try{ws.close(4002,"Invalid gateway session");}catch{}},1000);return;}
+  if(p.op!==0)return;
+  if(p.t==="READY"){this.session={session_id:p.d.session_id,resume_gateway_url:p.d.resume_gateway_url,seq:this.seq};await this.ctx.storage.put("discord_session",this.session);return;}
+  if(p.t==="GUILD_CREATE"&&p.d?.id===GUILD_ID&&Number.isFinite(p.d.member_count)){this.memberCount=p.d.member_count;await this.ctx.storage.put("member_count",this.memberCount);return;}
+  if(p.t==="GUILD_MEMBER_ADD"&&p.d?.guild_id===GUILD_ID){this.memberCount=Number(this.memberCount||0)+1;await this.ctx.storage.put("member_count",this.memberCount);p.d.memberCount=this.memberCount;this.ctx.waitUntil(handleMemberJoin(this.env,this,p.d).catch(e=>console.error("member join processing failed",String(e))));return;}
+  if(p.t==="GUILD_MEMBER_REMOVE"&&p.d?.guild_id===GUILD_ID){this.memberCount=Math.max(0,Number(this.memberCount||0)-1);await this.ctx.storage.put("member_count",this.memberCount);}
+ }
+}
 // Automatically maintained Discord status boards. Feed metadata is informational.
 const EXECUTOR_CHANNEL = "1563812726118023228";
 const EXECUTOR_FEED = "https://weao.xyz/api/status/exploits";
@@ -1831,6 +1885,7 @@ async function refreshRobloxUpdates(env) {
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
+  if(env.MEMBER_JOIN_GATEWAY)ctx.waitUntil(env.MEMBER_JOIN_GATEWAY.getByName("member-join-listener").fetch("https://internal/start",{method:"POST"}).catch(e=>console.error("member gateway start",String(e))));
   ctx.waitUntil(removeObsoleteGetKeyDescription(env).catch(e=>console.error("bot description update",String(e))));
   ctx.waitUntil(maintainFeatureChannel(env).catch(e=>console.error("features maintenance",String(e))));
   ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium channel setup",String(e))));
