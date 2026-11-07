@@ -324,7 +324,7 @@ const PURGE_COMMAND = Object.freeze({
  ]
 });
 const ROLE_COMMAND = Object.freeze({
- name:"roles",
+ name:"role",
  description:"Add or remove a role for a server member",
  type:1,
  dm_permission:false,
@@ -1265,14 +1265,14 @@ async function roleAutocomplete(i,env){
  }catch(e){console.error("role autocomplete",String(e));return autocompleteResponse();}
 }
 async function addRoleToMember(i,env){
- if(!hasManageRoles(i))return reply("⛔ You need Manage Roles permission to use /roles add.");
+ if(!hasManageRoles(i))return reply("⛔ You need Manage Roles permission to use /role add.");
  const memberId=String(interactionOption(i,"member")?.value||"");
  const roleId=String(interactionOption(i,"role")?.value||"");
  if(!isUserId(memberId)||!isUserId(roleId))return reply("Choose a server member and a role from the lists.");
  let context;
  try{context=await roleAssignmentContext(env)}catch(e){console.error("role assignment setup",String(e));return reply("I couldn't load the available roles. Check that I have Manage Roles permission.");}
  const role=context.roles.find(item=>item.id===roleId);
- if(!role)return reply("That role is no longer available. Run /roles add again and select a role from the list.");
+ if(!role)return reply("That role is no longer available. Run /role add again and select a role from the list.");
  if(role.id===GUILD_ID||role.managed||(BigInt(role.permissions||"0")&8n)!==0n||Number(role.position)>=context.botPosition)
   return reply("I can't assign that role. Choose an unmanaged, non-administrator role below my highest role.");
  const target=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+memberId);
@@ -1282,14 +1282,14 @@ async function addRoleToMember(i,env){
  return reply("✅ Added <@&"+roleId+"> to <@"+memberId+">.");
 }
 async function removeRoleFromMember(i,env){
- if(!hasManageRoles(i))return reply("⛔ You need Manage Roles permission to use /roles remove.");
+ if(!hasManageRoles(i))return reply("⛔ You need Manage Roles permission to use /role remove.");
  const memberId=String(interactionOption(i,"member")?.value||"");
  const roleId=String(interactionOption(i,"role")?.value||"");
  if(!isUserId(memberId)||!isUserId(roleId))return reply("Choose a server member and a role from the lists.");
  let context;
  try{context=await roleAssignmentContext(env)}catch(e){console.error("role removal setup",String(e));return reply("I couldn't load the available roles. Check that I have Manage Roles permission.");}
  const role=context.roles.find(item=>item.id===roleId);
- if(!role)return reply("That role is no longer available. Run /roles remove again and select a role from the list.");
+ if(!role)return reply("That role is no longer available. Run /role remove again and select a role from the list.");
  if(role.id===GUILD_ID||role.managed||(BigInt(role.permissions||"0")&8n)===8n||Number(role.position)>=context.botPosition)
   return reply("I can't remove that role. Choose an unmanaged, non-administrator role below my highest role.");
  const target=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+memberId);
@@ -1361,7 +1361,7 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v7-roles-add-remove";
+ const revision="premium-only-buttons-v8-role-add-remove";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
@@ -1376,7 +1376,7 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   if(!Array.isArray(globalCommands)||globalCommands.length)throw Error("Global slash command removal was not confirmed.");
   if(!Array.isArray(guildCommands))throw Error("Guild slash command registration was not confirmed.");
   const purgeCommand=guildCommands.find(command=>command.name==="purge"&&command.type===1);
-  const roleCommand=guildCommands.find(command=>command.name==="roles"&&command.type===1);
+  const roleCommand=guildCommands.find(command=>command.name==="role"&&command.type===1);
   const closeCommand=guildCommands.find(command=>command.name==="close"&&command.type===1);
   if(!purgeCommand)throw Error("Purge slash command registration was not confirmed.");
   if(!roleCommand)throw Error("Role slash command registration was not confirmed.");
@@ -1733,11 +1733,11 @@ export default {
   let i;try{i=JSON.parse(raw)}catch{return new Response("Invalid JSON",{status:400})}
   if(i.type===1)return new Response(JSON.stringify({type:1}),{headers:{"content-type":"application/json"}});
   if(![2,3,4,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
-  if(i.type===4){if(i.data?.name==="roles")return roleAutocomplete(i,env);return autocompleteResponse();}
+  if(i.type===4){if(i.data?.name==="role")return roleAutocomplete(i,env);return autocompleteResponse();}
   if(i.type===2){
    if(i.data?.name==="purge")return delayedReply(i,env,ctx,()=>purgeMessages(i,env));
-   if(i.data?.name==="roles"&&i.data?.options?.[0]?.name==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
-   if(i.data?.name==="roles"&&i.data?.options?.[0]?.name==="remove")return delayedReply(i,env,ctx,()=>removeRoleFromMember(i,env));
+   if(i.data?.name==="role"&&i.data?.options?.[0]?.name==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
+   if(i.data?.name==="role"&&i.data?.options?.[0]?.name==="remove")return delayedReply(i,env,ctx,()=>removeRoleFromMember(i,env));
    if(i.data?.name==="close")return delayedReply(i,env,ctx,()=>deletePremiumTicket(i,env));
    return reply("That slash command is not available.");
   }
