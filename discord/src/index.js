@@ -354,10 +354,16 @@ const VERIFIED_COMMAND = Object.freeze({
 });
 const PAYMENT_COMMAND = Object.freeze({
  name:"payment",
- description:"Post the $10 Premium Cash App payment link in this ticket",
+ description:"Post a Premium payment option in this ticket",
  type:1,
  dm_permission:false,
- default_member_permissions:"268435456"
+ default_member_permissions:"268435456",
+ options:[{type:3,name:"method",description:"Choose the payment method",required:true,choices:[
+  {name:"Cash App",value:"cash_app"},
+  {name:"PayPal",value:"paypal"},
+  {name:"Bitcoin",value:"bitcoin"},
+  {name:"Apple Pay",value:"apple_pay"}
+ ]}]
 });
 
 const enc = new TextEncoder();
@@ -1323,6 +1329,13 @@ async function sendPremiumPaymentLink(i,env){
  await ensurePremiumSupportTables(env);
  const ticket=await env.DB.prepare("SELECT discord_user_id,status FROM premium_support_tickets WHERE channel_id=?").bind(channelId).first();
  if(!ticket||ticket.status!=="open")return reply("Use /payment inside an open premium ticket.");
+ const method=String(interactionOption(i,"method")?.value||"");
+ const unavailable={
+  paypal:"PayPal isn't set up yet. A permanent PayPal.Me link can be added once you send it.",
+  bitcoin:"Bitcoin isn't set up yet. Add a wallet address and network before using this option.",
+  apple_pay:"Apple Pay isn't set up yet. Add the Apple Cash phone number or email before using this option."
+ };
+ if(method!=="cash_app")return reply(unavailable[method]||"Choose a payment method.");
  const link="https://cash.app/pay/link/5naenms2";
  const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
   content:"<@"+ticket.discord_user_id+">",
@@ -1447,7 +1460,7 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v11-payment-ticket-command";
+ const revision="premium-only-buttons-v12-payment-method-selector";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
