@@ -1330,19 +1330,20 @@ async function sendPremiumPaymentLink(i,env){
  const ticket=await env.DB.prepare("SELECT discord_user_id,status FROM premium_support_tickets WHERE channel_id=?").bind(channelId).first();
  if(!ticket||ticket.status!=="open")return reply("Use /payment inside an open premium ticket.");
  const method=String(interactionOption(i,"method")?.value||"");
+ const cashAppLink="https://cash.app/pay/link/5naenms2";
  const methods={
-  cash_app:{name:"Cash App",link:"https://cash.app/pay/link/5naenms2",button:"Pay $10 with Cash App"},
-  paypal:{name:"PayPal",link:"https://www.paypal.me/ThatOneThing91/10",button:"Pay $10 with PayPal"}
+  cash_app:{name:"Cash App",link:cashAppLink,button:"Pay $10 with Cash App",note:""},
+  paypal:{name:"PayPal",link:"https://www.paypal.me/ThatOneThing91/10",button:"Pay $10 with PayPal",note:""},
+  apple_pay:{name:"Apple Pay through Cash App",link:cashAppLink,button:"Open payment link",note:"Apple Pay may appear as a checkout option for eligible senders."}
  };
  if(method==="bitcoin")return reply("Bitcoin isn't set up yet. Add a wallet address and network before using this option.");
- if(method==="apple_pay")return reply("Apple Pay isn't set up yet. Add the Apple Cash phone number or email before using this option.");
  const payment=methods[method];
  if(!payment)return reply("Choose a payment method.");
  const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
   content:"<@"+ticket.discord_user_id+">",
   embeds:[{
    title:"Premium Payment · $10",
-   description:"Send $10 for lifetime Premium using "+payment.name+".\n\n[Pay with "+payment.name+"]("+payment.link+")\n\nAfter paying, reply here so staff can confirm your payment.",
+   description:"Send $10 for lifetime Premium using "+payment.name+". "+(payment.note?payment.note+" ":"")+"\n\n[Open payment link]("+payment.link+")\n\nAfter paying, reply here so staff can confirm your payment.",
    color:0x9B72CF
   }],
   components:[{type:1,components:[{type:2,style:5,label:payment.button,url:payment.link}]}],
