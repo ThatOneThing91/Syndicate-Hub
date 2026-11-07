@@ -605,12 +605,6 @@ function keyAccessPanelPayload(){
           "label": "Revoke Key",
           "custom_id": "syndicate_revoke_own_key"
         },
-        {
-          "type": 2,
-          "style": 3,
-          "label": "Get Premium",
-          "custom_id": "syndicate_premium_ticket"
-        }
       ]
     }
   ],
