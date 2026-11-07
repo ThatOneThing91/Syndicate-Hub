@@ -1341,7 +1341,7 @@ async function sendPremiumPaymentLink(i,env){
    content:"<@"+ticket.discord_user_id+">",
    embeds:[{
     title:"Apple Cash Payment · $10",
-    description:"Send $10 for lifetime Premium using Apple Cash to **260-827-7610**.\\n\\nAfter paying, reply here so staff can confirm your payment.",
+    description:"Send $10 for lifetime Premium using Apple Cash to **260-827-7610**.\n\nAfter paying, reply here so staff can confirm your payment.",
     color:0x9B72CF
    }],
    allowed_mentions:{users:[ticket.discord_user_id]}
