@@ -1,6 +1,6 @@
 // Automatically maintained Discord status boards. Feed metadata is informational.
 const EXECUTOR_CHANNEL = "1563812726118023228";
-const EXECUTOR_FEED = "https://www.executors.online/api/executors";
+const EXECUTOR_FEED = "https://weao.xyz/api/status/exploits";
 function executorText(value, max = 180) {
  return String(value ?? "Unknown").replace(/[@*_`~<>\[\]\\]/g, "").slice(0, max);
 }
@@ -35,9 +35,7 @@ function executorReleaseTime(value) {
 }
 // Each tracker family counts once. Roblox client metadata checks builds, not detection.
 const EXECUTOR_SOURCES = [
- {id:"weao",label:"WEAO",url:"https://weao.xyz/api/status/exploits",kind:"weao",group:"weao"},
- {id:"mirror",label:"Executors.Online",url:"https://www.executors.online/api/executors",kind:"weao",group:"weao"},
- {id:"independent",label:"RobloxExecutors",url:"https://www.robloxexecutors.com/api/v1/executors",kind:"independent",group:"independent"},
+ {id:"weao",label:"WEAO",url:EXECUTOR_FEED,kind:"weao",group:"weao"},
  {id:"windows",label:"Roblox Windows",url:"https://clientsettings.roblox.com/v2/client-version/WindowsPlayer/channel/LIVE",kind:"roblox",platform:"Windows"},
  {id:"mac",label:"Roblox macOS",url:"https://clientsettings.roblox.com/v2/client-version/MacPlayer/channel/LIVE",kind:"roblox",platform:"macOS"}
 ];
@@ -153,7 +151,7 @@ function executorBoards(rows,successAt,stale,checkedAt,sources=[]) {
    const release=executorReleaseTime(x.updatedDate);
    const scores=[Number.isFinite(x.unc)?"UNC **"+x.unc+"%**":null,Number.isFinite(x.sunc)?"sUNC **"+x.sunc+"%**":null].filter(Boolean).join("  ·  ");
    const links=[x.website?"[Official website]("+x.website+")":null,x.discord?"[Discord]("+x.discord+")":null].filter(Boolean).join("  •  ");
-   const coverage=ev.sameReleaseGroups>=2?"2 families cover this release":ev.sameReleaseGroups===1?"1 family covers this release":"No live report for this release";
+   const coverage=ev.sameReleaseGroups===1?"WEAO has a live report for this release":"No live WEAO report for this release";
    const checks=[ev.updateConflict?"same-release status conflict":null,ev.buildConflict?"working claim differs from Roblox LIVE build":null].filter(Boolean);
    const reports=ev.reports||[];
    const versionDetails=ev.otherReleaseReports?.length?ev.otherReleaseReports.map(r=>r.label+" lists "+r.version).join(" / "):null;
@@ -175,17 +173,15 @@ function executorBoards(rows,successAt,stale,checkedAt,sources=[]) {
    return {title:x.title,...(x.website?{url:x.website}:{}),description,color:!ev.currentGroups?0x747F8D:ev.conflict||ev.detectionConflict?0xF0B232:ev.detection===true?0xED4245:x.updated===false?0xF0B232:0x9B72CF,...(x.logo?{thumbnail:{url:x.logo}}:{})};
   });
   const health=sources.map(executorSourceLine).join("\n");
-  const headerText=(stale?"⚠️ **Primary tracker unavailable · saved data may be stale**\n":"")+"**"+entries.length+" executors listed**  ·  **"+trackedCount+" monitored**  ·  Every 5 min\n\n"+(entries.length?"":"**No executor data currently available from the trackers.**\n\n")+"External executors are hidden. Listed executors include reported working, detected, outdated, uncertain and conflicting entries. These are source reports, not guarantees of safety.\n\n"+health+"\n*Detection: WEAO only; mirror is the same source. Other checks cover compatibility. Retrieval time is not detection assessment time. No report guarantees safety.*";
+  const headerText=(stale?"⚠️ **Primary tracker unavailable · saved data may be stale**\n":"")+"**"+entries.length+" executors listed**  ·  **"+trackedCount+" monitored**  ·  Every 5 min\n\n"+(entries.length?"":"**No executor data currently available from the trackers.**\n\n")+"External executors are hidden. WEAO is the only executor-status source; Roblox LIVE build checks are shown separately. Detection is source-reported and may be unknown.\n\n"+health+"\n*Detection: WEAO only; mirror is the same source. Other checks cover compatibility. Retrieval time is not detection assessment time. No report guarantees safety.*";
   const pages=[[]];let pageChars=0;
   const reserve=headerText.length+400;
   for(const card of cards){const chars=card.title.length+card.description.length;if(chars+reserve>5800)throw Error("Executor card exceeds Discord size budget");if(pages.at(-1).length>=7||pageChars+chars+reserve>5800){pages.push([]);pageChars=0;}pages.at(-1).push(card);pageChars+=chars;}
   for(let p=0;p<pages.length;p++){
    const header={author:{name:"SYNDICATE HUB  /  EXECUTOR WATCH"},title:(icons[platform]||"📊")+" "+platform+(pages.length>1?"  •  "+(p+1)+" of "+pages.length:""),description:headerText,color:stale?0xF0B232:0x9B72CF};
-   const last=pages[p].at(-1)||header;last.footer={text:"WEAO • Executors.Online • RobloxExecutors • Roblox | Working ≠ undetected • Detection assessment time unavailable"};last.timestamp=checkedAt;
+   const last=pages[p].at(-1)||header;last.footer={text:"WEAO • Roblox LIVE build checks | Working ≠ undetected • Detection assessment time unavailable"};last.timestamp=checkedAt;
    boards.push({key:platform+":"+p,payload:{allowed_mentions:{parse:[]},embeds:[header,...pages[p]],components:[{type:1,components:[
-    {type:2,style:5,label:"WEAO",url:"https://whatexpsare.online/"},
-    {type:2,style:5,label:"RobloxExecutors",url:"https://www.robloxexecutors.com/"},
-    {type:2,style:5,label:"Mirror",url:"https://www.executors.online/executors"}
+    {type:2,style:5,label:"WEAO",url:"https://weao.gg/"}
    ]}]}});
   }
  }
