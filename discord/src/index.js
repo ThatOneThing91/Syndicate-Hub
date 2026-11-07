@@ -1113,15 +1113,21 @@ async function applyRequestedServerRoleCleanup(env){
  try{
   const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
   if(!Array.isArray(roles))throw Error("Could not read server roles.");
-  const syndicate=roles.filter(r=>r.name.toLowerCase()==="syndicate");
-  if(syndicate.length!==1||syndicate[0].managed)throw Error("Expected exactly one editable Syndicate role to preserve; found "+syndicate.length+".");
+  const syndicates=roles.filter(r=>r.name.toLowerCase()==="syndicate");
+  const purpleSyndicates=syndicates.filter(r=>{
+   const color=Number(r.color)||0,red=(color>>16)&255,green=(color>>8)&255,blue=color&255;
+   return red>=60&&blue>=80&&blue>=red*0.72&&red>=blue*0.45&&green<=Math.min(red,blue)*0.85;
+  });
+  if(purpleSyndicates.length!==1||purpleSyndicates[0].managed)throw Error("Expected exactly one editable purple Syndicate role to preserve; found "+purpleSyndicates.length+".");
+  const preservedSyndicate=purpleSyndicates[0];
   const vip=roles.find(r=>r.id===VIP_ROLE_ID);
   if(!vip||vip.managed||!["beta tester","vip"].includes(vip.name.toLowerCase()))throw Error("Could not safely identify the configured VIP role by its existing ID.");
-  const targets=["Diva 3","Diva Premium 3"].map(name=>{
+  const divaTargets=["Diva 3","Diva Premium 3"].map(name=>{
    const matches=roles.filter(r=>r.name.toLowerCase()===name.toLowerCase());
    if(matches.length>1)throw Error("Multiple roles named "+name+"; no roles changed.");
    return matches[0]||null;
   }).filter(Boolean);
+  const targets=[...divaTargets,...syndicates.filter(r=>r.id!==preservedSyndicate.id)];
   const blocked=targets.filter(r=>r.managed).map(r=>({id:r.id,name:r.name,reason:"managed by another integration"}));
   const removable=targets.filter(r=>!r.managed);
   if(vip.name!=="VIP"||vip.color!==0x7F8C6D)await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles/"+VIP_ROLE_ID,"PATCH",{name:"VIP",color:0x7F8C6D});
@@ -1130,7 +1136,7 @@ async function applyRequestedServerRoleCleanup(env){
    await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles/"+role.id,"DELETE");
    deleted.push({id:role.id,name:role.name,administrator:!!(BigInt(role.permissions||"0")&8n)});
   }
-  const details={vip:{id:vip.id,name:"VIP",color:0x7F8C6D},preservedSyndicate:{id:syndicate[0].id,name:syndicate[0].name,color:syndicate[0].color},deleted,notDeleted:blocked};
+  const details={vip:{id:vip.id,name:"VIP",color:0x7F8C6D},preservedSyndicate:{id:preservedSyndicate.id,name:preservedSyndicate.name,color:preservedSyndicate.color},deleted,notDeleted:blocked};
   await env.DB.prepare("UPDATE server_role_migrations SET status='done',lease_until=0,details=?,last_error=NULL,updated_at=? WHERE id=?").bind(JSON.stringify(details),new Date().toISOString(),migrationId).run();
  }catch(e){
   const message=String(e).slice(0,1200);
