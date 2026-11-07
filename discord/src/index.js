@@ -42,25 +42,6 @@ const EXECUTOR_SOURCES = [
 const executorIdentity = x => x.platform+":"+x.title.toLowerCase().replace(/[^a-z0-9]/g,"");
 const executorVersionKey = v => String(v||"").trim().toLowerCase().replace(/^v(?=\d)/,"");
 const executorHash = v => typeof v === "string" && /^version-[a-f0-9]{16}$/i.test(v) ? v.toLowerCase() : null;
-function executorIndependent(data) {
- if (!data || !Array.isArray(data.executors) || !data.executors.length || data.executors.length>200) throw Error("Invalid independent tracker response");
- const platforms={WINDOWS:"Windows",MAC:"macOS",ANDROID:"Android",IOS:"iOS"};
- const rows=[];
- for(const e of data.executors) {
-  if(!e || typeof e.name!=="string" || !Array.isArray(e.platforms))throw Error("Invalid independent executor");
-  for(const p of e.platforms) {
-   if(!platforms[p.platform] || !["WORKING","UPDATE_PENDING","DOWN","DISCONTINUED"].includes(p.status))throw Error("Unknown independent status");
-   rows.push({title:executorText(e.name,80),platform:platforms[p.platform],version:executorText(p.executorVersion,70),
-    updated:p.status==="WORKING",status:p.status,rbxVersion:executorHash(p.workingVersion),
-    statusChangedAt:Number.isFinite(Date.parse(p.statusChangedAt))?p.statusChangedAt:null,
-    website:executorLink(e.website),discord:executorLink(e.discord),logo:executorLink(e.logoUrl),
-    price:e.priceModel==="FREE"?"Free":executorText(e.priceText||"Not listed",70),
-    kind:e.kind==="INTERNAL"?"Internal":e.kind==="EXTERNAL"?"External":null});
-  }
- }
- if(!rows.length || rows.length>400)throw Error("Empty or oversized independent tracker response");
- return rows;
-}
 async function executorReadJSON(url) {
  const r=await fetch(url,{headers:{Accept:"application/json","User-Agent":"WEAO-3PService"},signal:AbortSignal.timeout(10000)});
  if(!r.ok)throw Error("HTTP "+r.status);
@@ -77,7 +58,6 @@ async function executorCheckSource(env,source,checkedAt) {
  try {
   const raw=await executorReadJSON(source.url);
   if(source.kind==="weao")data=executorNormalize(raw);
-  else if(source.kind==="independent")data=executorIndependent(raw);
   else {const hash=executorHash(raw?.clientVersionUpload);if(!hash)throw Error("Invalid Roblox build response");data={hash,version:executorText(raw.version,70),platform:source.platform};}
   successAt=checkedAt;
  }catch(e){error=String(e).slice(0,200);if(prior?.snapshot){try{data=JSON.parse(prior.snapshot);}catch{data=null;}}console.error("executor source",source.id,error);}
@@ -86,44 +66,30 @@ async function executorCheckSource(env,source,checkedAt) {
 }
 function executorCombine(sources,fallback=[]) {
  const byId=new Map(sources.map(s=>[s.id,s]));
- const direct=byId.get("weao"),mirror=byId.get("mirror"),independent=byId.get("independent");
- const primary=[direct,mirror].find(s=>s?.fresh&&Array.isArray(s.data)) || [direct,mirror].filter(s=>Array.isArray(s?.data)).sort((a,b)=>Date.parse(b.successAt)-Date.parse(a.successAt))[0];
- const base=primary?.data || fallback;
+ const weao=byId.get("weao");
+ const base=Array.isArray(weao?.data)?weao.data:fallback;
  const catalog=new Map(base.map(row=>[executorIdentity(row),{...row}]));
- const lookups=new Map(sources.filter(s=>Array.isArray(s.data)).map(s=>[s.id,new Map(s.data.map(row=>[executorIdentity(row),row]))]));
- for(const r of independent?.data||[])if(!catalog.has(executorIdentity(r)))catalog.set(executorIdentity(r),{...r,updatedDate:"Not published",detected:null,unknown:true,possibleBanwave:false,reason:null,unc:null,sunc:null});
+ const weaoLookup=new Map((weao?.data||[]).map(row=>[executorIdentity(row),row]));
  for(const [key,row] of catalog) {
-  const reports=[];
-  for(const source of [direct,mirror,independent].filter(Boolean)) {
-   const match=lookups.get(source.id)?.get(key);if(match)reports.push({id:source.id,label:source.label,group:source.group,fresh:source.fresh,successAt:source.successAt,...match});
-  }
+  const report=weaoLookup.get(key);
+  const reports=report?[{id:"weao",label:"WEAO",group:"weao",fresh:!!weao.fresh,successAt:weao.successAt,...report}]:[];
   const current=reports.filter(r=>r.fresh);
-  // A mirror is fallback evidence, never a second compatibility vote.
-  const families=[...new Map([...current].reverse().map(r=>[r.group,r])).values()];
   const listedVersion=executorVersionKey(row.version);
-  const sameRelease=families.filter(r=>listedVersion&&listedVersion!=="unknown"&&executorVersionKey(r.version)===listedVersion);
+  const sameRelease=current.filter(r=>listedVersion&&listedVersion!=="unknown"&&executorVersionKey(r.version)===listedVersion);
   const statuses=sameRelease.map(r=>r.updated).filter(v=>typeof v==="boolean");
-  const versions=current.filter(r=>r.version&&r.version!=="Unknown").map(r=>executorVersionKey(r.version));
-  const updateConflict=new Set(statuses).size>1;
-  const versionConflict=new Set(versions).size>1;
-  const weaoReports=current.filter(r=>r.group==="weao");
-  const detectionVersionConflict=new Set(weaoReports.map(r=>executorVersionKey(r.version)).filter(v=>v&&v!=="unknown")).size>1;
-  const detectionConflict=new Set(weaoReports.filter(r=>!r.unknown&&typeof r.detected==="boolean").map(r=>r.detected)).size>1 || detectionVersionConflict;
-  const detectionReport=reports.find(r=>r.id==="weao"&&r.fresh)||reports.find(r=>r.id==="mirror"&&r.fresh)||reports.find(r=>r.group==="weao");
+  const detectionReport=reports[0]||null;
   const rb=byId.get(row.platform==="Windows"?"windows":row.platform==="macOS"?"mac":"");
-  const hashes=sameRelease.map(r=>r.rbxVersion).filter(Boolean);
   const buildConflict=!!rb?.fresh&&sameRelease.some(r=>r.updated===true&&r.rbxVersion&&r.rbxVersion!==rb.data.hash);
-  row.evidence={reports,currentGroups:new Set(current.map(r=>r.group)).size,updateConflict,versionConflict,detectionConflict,buildConflict,
-   sameReleaseGroups:sameRelease.length,compatibilitySources:sameRelease.map(r=>r.id==="mirror"?"WEAO via mirror":r.label),
-   otherReleaseReports:families.filter(r=>!sameRelease.includes(r)).map(r=>({label:r.id==="mirror"?"WEAO via mirror":r.label,version:r.version})),
-   conflict:updateConflict||buildConflict,
+  row.evidence={reports,currentGroups:current.length?1:0,updateConflict:false,versionConflict:false,detectionConflict:false,buildConflict,
+   sameReleaseGroups:sameRelease.length?1:0,compatibilitySources:sameRelease.length?["WEAO"]:[],
+   otherReleaseReports:[],conflict:buildConflict,
    reportedUpdated:statuses.length?statuses.every(v=>v):null,
    detectionFresh:!!detectionReport?.fresh,detectionAt:detectionReport?.successAt||null,
-   detectionSource:detectionReport?.id||null,detectionVersion:detectionReport?.version||null,
+   detectionSource:detectionReport?"weao":null,detectionVersion:detectionReport?.version||null,
    detectionReason:detectionReport?.reason||null,detectionBanwave:!!detectionReport?.possibleBanwave,
    savedDetection:detectionReport&&!detectionReport.unknown?detectionReport.detected:null,
-   detection:!detectionReport?.fresh||detectionReport.unknown||detectionConflict?null:detectionReport.detected,
-   roblox:rb?.fresh&&hashes.length?{hash:rb.data.hash,version:rb.data.version,matches:hashes.every(h=>h===rb.data.hash)}:null};
+   detection:!detectionReport?.fresh||detectionReport.unknown||typeof detectionReport.detected!=="boolean"?null:detectionReport.detected,
+   roblox:rb?.fresh&&sameRelease.some(r=>r.rbxVersion)?{hash:rb.data.hash,version:rb.data.version,matches:sameRelease.filter(r=>r.rbxVersion).every(r=>r.rbxVersion===rb.data.hash)}:null};
   row.updated=row.evidence.conflict?null:row.evidence.reportedUpdated;
  }
  return [...catalog.values()].sort((a,b)=>a.platform.localeCompare(b.platform)||a.title.localeCompare(b.title));
@@ -164,7 +130,7 @@ function executorBoards(rows,successAt,stale,checkedAt,sources=[]) {
     ev.compatibilitySources?.length?"↳ Basis: "+ev.compatibilitySources.join(" + "):null,
     versionDetails?"**Other release:** "+versionDetails+" · separate evidence":null,
     ev.roblox?"**Roblox LIVE:** "+(ev.roblox.matches?"reported build matches":"different build reported"):(["Windows","macOS"].includes(platform)?"**Roblox LIVE:** build check unavailable":null),
-    "**Detection report:** "+(ev.detectionSource?(ev.detectionSource==="mirror"?"[WEAO via mirror](https://www.executors.online/executors)":"[WEAO](https://whatexpsare.online/)")+" · "+String(ev.detectionVersion||"Unknown"):"No source coverage"),
+    "**Detection report:** "+(ev.detectionSource?"[WEAO](https://weao.gg/)"+" · "+String(ev.detectionVersion||"Unknown"):"No source coverage"),
     ev.detectionAt?"↳ "+(ev.detectionFresh?"Feed retrieved":"Last retrieval")+detectionAt+(ev.detectionFresh?"":" · ⚠️ stale / offline"):null,
     "**Detection assessed:** time not published by source",
     !ev.detectionFresh&&typeof ev.savedDetection==="boolean"?"↳ Saved report: "+(ev.savedDetection?"reported detected":"no detection reported")+"; current status unknown":null,
@@ -173,7 +139,7 @@ function executorBoards(rows,successAt,stale,checkedAt,sources=[]) {
    return {title:x.title,...(x.website?{url:x.website}:{}),description,color:!ev.currentGroups?0x747F8D:ev.conflict||ev.detectionConflict?0xF0B232:ev.detection===true?0xED4245:x.updated===false?0xF0B232:0x9B72CF,...(x.logo?{thumbnail:{url:x.logo}}:{})};
   });
   const health=sources.map(executorSourceLine).join("\n");
-  const headerText=(stale?"⚠️ **Primary tracker unavailable · saved data may be stale**\n":"")+"**"+entries.length+" executors listed**  ·  **"+trackedCount+" monitored**  ·  Every 5 min\n\n"+(entries.length?"":"**No executor data currently available from the trackers.**\n\n")+"External executors are hidden. WEAO is the only executor-status source; Roblox LIVE build checks are shown separately. Detection is source-reported and may be unknown.\n\n"+health+"\n*Detection: WEAO only; mirror is the same source. Other checks cover compatibility. Retrieval time is not detection assessment time. No report guarantees safety.*";
+  const headerText=(stale?"⚠️ **Primary tracker unavailable · saved data may be stale**\n":"")+"**"+entries.length+" executors listed**  ·  **"+trackedCount+" monitored**  ·  Every 5 min\n\n"+(entries.length?"":"**No executor data currently available from the trackers.**\n\n")+"External executors are hidden. WEAO is the only executor-status source; Roblox LIVE build checks are shown separately. Detection is source-reported and may be unknown.\n\n"+health+"\n*Detection reports come from WEAO. Missing or unknown reports remain unknown; Roblox LIVE checks cover client builds separately.*";
   const pages=[[]];let pageChars=0;
   const reserve=headerText.length+400;
   for(const card of cards){const chars=card.title.length+card.description.length;if(chars+reserve>5800)throw Error("Executor card exceeds Discord size budget");if(pages.at(-1).length>=7||pageChars+chars+reserve>5800){pages.push([]);pageChars=0;}pages.at(-1).push(card);pageChars+=chars;}
