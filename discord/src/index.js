@@ -1301,7 +1301,7 @@ async function verifyTicketMember(i,env){
   data:{
    embeds:[{
     title:"Welcome to Premium",
-    description:"Congratulations <@"+memberId+>, you’re now a Premium member!\\n\\nThank you for your contribution. You now have access to <#1563145457910153319>.",
+    description:"Congratulations <@"+memberId+">, you’re now a Premium member!\n\nThank you for your contribution. You now have access to <#1563145457910153319>.",
     color:0x9B72CF,
     footer:{text:"Syndicate Hub • Premium access"}
    }],
