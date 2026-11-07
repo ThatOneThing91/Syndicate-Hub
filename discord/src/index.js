@@ -1334,9 +1334,9 @@ async function sendPremiumPaymentLink(i,env){
  const methods={
   cash_app:{name:"Cash App",link:cashAppLink,button:"Pay $10 with Cash App",note:""},
   paypal:{name:"PayPal",link:"https://www.paypal.me/ThatOneThing91/10",button:"Pay $10 with PayPal",note:""},
-  apple_pay:{name:"Apple Pay through Cash App",link:cashAppLink,button:"Open payment link",note:"Apple Pay may appear as a checkout option for eligible senders."}
- };
+ }
  if(method==="bitcoin")return reply("Bitcoin isn't set up yet. Add a wallet address and network before using this option.");
+ if(method==="apple_pay")return reply("Apple Cash isn't set up yet. Add the phone number or email linked to your Apple Cash account before using this option.");
  const payment=methods[method];
  if(!payment)return reply("Choose a payment method.");
  const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
