@@ -1145,6 +1145,23 @@ async function applyRequestedServerRoleCleanup(env){
  }
 }
 
+async function inspectManagedRoleOwners(env){
+ const auditId="managed-role-owner-audit-v1",now=new Date().toISOString();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS server_role_audits(id TEXT PRIMARY KEY,status TEXT NOT NULL,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO server_role_audits(id,status,updated_at) VALUES(?,'pending',?)").bind(auditId,now).run();
+ const current=await env.DB.prepare("SELECT status FROM server_role_audits WHERE id=?").bind(auditId).first();
+ if(current?.status==="done")return;
+ try{
+  const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
+  const names=new Set(["Diva 3","Diva Premium 3","Syndicate"]);
+  const report=(roles||[]).filter(r=>names.has(r.name)).map(r=>({id:r.id,name:r.name,managed:!!r.managed,color:r.color,position:r.position,permissions:r.permissions,botId:r.tags?.bot_id||null,integrationId:r.tags?.integration_id||null}));
+  await env.DB.prepare("UPDATE server_role_audits SET status='done',details=?,last_error=NULL,updated_at=? WHERE id=?").bind(JSON.stringify(report),new Date().toISOString(),auditId).run();
+ }catch(e){
+  await env.DB.prepare("UPDATE server_role_audits SET status='error',last_error=?,updated_at=? WHERE id=?").bind(String(e).slice(0,1200),new Date().toISOString(),auditId).run();
+  throw e;
+ }
+}
+
 async function ensureBetaHubAccess(env) {
  const revision="vip-hub-access-v2";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS beta_hub_access(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
@@ -1493,6 +1510,7 @@ export default {
   try{await managementPost(env)}catch(e){console.error("management panel",e)}
   try{await postFreePanel(env)}catch(e){console.error("free panel",e)}
   try{await applyRequestedServerRoleCleanup(env)}catch(e){console.error("server role cleanup",String(e))}
+  try{await inspectManagedRoleOwners(env)}catch(e){console.error("managed role audit",String(e))}
   try{await checkDepartedIssuances(env);await backfillMemberRoles(env);await syncMemberRoles(env)}catch(e){console.error("role maintenance",e)}
 
  },
