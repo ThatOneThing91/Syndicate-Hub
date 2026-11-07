@@ -1336,7 +1336,19 @@ async function sendPremiumPaymentLink(i,env){
   paypal:{name:"PayPal",link:"https://www.paypal.me/ThatOneThing91/10",button:"Pay $10 with PayPal",note:""},
  }
  if(method==="bitcoin")return reply("Bitcoin isn't set up yet. Add a wallet address and network before using this option.");
- if(method==="apple_pay")return reply("Apple Cash isn't set up yet. Add the phone number or email linked to your Apple Cash account before using this option.");
+ if(method==="apple_pay"){
+  const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
+   content:"<@"+ticket.discord_user_id+">",
+   embeds:[{
+    title:"Apple Cash Payment · $10",
+    description:"Send $10 for lifetime Premium using Apple Cash to **260-827-7610**.\\n\\nAfter paying, reply here so staff can confirm your payment.",
+    color:0x9B72CF
+   }],
+   allowed_mentions:{users:[ticket.discord_user_id]}
+  });
+  if(![200,201].includes(posted.status))return reply("I couldn't post the Apple Cash details. Check the bot's permissions in this ticket.");
+  return reply("Apple Cash payment details posted in this ticket.");
+ }
  const payment=methods[method];
  if(!payment)return reply("Choose a payment method.");
  const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
