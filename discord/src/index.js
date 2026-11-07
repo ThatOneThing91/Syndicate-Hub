@@ -520,12 +520,66 @@ function confirmOwnRevoke(){
  return new Response(JSON.stringify({type:4,data:{flags:64,content:"⚠️ **Revoke your Syndicate Hub key?** This will disable your current key and stop the hub at its next verification check. This only affects the key issued to your Discord account.",components:[{type:1,components:[{type:2,style:4,label:"Yes, Revoke My Key",custom_id:"syndicate_confirm_self_revoke"},{type:2,style:2,label:"Cancel",custom_id:"syndicate_cancel_self_revoke"}]}],allowed_mentions:{parse:[]}}}),{headers:{"content-type":"application/json"}});
 }
 function modal(i){if(!hasPremiumRole(i))return premiumRequired();return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_key_modal",title:"Generate Syndicate Hub Key",components:[{type:1,components:[{type:4,custom_id:"roblox_id",label:"Roblox Username or User ID",style:1,min_length:1,max_length:20,required:true,placeholder:"Username (not display name) or numeric ID"}]}]}}),{headers:{"content-type":"application/json"}})}
+async function createPremiumTicket(i,env){
+ const user=i.member?.user;
+ const userId=user?.id;
+ if(!userId)return reply("I couldn't identify your Discord account.");
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_support_tickets(discord_user_id TEXT PRIMARY KEY,channel_id TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_ticket_locks(discord_user_id TEXT PRIMARY KEY,lease_until INTEGER NOT NULL)").run();
+ const now=Date.now();
+ const locked=await env.DB.prepare("INSERT INTO premium_ticket_locks(discord_user_id,lease_until) VALUES(?,?) ON CONFLICT(discord_user_id) DO UPDATE SET lease_until=excluded.lease_until WHERE premium_ticket_locks.lease_until<=?").bind(userId,now+60000,now).run();
+ if(!locked.meta?.changes)return reply("Your premium request is already being set up. Try again in a moment.");
+ try{
+  const existing=await env.DB.prepare("SELECT channel_id FROM premium_support_tickets WHERE discord_user_id=? AND status='open'").bind(userId).first();
+  if(existing){
+   const current=await discordApi(env,"/channels/"+existing.channel_id);
+   if(current.status===200)return reply("You already have an open premium request: <#"+existing.channel_id+">");
+   if(current.status!==404)throw Error("Could not check your existing premium request: "+current.status);
+   await env.DB.prepare("UPDATE premium_support_tickets SET status='closed' WHERE discord_user_id=?").bind(userId).run();
+  }
+  const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
+  if(channels.status!==200||!Array.isArray(channels.data))throw Error("Could not list server channels: "+channels.status);
+  const categories=channels.data.filter(c=>c.type===4&&/(staff|support|ticket)/i.test(c.name||""));
+  const parent=categories.length===1?categories[0]:null;
+  const me=await discordApi(env,"/users/@me");
+  if(me.status!==200||!me.data?.id)throw Error("Could not verify the bot account.");
+  const VIEW=1024, SEND=2048, HISTORY=65536, ATTACH=32768;
+  const allow=String(VIEW|SEND|HISTORY|ATTACH);
+  const channelBody={
+   name:"premium-"+String(user.username||"member").toLowerCase().replace(/[^a-z0-9-]/g,"-").replace(/-+/g,"-").replace(/^-|-$/g,"").slice(0,65),
+   type:0,topic:"Private premium access request for Discord user "+userId,
+   ...(parent?{parent_id:parent.id}:{}),
+   permission_overwrites:[
+    {id:GUILD_ID,type:0,allow:"0",deny:String(VIEW)},
+    {id:userId,type:1,allow,deny:"0"},
+    {id:me.data.id,type:1,allow,deny:"0"}
+   ]
+  };
+  const created=await discordApi(env,"/guilds/"+GUILD_ID+"/channels","POST",channelBody);
+  if(created.status!==201||!created.data?.id)throw Error("Could not create the private premium request channel: "+created.status);
+  const channelId=created.data.id;
+  try{
+   const intro=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
+    content:"<@"+userId+"> Thanks for reaching out about Premium. Describe what you’re looking for here; server administrators can see and reply in this private channel.",
+    allowed_mentions:{users:[userId]}
+   });
+   if(![200,201].includes(intro.status))throw Error("Ticket channel was created, but its first message failed: "+intro.status);
+   await env.DB.prepare("INSERT INTO premium_support_tickets(discord_user_id,channel_id,status,created_at) VALUES(?,?,'open',?) ON CONFLICT(discord_user_id) DO UPDATE SET channel_id=excluded.channel_id,status='open',created_at=excluded.created_at").bind(userId,channelId,new Date().toISOString()).run();
+  }catch(e){
+   await discordApi(env,"/channels/"+channelId,"DELETE");
+   throw e;
+  }
+  return reply("Your private premium request is ready: <#"+channelId+">");
+ }finally{
+  await env.DB.prepare("DELETE FROM premium_ticket_locks WHERE discord_user_id=?").bind(userId).run();
+ }
+}
 function keyAccessPanelPayload(){
  return {
   "embeds": [
     {
       "title": "Syndicate Hub • Premium",
-      "description": "Lifetime access for Premium members.\n\nUse **Get Key** to create your key or retrieve your existing one. Your key is shown privately.",
+      "description": "Lifetime access for Premium members.\n\nUse **Get Key** to create your key or retrieve your existing one. Your key is shown privately.\n\nSee the current script features in <#1564527153108750366>.",
       "color": 8414381
     }
   ],
@@ -550,6 +604,12 @@ function keyAccessPanelPayload(){
           "style": 2,
           "label": "Revoke Key",
           "custom_id": "syndicate_revoke_own_key"
+        },
+        {
+          "type": 2,
+          "style": 3,
+          "label": "Get Premium",
+          "custom_id": "syndicate_premium_ticket"
         }
       ]
     }
@@ -562,7 +622,7 @@ function keyAccessPanelPayload(){
 // Upgrade the existing bot-owned lifetime panel once, without posting duplicates.
 async function syncExistingKeyAccessPanel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS key_access_panel_layout(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,channel_id TEXT,message_id TEXT,checked_at TEXT NOT NULL)").run();
- const revision="premium-simple-lifetime-v6";
+ const revision="premium-features-ticket-v7";
  const current=await env.DB.prepare("SELECT revision,status,channel_id,message_id FROM key_access_panel_layout WHERE id=1").first();
  if(current?.revision===revision&&current.status==="updated")return;
  const channelName="💎・premium-script";
@@ -823,11 +883,11 @@ async function freeAccessKey(i,env,input,ctx){
 async function postFreePanel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS syndicate_free_panel(id INTEGER PRIMARY KEY CHECK(id=1),message_id TEXT NOT NULL,created_at TEXT NOT NULL)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS syndicate_free_panel_layout(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,message_id TEXT NOT NULL,channel_name TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
- const revision="free-simple-script-v2";
+ const revision="free-features-ticket-v3";
  const current=await env.DB.prepare("SELECT revision FROM syndicate_free_panel_layout WHERE id=1").first();
  if(current?.revision===revision)return;
  const exists=await env.DB.prepare("SELECT message_id FROM syndicate_free_panel WHERE id=1").first();
- const payload={"embeds":[{"title":"Syndicate Hub • Free Access","description":"Free access for 24 hours.\n\nUse **Get Key** to create your key or retrieve your existing one. Your key is shown privately.\n\nYou can request a new key after yours expires.","color":8414381}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Get Key","custom_id":"syndicate_free_generate"},{"type":2,"style":2,"label":"Get Script","custom_id":"syndicate_get_script"},{"type":2,"style":2,"label":"Revoke Key","custom_id":"syndicate_revoke_own_key"}]}],"allowed_mentions":{"parse":[]}};
+ const payload={"embeds":[{"title":"Syndicate Hub • Free Access","description":"Free access for 24 hours.\n\nUse **Get Key** to create your key or retrieve your existing one. Your key is shown privately.\n\nYou can request a new key after yours expires.\n\nSee the current script features in <#1564527153108750366>.","color":8414381}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Get Key","custom_id":"syndicate_free_generate"},{"type":2,"style":2,"label":"Get Script","custom_id":"syndicate_get_script"},{"type":2,"style":2,"label":"Revoke Key","custom_id":"syndicate_revoke_own_key"},{"type":2,"style":3,"label":"Get Premium","custom_id":"syndicate_premium_ticket"}]}],"allowed_mentions":{"parse":[]}};
  let result;
  if(exists){
   result=await discordApi(env,"/channels/"+FREE_PANEL_CHANNEL+"/messages/"+exists.message_id,"PATCH",payload);
@@ -1245,6 +1305,31 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   throw e;
  }
 }
+async function maintainCommunitySetup(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
+ const revision="introductions-system-welcome-club-channel-cleanup-v1";
+ const saved=await env.DB.prepare("SELECT revision,status FROM community_setup WHERE id=1").first();
+ if(saved?.revision===revision&&saved.status==="ready")return;
+ const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
+ if(channels.status!==200||!Array.isArray(channels.data))throw Error("Could not load server channels: "+channels.status);
+ const normalize=name=>String(name||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+ const introductions=channels.data.filter(c=>[0,5].includes(c.type)&&normalize(c.name)==="introductions");
+ if(introductions.length!==1)throw Error("Expected one introductions channel; found "+introductions.length);
+ const guild=await discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=false");
+ if(guild.status!==200)throw Error("Could not read server settings: "+guild.status);
+ if(guild.data.system_channel_id!==introductions[0].id){
+  const changed=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:introductions[0].id});
+  if(changed.status!==200||changed.data?.system_channel_id!==introductions[0].id)throw Error("Could not enable Discord join notices in introductions: "+changed.status);
+ }
+ const club=channels.data.filter(c=>[0,5].includes(c.type)&&normalize(c.name)==="club-members");
+ if(club.length>1)throw Error("More than one club members channel matched; leaving them untouched.");
+ if(club.length===1){
+  const removed=await discordApi(env,"/channels/"+club[0].id,"DELETE");
+  if(removed.status!==204)throw Error("Could not delete the club members channel: "+removed.status);
+ }
+ const details={introductions_channel_id:introductions[0].id,join_notices:"discord_system_channel",deleted_club_channel_id:club[0]?.id||null};
+ await env.DB.prepare("INSERT INTO community_setup(id,revision,status,details,last_error,updated_at) VALUES(1,?,'ready',?,NULL,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,status='ready',details=excluded.details,last_error=NULL,updated_at=excluded.updated_at").bind(revision,JSON.stringify(details),new Date().toISOString()).run();
+}
 async function maintainFeatureChannel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS feature_channel_maintenance(id INTEGER PRIMARY KEY CHECK(id=1),snapshot TEXT,status TEXT NOT NULL,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
  const state=await env.DB.prepare("SELECT snapshot,status,details FROM feature_channel_maintenance WHERE id=1").first();
@@ -1522,6 +1607,7 @@ export default {
   ctx.waitUntil(ensureBetaHubAccess(env).catch(e=>console.error("beta hub access",String(e))));
   ctx.waitUntil(ensurePlatformPanel(env).catch(e=>console.error("platform panel",String(e))));
   ctx.waitUntil(syncExistingKeyAccessPanel(env).catch(e=>console.error("key panel layout sync",String(e))));
+  ctx.waitUntil(maintainCommunitySetup(env).catch(e=>console.error("community setup",String(e))));
   ctx.waitUntil(refreshExecutorStatus(env).catch(async e=>{console.error("executor status refresh",String(e));await env.DB.prepare("UPDATE executor_feed_state SET last_error=?,next_run=? WHERE id=1").bind("Panel delivery: "+String(e).slice(0,1400),Date.now()+60000).run();}));
   ctx.waitUntil(refreshRobloxUpdates(env).catch(e=>console.error("Roblox updates",String(e))));
   try{await sendExecutionLogs(env)}catch(e){console.error("execution logging",e)}
@@ -1563,6 +1649,7 @@ export default {
    if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_platform_"))return delayedReply(i,env,ctx,()=>togglePlatformRole(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("mg_"))return discordResponse(await deferredManagement(i,env,ctx));
    if(i.type===5&&i.data?.custom_id==="mg_revoke_modal")return discordResponse(await managementModal(i));
+   if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket")return delayedReply(i,env,ctx,()=>createPremiumTicket(i,env));
    if(i.type===3&&i.data?.custom_id==="syndicate_free_generate"){const did=i.member?.user?.id;if(!did)return reply("Discord member unavailable.");const active=await env.DB.prepare("SELECT 1 FROM discord_key_issuance d JOIN member_keys m ON m.key_hash=d.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(did,GUILD_ID,new Date().toISOString()).first();return active?delayedReply(i,env,ctx,()=>viewKey(i,env)):freeModal();}
    if(i.type===3&&i.data?.custom_id==="syndicate_free_view")return delayedReply(i,env,ctx,()=>viewKey(i,env));
    if(i.type===5&&i.data?.custom_id==="syndicate_free_modal"){const id=i.data.components?.flatMap(x=>x.components||[]).find(x=>x.custom_id==="roblox_id")?.value;return delayedReply(i,env,ctx,()=>freeAccessKey(i,env,id,ctx));}
