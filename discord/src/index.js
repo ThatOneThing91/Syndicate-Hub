@@ -560,10 +560,17 @@ async function createPremiumTicket(i,env){
   const channelId=created.data.id;
   try{
    const intro=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
-    content:"<@"+userId+"> Thanks for reaching out about Premium. Describe what you’re looking for here; server administrators can see and reply in this private channel.",
+    content:"<@"+userId+">",
+    embeds:[{
+     title:"Premium access request",
+     description:"Tell us what you’re looking for and an admin will follow up here. Only you and the server admins can see this ticket.\n\nYou can close it any time with the button below.",
+     color:0x9B72CF,
+     footer:{text:"Syndicate Hub • Private support"}
+    }],
+    components:[{type:1,components:[{type:2,style:2,label:"Close Ticket",custom_id:"syndicate_premium_ticket_close"}]}],
     allowed_mentions:{users:[userId]}
    });
-   if(![200,201].includes(intro.status))throw Error("Ticket channel was created, but its first message failed: "+intro.status);
+   if(![200,201].includes(intro.status))throw Error("Ticket channel was created, but its opening message failed: "+intro.status);
    await env.DB.prepare("INSERT INTO premium_support_tickets(discord_user_id,channel_id,status,created_at) VALUES(?,?,'open',?) ON CONFLICT(discord_user_id) DO UPDATE SET channel_id=excluded.channel_id,status='open',created_at=excluded.created_at").bind(userId,channelId,new Date().toISOString()).run();
   }catch(e){
    await discordApi(env,"/channels/"+channelId,"DELETE");
@@ -573,6 +580,26 @@ async function createPremiumTicket(i,env){
  }finally{
   await env.DB.prepare("DELETE FROM premium_ticket_locks WHERE discord_user_id=?").bind(userId).run();
  }
+}
+function confirmPremiumTicketClose(){
+ return {type:4,data:{flags:64,content:"Close this request? The channel will be hidden from you, while admins keep access to the conversation.",components:[{type:1,components:[{type:2,style:4,label:"Close Ticket",custom_id:"syndicate_premium_ticket_confirm_close"},{type:2,style:2,label:"Keep Open",custom_id:"syndicate_premium_ticket_cancel_close"}]}]}};
+}
+async function closePremiumTicket(i,env){
+ const userId=i.member?.user?.id,channelId=i.channel_id;
+ if(!userId||!channelId)return reply("I couldn't identify this ticket.");
+ const ticket=await env.DB.prepare("SELECT discord_user_id,status FROM premium_support_tickets WHERE channel_id=?").bind(channelId).first();
+ if(!ticket||ticket.status!=="open")return reply("This ticket is already closed or isn't a premium ticket.");
+ if(ticket.discord_user_id!==userId&&!isAdmin(i))return reply("Only the ticket owner or an administrator can close this ticket.");
+ const denied=await discordApi(env,"/channels/"+channelId+"/permissions/"+ticket.discord_user_id,"PUT",{type:1,allow:"0",deny:"1024"});
+ if(denied.status!==204)throw Error("Could not hide the closed ticket from its owner: "+denied.status);
+ await env.DB.prepare("UPDATE premium_support_tickets SET status='closed' WHERE channel_id=? AND status='open'").bind(channelId).run();
+ const channel=await discordApi(env,"/channels/"+channelId);
+ if(channel.status===200){
+  const name=("closed-"+String(channel.data.name||"premium-ticket").replace(/^closed-/,"")).slice(0,100);
+  const renamed=await discordApi(env,"/channels/"+channelId,"PATCH",{name});
+  if(renamed.status!==200)console.error("closed ticket rename",renamed.status);
+ }
+ return reply("Ticket closed. You no longer have access to it, but the admins can still see the conversation.");
 }
 function keyAccessPanelPayload(){
  return {
@@ -1644,6 +1671,9 @@ export default {
    if(i.type===3&&i.data?.custom_id?.startsWith("mg_"))return discordResponse(await deferredManagement(i,env,ctx));
    if(i.type===5&&i.data?.custom_id==="mg_revoke_modal")return discordResponse(await managementModal(i));
    if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket")return delayedReply(i,env,ctx,()=>createPremiumTicket(i,env));
+   if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket_close")return discordResponse(confirmPremiumTicketClose());
+   if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket_cancel_close")return reply("Your ticket is still open.");
+   if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket_confirm_close")return delayedReply(i,env,ctx,()=>closePremiumTicket(i,env));
    if(i.type===3&&i.data?.custom_id==="syndicate_free_generate"){const did=i.member?.user?.id;if(!did)return reply("Discord member unavailable.");const active=await env.DB.prepare("SELECT 1 FROM discord_key_issuance d JOIN member_keys m ON m.key_hash=d.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(did,GUILD_ID,new Date().toISOString()).first();return active?delayedReply(i,env,ctx,()=>viewKey(i,env)):freeModal();}
    if(i.type===3&&i.data?.custom_id==="syndicate_free_view")return delayedReply(i,env,ctx,()=>viewKey(i,env));
    if(i.type===5&&i.data?.custom_id==="syndicate_free_modal"){const id=i.data.components?.flatMap(x=>x.components||[]).find(x=>x.custom_id==="roblox_id")?.value;return delayedReply(i,env,ctx,()=>freeAccessKey(i,env,id,ctx));}
