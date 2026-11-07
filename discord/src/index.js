@@ -1591,7 +1591,7 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
 }
 async function maintainCommunitySetup(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
- const revision="introductions-system-welcome-club-channel-cleanup-v1";
+ const revision="introductions-custom-welcome-and-join-role-v2";
  const saved=await env.DB.prepare("SELECT revision,status FROM community_setup WHERE id=1").first();
  if(saved?.revision===revision&&saved.status==="ready")return;
  const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
@@ -1601,9 +1601,10 @@ async function maintainCommunitySetup(env){
  if(introductions.length!==1)throw Error("Expected one introductions channel; found "+introductions.length);
  const guild=await discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=false");
  if(guild.status!==200)throw Error("Could not read server settings: "+guild.status);
- if(guild.data.system_channel_id!==introductions[0].id){
-  const changed=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:introductions[0].id});
-  if(changed.status!==200||changed.data?.system_channel_id!==introductions[0].id)throw Error("Could not enable Discord join notices in introductions: "+changed.status);
+ const suppressJoin=Number(guild.data.system_channel_flags||0)|1;
+ if(guild.data.system_channel_id!==introductions[0].id||Number(guild.data.system_channel_flags||0)!==suppressJoin){
+  const changed=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:introductions[0].id,system_channel_flags:suppressJoin});
+  if(changed.status!==200||changed.data?.system_channel_id!==introductions[0].id||!(Number(changed.data?.system_channel_flags||0)&1))throw Error("Could not configure introductions for custom join welcomes: "+changed.status);
  }
  const club=channels.data.filter(c=>[0,5].includes(c.type)&&normalize(c.name)==="club-members");
  if(club.length>1)throw Error("More than one club members channel matched; leaving them untouched.");
