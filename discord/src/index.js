@@ -323,6 +323,17 @@ const PURGE_COMMAND = Object.freeze({
   {type:6,name:"user",description:"Only delete messages from this user",required:false}
  ]
 });
+const ROLE_COMMAND = Object.freeze({
+ name:"role",
+ description:"Add a role to a server member",
+ type:1,
+ dm_permission:false,
+ default_member_permissions:"268435456",
+ options:[{type:1,name:"add",description:"Add a role to a member",options:[
+  {type:6,name:"member",description:"Member who should receive the role",required:true},
+  {type:3,name:"role",description:"Search the available roles",required:true,autocomplete:true}
+ ]}]
+});
 const enc = new TextEncoder();
 const hexBytes = s => new Uint8Array(s.match(/../g).map(x=>parseInt(x,16)));
 const sha = async s => [...new Uint8Array(await crypto.subtle.digest("SHA-256",enc.encode(s)))].map(x=>x.toString(16).padStart(2,"0")).join("");
@@ -1012,11 +1023,20 @@ const hasVipAccess = i => i.guild_id===GUILD_ID &&
  (isAdmin(i)||Array.isArray(i.member?.roles)&&i.member.roles.includes(VIP_ROLE_ID));
 
 const MANAGE_MESSAGES_PERMISSION = 8192n;
+const MANAGE_ROLES_PERMISSION = 268435456n;
+const hasManageRoles = i => {
+ const permissions=BigInt(i.member?.permissions||"0");
+ return i.guild_id===GUILD_ID&&((permissions&8n)!==0n||(permissions&MANAGE_ROLES_PERMISSION)!==0n);
+};
 const hasManageMessages = i => {
  const permissions=BigInt(i.member?.permissions||"0");
  return i.guild_id===GUILD_ID && ((permissions&8n)!==0n || (permissions&MANAGE_MESSAGES_PERMISSION)!==0n);
 };
-const interactionOption = (i,name) => (i.data?.options||[]).find(option=>option.name===name);
+const interactionOptions = i => {
+ const options=i.data?.options||[];
+ return options.find(option=>option.type===1)?.options||options;
+};
+const interactionOption = (i,name) => interactionOptions(i).find(option=>option.name===name);
 function purgeMessageTimestamp(message) {
  const parsed=Date.parse(message?.timestamp||"");
  if(Number.isFinite(parsed))return parsed;
@@ -1083,6 +1103,48 @@ async function purgeMessages(i,env) {
  return reply("🧹 Deleted **"+deleted+"** message"+(deleted===1?"":"s")+scope+"."+suffix);
 }
 
+function autocompleteResponse(choices=[]){
+ return new Response(JSON.stringify({type:8,data:{choices}}),{headers:{"content-type":"application/json"}});
+}
+async function roleAssignmentContext(env){
+ const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
+ const me=(await platformDiscord(env,"/users/@me")).data;
+ const member=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/members/"+me.id)).data;
+ const positions=new Map(roles.map(role=>[role.id,Number(role.position)||0]));
+ const botPosition=Math.max(0,...(member.roles||[]).map(id=>positions.get(id)||0));
+ return {roles,botPosition};
+}
+async function roleAutocomplete(i,env){
+ if(!hasManageRoles(i))return autocompleteResponse();
+ try{
+  const options=interactionOptions(i),focused=options.find(option=>option.focused),query=String(focused?.value||"").toLowerCase();
+  const {roles,botPosition}=await roleAssignmentContext(env);
+  const choices=roles.filter(role=>role.id!==GUILD_ID&&!role.managed&&Number(role.position)<botPosition
+   &&(BigInt(role.permissions||"0")&8n)===0n
+   &&String(role.name||"").toLowerCase().includes(query))
+   .sort((a,b)=>(Number(b.position)||0)-(Number(a.position)||0)||a.name.localeCompare(b.name))
+   .slice(0,25).map(role=>({name:String(role.name).slice(0,100),value:role.id}));
+  return autocompleteResponse(choices);
+ }catch(e){console.error("role autocomplete",String(e));return autocompleteResponse();}
+}
+async function addRoleToMember(i,env){
+ if(!hasManageRoles(i))return reply("⛔ You need Manage Roles permission to use /role add.");
+ const memberId=String(interactionOption(i,"member")?.value||"");
+ const roleId=String(interactionOption(i,"role")?.value||"");
+ if(!isUserId(memberId)||!isUserId(roleId))return reply("Choose a server member and a role from the lists.");
+ let context;
+ try{context=await roleAssignmentContext(env)}catch(e){console.error("role assignment setup",String(e));return reply("I couldn't load the available roles. Check that I have Manage Roles permission.");}
+ const role=context.roles.find(item=>item.id===roleId);
+ if(!role)return reply("That role is no longer available. Run /role add again and select a role from the list.");
+ if(role.id===GUILD_ID||role.managed||(BigInt(role.permissions||"0")&8n)!==0n||Number(role.position)>=context.botPosition)
+  return reply("I can't assign that role. Choose an unmanaged, non-administrator role below my highest role.");
+ const target=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+memberId);
+ if(target.status!==200)return reply("That member isn't currently in this server.");
+ const assigned=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+memberId+"/roles/"+roleId,"PUT");
+ if(assigned.status!==204)return reply("I couldn't assign that role. Check that I have Manage Roles permission and that my role is above it.");
+ return reply("✅ Added <@&"+roleId+"> to <@"+memberId+">.");
+}
+
 function needsBetaAccess(i) {
  if(i.type===2)return i.data?.name==="getkey";
  if(i.type===5)return ["syndicate_key_modal","syndicate_free_modal"].includes(i.data?.custom_id);
@@ -1144,7 +1206,7 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v2-purge-command";
+ const revision="premium-only-buttons-v3-role-command";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
@@ -1153,13 +1215,15 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const globalPath="/applications/"+APPLICATION_ID+"/commands";
   const guildPath="/applications/"+APPLICATION_ID+"/guilds/"+GUILD_ID+"/commands";
   await platformDiscord(env,globalPath,"PUT",[]);
-  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND]);
+  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND,ROLE_COMMAND]);
   const globalCommands=(await platformDiscord(env,globalPath)).data;
   const guildCommands=(await platformDiscord(env,guildPath)).data;
   if(!Array.isArray(globalCommands)||globalCommands.length)throw Error("Global slash command removal was not confirmed.");
   if(!Array.isArray(guildCommands))throw Error("Guild slash command registration was not confirmed.");
   const purgeCommand=guildCommands.find(command=>command.name==="purge"&&command.type===1);
+  const roleCommand=guildCommands.find(command=>command.name==="role"&&command.type===1);
   if(!purgeCommand)throw Error("Purge slash command registration was not confirmed.");
+  if(!roleCommand)throw Error("Role slash command registration was not confirmed.");
   const channel=(await platformDiscord(env,"/channels/1563145457910153319")).data;
   if(channel.guild_id!==GUILD_ID)throw Error("Premium channel is not in this server.");
   const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
@@ -1472,9 +1536,11 @@ export default {
   if(!await validSignature(req,raw))return new Response("Invalid Discord signature",{status:401});
   let i;try{i=JSON.parse(raw)}catch{return new Response("Invalid JSON",{status:400})}
   if(i.type===1)return new Response(JSON.stringify({type:1}),{headers:{"content-type":"application/json"}});
-  if(![2,3,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
+  if(![2,3,4,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
+  if(i.type===4){if(i.data?.name==="role")return roleAutocomplete(i,env);return autocompleteResponse();}
   if(i.type===2){
    if(i.data?.name==="purge")return delayedReply(i,env,ctx,()=>purgeMessages(i,env));
+   if(i.data?.name==="role"&&interactionOptions(i)[0]?.name==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
    return reply("That slash command is not available.");
   }
   if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
