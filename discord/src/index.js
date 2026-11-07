@@ -330,14 +330,12 @@ const ROLE_COMMAND = Object.freeze({
  dm_permission:false,
  default_member_permissions:"268435456",
  options:[
-  {type:1,name:"add",description:"Add a role to a member",options:[
-   {type:6,name:"member",description:"Member who should receive the role",required:true},
-   {type:3,name:"role",description:"Search the available roles",required:true,autocomplete:true}
+  {type:3,name:"action",description:"Choose whether to add or remove the role",required:true,choices:[
+   {name:"Add",value:"add"},
+   {name:"Remove",value:"remove"}
   ]},
-  {type:1,name:"remove",description:"Remove a role from a member",options:[
-   {type:6,name:"member",description:"Member who should lose the role",required:true},
-   {type:3,name:"role",description:"Search the available roles",required:true,autocomplete:true}
-  ]}
+  {type:6,name:"member",description:"Choose the server member",required:true},
+  {type:3,name:"role",description:"Search the available roles",required:true,autocomplete:true}
  ]
 });
 const CLOSE_COMMAND = Object.freeze({
@@ -1361,7 +1359,7 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v8-role-add-remove";
+ const revision="premium-only-buttons-v9-role-action-choice";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
@@ -1736,8 +1734,8 @@ export default {
   if(i.type===4){if(i.data?.name==="role")return roleAutocomplete(i,env);return autocompleteResponse();}
   if(i.type===2){
    if(i.data?.name==="purge")return delayedReply(i,env,ctx,()=>purgeMessages(i,env));
-   if(i.data?.name==="role"&&i.data?.options?.[0]?.name==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
-   if(i.data?.name==="role"&&i.data?.options?.[0]?.name==="remove")return delayedReply(i,env,ctx,()=>removeRoleFromMember(i,env));
+   if(i.data?.name==="role"&&interactionOption(i,"action")?.value==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
+   if(i.data?.name==="role"&&interactionOption(i,"action")?.value==="remove")return delayedReply(i,env,ctx,()=>removeRoleFromMember(i,env));
    if(i.data?.name==="close")return delayedReply(i,env,ctx,()=>deletePremiumTicket(i,env));
    return reply("That slash command is not available.");
   }
