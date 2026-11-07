@@ -621,7 +621,7 @@ async function selectPremiumPayment(i,env){
  return discordResponse({type:7,data:ticketOpeningPayload(userId,option.value)});
 }
 function confirmPremiumTicketClose(){
- return {type:4,data:{flags:64,content:"Delete this ticket and its messages? This can't be undone.",components:[{type:1,components:[{type:2,style:4,label:"Delete Ticket",custom_id:"syndicate_premium_ticket_confirm_close"},{type:2,style:2,label:"Keep Open",custom_id:"syndicate_premium_ticket_cancel_close"}]}]}};
+ return {type:4,data:{flags:64,content:"Close this ticket?",components:[{type:1,components:[{type:2,style:4,label:"Close Ticket",custom_id:"syndicate_premium_ticket_confirm_close"},{type:2,style:2,label:"Keep Open",custom_id:"syndicate_premium_ticket_cancel_close"}]}]}};
 }
 async function archivePremiumTicket(i,env){
  const userId=i.member?.user?.id,channelId=i.channel_id;
@@ -636,16 +636,11 @@ async function archivePremiumTicket(i,env){
  if(ticket?.status==="closed")return reply("This ticket is already closed. A moderator can use /close to delete it.");
  const denied=await discordApi(env,"/channels/"+channelId+"/permissions/"+ownerId,"PUT",{type:1,allow:"0",deny:"3072"});
  if(denied.status!==204)throw Error("Could not lock the closed ticket: "+denied.status);
- const notice=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
-  content:"Ticket closed by <@"+userId+">. A moderator can use /close to permanently delete this transcript.",
-  allowed_mentions:{parse:[]}
- });
- if(![200,201].includes(notice.status))console.error("ticket closure note",notice.status);
  const closedName=("closed-"+String(channel.data.name||"premium-ticket").replace(/^closed-/,"")).slice(0,100);
  const renamed=await discordApi(env,"/channels/"+channelId,"PATCH",{name:closedName});
  if(renamed.status!==200)throw Error("Ticket was locked but could not be marked closed: "+renamed.status);
  await env.DB.prepare("UPDATE premium_support_tickets SET status='closed' WHERE channel_id=?").bind(channelId).run();
- return reply("Ticket closed. Its conversation is kept for staff; a moderator can use /close to delete it.");
+ return reply("Ticket closed.");
 }
 async function deletePremiumTicket(i,env){
  const userId=i.member?.user?.id,channelId=i.channel_id;
@@ -660,7 +655,7 @@ async function deletePremiumTicket(i,env){
  const deleted=await discordApi(env,"/channels/"+channelId,"DELETE");
  if(deleted.status!==204&&deleted.status!==404)throw Error("Could not delete this ticket: "+deleted.status);
  await env.DB.prepare("DELETE FROM premium_support_tickets WHERE channel_id=?").bind(channelId).run();
- return reply("Ticket and conversation deleted.");
+ return reply("Ticket closed.");
 }
 function keyAccessPanelPayload(){
  return {
