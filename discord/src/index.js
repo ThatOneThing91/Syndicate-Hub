@@ -1326,6 +1326,16 @@ function robloxDecodeHtml(value) {
 function robloxPlainText(value,max=1000) {
  return robloxDecodeHtml(String(value ?? "").replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim()).slice(0,max);
 }
+function robloxShortText(value,max=190,sentenceCount=1) {
+ const text=robloxPlainText(value,2500).replace(/\([^)]*\)/g," ").replace(/\s+/g," ").trim();
+ if(!text)return "";
+ const sentences=text.match(/[^.!?]+[.!?](?=\s|$)/g)||[text];
+ let short=sentences.slice(0,sentenceCount).join(" ").trim();
+ if(short.length>max) {
+  short=short.slice(0,max-1).replace(/\s+\S*$/,"").trimEnd()+"…";
+ }
+ return short;
+}
 function robloxSafeUrl(value,base) {
  try {
   const u=new URL(String(value),base);
@@ -1357,11 +1367,14 @@ function robloxMeta(html,name) {
  return match?robloxPlainText(match[1],1400):"";
 }
 function robloxReleaseEmbed(item) {
+ const notes=(item.fields||[]).flatMap(field=>String(field.value||"").split("\n"))
+  .map(line=>robloxShortText(line.replace(/^•\s*/,""),190,1))
+  .filter(Boolean).slice(0,5);
  return {
   author:{name:"SYNDICATE HUB  /  ROBLOX UPDATES"},
   title:item.title.slice(0,256),url:item.url,
-  description:"Official Roblox Creator Hub release notes. Details are grouped by the update category shown on Roblox.",
-  fields:(item.fields||[]).slice(0,4).map(field=>({name:String(field.name).slice(0,256),value:String(field.value).slice(0,1024),inline:false})),
+  description:"Quick version of the latest Roblox changes. Open the official notes for the full list.",
+  fields:notes.length?[{name:"Quick summary",value:notes.map(note=>"• "+note).join("\n"),inline:false}]:[],
   color:0x9B72CF,
   footer:{text:"Roblox Creator Hub · official source"}
  };
@@ -1370,7 +1383,7 @@ function robloxNewsEmbed(item) {
  return {
   author:{name:"SYNDICATE HUB  /  ROBLOX UPDATES"},
   title:item.title.slice(0,256),url:item.url,
-  description:(item.description||"Official Roblox Newsroom announcement.").slice(0,3500),
+  description:robloxShortText(item.description||"Official Roblox Newsroom announcement.",420,2),
   color:0x9B72CF,
   footer:{text:"Roblox Newsroom · official source"},
   ...(item.published_at?{timestamp:item.published_at}:{})
@@ -1390,15 +1403,14 @@ async function robloxReleaseItems() {
   try {
    const data=robloxNextData(await robloxFetchText(url))?.props?.pageProps?.data?.releaseNoteContents;
    if(!data||!Array.isArray(data.content))continue;
-   const groups=new Map();
+   const notes=[];
    for(const note of data.content) {
-    const text=robloxPlainText(note?.ReleaseNotesText,700);
+    const text=robloxShortText(note?.ReleaseNotesText,190,1);
     if(!text)continue;
-    const group=robloxPlainText(note?.ReleaseNotesType||"Updates",120)||"Updates";
-    if(!groups.has(group))groups.set(group,[]);
-    if(groups.get(group).length<6)groups.get(group).push("• "+text);
+    notes.push("• "+text);
+    if(notes.length>=5)break;
    }
-   const fields=[...groups.entries()].filter(([,values])=>values.length).slice(0,4).map(([name,values])=>({name,value:values.join("\n").slice(0,1024)}));
+   const fields=notes.length?[{name:"Quick summary",value:notes.join("\n")}]:[];
    if(!fields.length)continue;
    const title=robloxPlainText(data.title||("Release notes for "+version),256);
    items.push({key:"release:"+version,source:"release_notes",title,url,fields,order:version,published_at:null});
