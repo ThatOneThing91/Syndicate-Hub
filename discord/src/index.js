@@ -1005,11 +1005,11 @@ async function togglePlatformRole(i,env) {
 }
 
 
-const BETA_TESTER_ROLE_ID = "1563210797780303983";
+const VIP_ROLE_ID = "1563210797780303983";
 const BETA_HUB_CATEGORY_ID = "1563112370950246440";
 const BETA_INVITE_CODE = "6K2qGPpuEH";
-const hasBetaAccess = i => i.guild_id===GUILD_ID &&
- (isAdmin(i)||Array.isArray(i.member?.roles)&&i.member.roles.includes(BETA_TESTER_ROLE_ID));
+const hasVipAccess = i => i.guild_id===GUILD_ID &&
+ (isAdmin(i)||Array.isArray(i.member?.roles)&&i.member.roles.includes(VIP_ROLE_ID));
 
 const MANAGE_MESSAGES_PERMISSION = 8192n;
 const hasManageMessages = i => {
@@ -1088,7 +1088,7 @@ function needsBetaAccess(i) {
  if(i.type===5)return ["syndicate_key_modal","syndicate_free_modal"].includes(i.data?.custom_id);
  return i.type===3&&["syndicate_generate_key","syndicate_free_generate","syndicate_free_view","syndicate_get_script","syndicate_revoke_own_key","syndicate_confirm_self_revoke"].includes(i.data?.custom_id);
 }
-function betaOverwrites(channel,roles,botId,accessRoleId=BETA_TESTER_ROLE_ID) {
+function betaOverwrites(channel,roles,botId,accessRoleId=VIP_ROLE_ID) {
  const VIEW=1024n;
  const allowedRoles=new Set(roles.filter(r=>r.tags?.bot_id||(BigInt(r.permissions||"0")&8n)!==0n
    ||["Sovereign","Enforcer"].includes(r.name)).map(r=>r.id));
@@ -1104,16 +1104,51 @@ function betaOverwrites(channel,roles,botId,accessRoleId=BETA_TESTER_ROLE_ID) {
  if(!overwrites.some(o=>o.type===1&&o.id===botId))overwrites.push({id:botId,type:1,allow:"1024",deny:"0"});
  return overwrites;
 }
+async function applyRequestedServerRoleCleanup(env){
+ const migrationId="vip-role-cleanup-v1",now=Date.now(),nowIso=new Date(now).toISOString();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS server_role_migrations(id TEXT PRIMARY KEY,status TEXT NOT NULL DEFAULT 'pending',lease_until INTEGER NOT NULL DEFAULT 0,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO server_role_migrations(id,status,lease_until,updated_at) VALUES(?,'pending',0,?)").bind(migrationId,nowIso).run();
+ const claim=await env.DB.prepare("UPDATE server_role_migrations SET status='running',lease_until=?,last_error=NULL,updated_at=? WHERE id=? AND status!='done' AND lease_until<=?").bind(now+180000,nowIso,migrationId,now).run();
+ if(!(claim.meta?.changes>0))return;
+ try{
+  const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
+  if(!Array.isArray(roles))throw Error("Could not read server roles.");
+  const syndicate=roles.filter(r=>r.name.toLowerCase()==="syndicate");
+  if(syndicate.length!==1||syndicate[0].managed)throw Error("Expected exactly one editable Syndicate role to preserve; found "+syndicate.length+".");
+  const vip=roles.find(r=>r.id===VIP_ROLE_ID);
+  if(!vip||vip.managed||!["beta tester","vip"].includes(vip.name.toLowerCase()))throw Error("Could not safely identify the configured VIP role by its existing ID.");
+  const targets=["Diva 3","Diva Premium 3"].map(name=>{
+   const matches=roles.filter(r=>r.name.toLowerCase()===name.toLowerCase());
+   if(matches.length>1)throw Error("Multiple roles named "+name+"; no roles changed.");
+   return matches[0]||null;
+  }).filter(Boolean);
+  const blocked=targets.filter(r=>r.managed).map(r=>({id:r.id,name:r.name,reason:"managed by another integration"}));
+  const removable=targets.filter(r=>!r.managed);
+  if(vip.name!=="VIP"||vip.color!==0x7F8C6D)await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles/"+VIP_ROLE_ID,"PATCH",{name:"VIP",color:0x7F8C6D});
+  const deleted=[];
+  for(const role of removable){
+   await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles/"+role.id,"DELETE");
+   deleted.push({id:role.id,name:role.name,administrator:!!(BigInt(role.permissions||"0")&8n)});
+  }
+  const details={vip:{id:vip.id,name:"VIP",color:0x7F8C6D},preservedSyndicate:{id:syndicate[0].id,name:syndicate[0].name,color:syndicate[0].color},deleted,notDeleted:blocked};
+  await env.DB.prepare("UPDATE server_role_migrations SET status='done',lease_until=0,details=?,last_error=NULL,updated_at=? WHERE id=?").bind(JSON.stringify(details),new Date().toISOString(),migrationId).run();
+ }catch(e){
+  const message=String(e).slice(0,1200);
+  await env.DB.prepare("UPDATE server_role_migrations SET status='error',lease_until=?,last_error=?,updated_at=? WHERE id=?").bind(Date.now()+60000,message,new Date().toISOString(),migrationId).run();
+  throw e;
+ }
+}
+
 async function ensureBetaHubAccess(env) {
- const revision="beta-hub-access-v1";
+ const revision="vip-hub-access-v2";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS beta_hub_access(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO beta_hub_access(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE beta_hub_access SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
  if(!claim.meta?.changes)return;
  try {
   const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
-  const beta=roles.find(r=>r.id===BETA_TESTER_ROLE_ID);
-  if(!beta||beta.managed||beta.name.toLowerCase()!=="beta tester")throw Error("Beta Tester role could not be verified.");
+  const beta=roles.find(r=>r.id===VIP_ROLE_ID);
+  if(!beta||beta.managed||beta.name.toLowerCase()!=="vip")throw Error("VIP role could not be verified.");
   const me=(await platformDiscord(env,"/users/@me")).data;
   const channels=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/channels")).data;
   const category=channels.find(c=>c.id===BETA_HUB_CATEGORY_ID);
@@ -1122,11 +1157,11 @@ async function ensureBetaHubAccess(env) {
   const invite=(await platformDiscord(env,"/invites/"+BETA_INVITE_CODE+"?with_counts=true")).data;
   if(invite.guild?.id!==GUILD_ID)throw Error("The supplied invite is for another server.");
   const inviteRoles=invite.roles||[];
-  const grantsBeta=inviteRoles.some(r=>r.id===BETA_TESTER_ROLE_ID)||(invite.role_ids||[]).includes(BETA_TESTER_ROLE_ID);
+  const grantsBeta=inviteRoles.some(r=>r.id===VIP_ROLE_ID)||(invite.role_ids||[]).includes(VIP_ROLE_ID);
   await env.DB.prepare("UPDATE beta_hub_access SET backup=COALESCE(backup,?),updated_at=? WHERE id=1").bind(JSON.stringify(affected),new Date().toISOString()).run();
   const modified=[];
   for(const channel of affected) {
-   const requiredRole=channel.id==="1563145457910153319"?PREMIUM_ROLE_ID:BETA_TESTER_ROLE_ID;
+   const requiredRole=channel.id==="1563145457910153319"?PREMIUM_ROLE_ID:VIP_ROLE_ID;
    const overwrites=betaOverwrites(channel,roles,me.id,requiredRole);
    const changed=(await platformDiscord(env,"/channels/"+channel.id,"PATCH",{permission_overwrites:overwrites})).data;
    const everyone=changed.permission_overwrites?.find(o=>o.id===GUILD_ID&&o.type===0);
@@ -1171,7 +1206,7 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const changed=(await platformDiscord(env,"/channels/"+channel.id,"PATCH",{permission_overwrites:overwrites})).data;
   const everyone=changed.permission_overwrites?.find(o=>o.type===0&&o.id===GUILD_ID);
   const premiumOverwrite=changed.permission_overwrites?.find(o=>o.type===0&&o.id===PREMIUM_ROLE_ID);
-  const beta=changed.permission_overwrites?.find(o=>o.type===0&&o.id===BETA_TESTER_ROLE_ID);
+  const beta=changed.permission_overwrites?.find(o=>o.type===0&&o.id===VIP_ROLE_ID);
   if(!(BigInt(everyone?.deny||"0")&1024n)||!(BigInt(premiumOverwrite?.allow||"0")&1024n)
    ||BigInt(beta?.allow||"0")&1024n)throw Error("Premium-only channel visibility was not confirmed.");
   const details={channel_id:channel.id,channel_name:channel.name,required_role:premium.id,global_commands:globalCommands.length,guild_commands:guildCommands.length,purge_command_id:purgeCommand.id};
@@ -1451,6 +1486,7 @@ export default {
   try{await sendExecutionLogs(env)}catch(e){console.error("execution logging",e)}
   try{await managementPost(env)}catch(e){console.error("management panel",e)}
   try{await postFreePanel(env)}catch(e){console.error("free panel",e)}
+  try{await applyRequestedServerRoleCleanup(env)}catch(e){console.error("server role cleanup",String(e))}
   try{await checkDepartedIssuances(env);await backfillMemberRoles(env);await syncMemberRoles(env)}catch(e){console.error("role maintenance",e)}
 
  },
@@ -1477,7 +1513,7 @@ export default {
    if(i.data?.name==="purge")return delayedReply(i,env,ctx,()=>purgeMessages(i,env));
    return reply("That slash command is not available.");
   }
-  if(needsBetaAccess(i)&&!hasBetaAccess(i))return reply("🔒 The Beta Tester role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
+  if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
