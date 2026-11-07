@@ -621,21 +621,16 @@ async function closePremiumTicket(i,env){
  if(!userId||!channelId)return reply("I couldn't identify this ticket.");
  await ensurePremiumSupportTables(env);
  const ticket=await env.DB.prepare("SELECT discord_user_id FROM premium_support_tickets WHERE channel_id=?").bind(channelId).first();
- if(!ticket)return reply("This channel isn't an active premium ticket.");
- if(ticket.discord_user_id!==userId&&!isAdmin(i))return reply("Only the ticket owner or an administrator can close this ticket.");
+ const channel=await discordApi(env,"/channels/"+channelId);
+ if(channel.status!==200||channel.data?.guild_id!==GUILD_ID)return reply("This channel isn't an open premium ticket.");
+ const ownerMatch=String(channel.data.topic||"").match(/^Private premium access request for Discord user ([1-9][0-9]{14,21})$/);
+ const ownerId=ticket?.discord_user_id||ownerMatch?.[1];
+ if(!ownerId)return reply("This channel isn't a premium ticket.");
+ if(ownerId!==userId&&!isAdmin(i))return reply("Only the ticket owner or an administrator can close this ticket.");
  const deleted=await discordApi(env,"/channels/"+channelId,"DELETE");
  if(deleted.status!==204&&deleted.status!==404)throw Error("Could not delete this ticket: "+deleted.status);
  await env.DB.prepare("DELETE FROM premium_support_tickets WHERE channel_id=?").bind(channelId).run();
  return reply("Ticket deleted.");
-}
-async function cleanupClosedPremiumTickets(env){
- await ensurePremiumSupportTables(env);
- const rows=await env.DB.prepare("SELECT discord_user_id,channel_id FROM premium_support_tickets WHERE status='closed'").all();
- for(const ticket of rows.results||[]){
-  const removed=await discordApi(env,"/channels/"+ticket.channel_id,"DELETE");
-  if(removed.status!==204&&removed.status!==404)throw Error("Could not remove archived premium ticket "+ticket.channel_id+": "+removed.status);
-  await env.DB.prepare("DELETE FROM premium_support_tickets WHERE channel_id=? AND status='closed'").bind(ticket.channel_id).run();
- }
 }
 function keyAccessPanelPayload(){
  return {
