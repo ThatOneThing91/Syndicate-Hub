@@ -633,7 +633,7 @@ async function archivePremiumTicket(i,env){
  const ownerId=ticket?.discord_user_id||String(channel.data.topic||"").match(/^Private premium access request for Discord user ([1-9][0-9]{14,21})$/)?.[1];
  if(!ownerId)return reply("This channel isn't a premium ticket.");
  if(ownerId!==userId&&!hasManageMessages(i))return reply("Only the ticket owner or a moderator can close this ticket.");
- if(ticket?.status==="closed")return reply("This ticket is already closed. A moderator can use /close to delete it.");
+ if(ticket?.status==="closed")return reply("Ticket already closed.");
  const denied=await discordApi(env,"/channels/"+channelId+"/permissions/"+ownerId,"PUT",{type:1,allow:"0",deny:"3072"});
  if(denied.status!==204)throw Error("Could not lock the closed ticket: "+denied.status);
  const closedName=("closed-"+String(channel.data.name||"premium-ticket").replace(/^closed-/,"")).slice(0,100);
