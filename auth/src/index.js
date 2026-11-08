@@ -17,6 +17,15 @@ export default {
    const digest=await digestKey(b.key,env);
    const record=await env.DB.prepare("SELECT user_id,expires_at,revoked FROM member_keys WHERE key_hash=?").bind(digest).first();
    const valid=!!record&&record.user_id===b.userId&&!record.revoked&&(!record.expires_at||Date.parse(record.expires_at)>Date.now());
+   if(valid&&b.activity==="launch"){
+    try{
+     await env.DB.prepare("CREATE TABLE IF NOT EXISTS hub_execution_versions(event_id INTEGER PRIMARY KEY,version TEXT NOT NULL)").run();
+     const event=await env.DB.prepare("INSERT INTO auth_events(roblox_user_id,event_type,created_at) VALUES(?,?,?)").bind(b.userId,"hub_launch",new Date().toISOString()).run();
+     const eventId=Number(event.meta?.last_row_id);
+     const version=typeof b.version==="string"&&/^\d+\.\d+(?:\.\d+)?$/.test(b.version)?b.version:"Unknown";
+     if(Number.isSafeInteger(eventId))await env.DB.prepare("INSERT INTO hub_execution_versions(event_id,version) VALUES(?,?)").bind(eventId,version).run();
+    }catch(error){console.error("Execution event logging unavailable",String(error))}
+   }
    return json({valid,expiresAt:valid?record.expires_at:null});
   }
   if(!url.pathname.startsWith("/admin/"))return json({error:"Not found"},404);
