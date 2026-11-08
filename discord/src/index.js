@@ -1,3 +1,9 @@
+async function memberJoinDiag(env,event,detail){
+ try{
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_join_diagnostics(id INTEGER PRIMARY KEY AUTOINCREMENT,event TEXT NOT NULL,detail TEXT,created_at TEXT NOT NULL)").run();
+  await env.DB.prepare("INSERT INTO member_join_diagnostics(event,detail,created_at) VALUES(?,?,?)").bind(event,String(detail||"").slice(0,500),new Date().toISOString()).run();
+ }catch(e){console.error("member join diagnostics write failed",String(e));}
+}
 
 import { DurableObject } from "cloudflare:workers";
 async function handleMemberJoin(env,state,member){
@@ -29,14 +35,16 @@ async function handleMemberJoin(env,state,member){
 }
 export class MemberJoinGateway extends DurableObject{
  constructor(ctx,env){super(ctx,env);this.socket=null;this.heartbeatTimer=null;this.heartbeatMs=45000;this.waitingForAck=false;this.seq=null;this.session=null;this.memberCount=0;}
- async fetch(){try{await this.connect();return new Response("Gateway listener starting",{status:202});}catch(e){console.error("Discord member gateway connect failed",String(e));return new Response("Gateway listener unavailable",{status:503});}}
+ async fetch(){try{await memberJoinDiag(this.env,"gateway_start","scheduled binding invoked");await this.connect();return new Response("Gateway listener starting",{status:202});}catch(e){console.error("Discord member gateway connect failed",String(e));return new Response("Gateway listener unavailable",{status:503});}}
  async alarm(){try{await this.connect();}catch(e){console.error("Discord member gateway reconnect failed",String(e));await this.ctx.storage.setAlarm(Date.now()+15000);}}
  async connect(){
   if(this.socket&&(this.socket.readyState===0||this.socket.readyState===1))return;
   const saved=await this.ctx.storage.get("discord_session")||null;this.session=saved;this.seq=saved?.seq??null;this.memberCount=Number(await this.ctx.storage.get("member_count")||0);
+  await memberJoinDiag(this.env,"gateway_connect","Opening "+root);
   const root=saved?.resume_gateway_url||"wss://gateway.discord.gg/",url=root+(root.includes("?")?"&":"?")+"v=10&encoding=json",ws=new WebSocket(url);this.socket=ws;
+  ws.addEventListener("open",()=>this.ctx.waitUntil(memberJoinDiag(this.env,"gateway_open","WebSocket opened")));
   ws.addEventListener("message",e=>this.ctx.waitUntil(this.onMessage(ws,e.data).catch(x=>console.error("Discord gateway message error",String(x)))));
-  ws.addEventListener("close",e=>{if(this.socket===ws)this.socket=null;if(this.heartbeatTimer){clearTimeout(this.heartbeatTimer);this.heartbeatTimer=null;}this.waitingForAck=false;this.ctx.waitUntil(this.ctx.storage.setAlarm(Date.now()+15000).catch(()=>{}));console.error("Discord gateway closed",e.code,e.reason||"");});
+  ws.addEventListener("close",e=>{this.ctx.waitUntil(memberJoinDiag(this.env,"gateway_close",String(e.code)+" "+String(e.reason||"")));if(this.socket===ws)this.socket=null;if(this.heartbeatTimer){clearTimeout(this.heartbeatTimer);this.heartbeatTimer=null;}this.waitingForAck=false;this.ctx.waitUntil(this.ctx.storage.setAlarm(Date.now()+15000).catch(()=>{}));console.error("Discord gateway closed",e.code,e.reason||"");});
   ws.addEventListener("error",()=>{try{ws.close();}catch{}});
  }
  send(ws,p){if(ws===this.socket&&ws.readyState===1)ws.send(JSON.stringify(p));}
@@ -44,13 +52,13 @@ export class MemberJoinGateway extends DurableObject{
  async onMessage(ws,raw){
   if(ws!==this.socket)return;const p=JSON.parse(typeof raw==="string"?raw:new TextDecoder().decode(raw));
   if(p.s!==null&&p.s!==undefined){this.seq=p.s;if(this.session){this.session.seq=this.seq;await this.ctx.storage.put("discord_session",this.session);}}
-  if(p.op===10){this.heartbeatMs=Number(p.d?.heartbeat_interval)||45000;this.scheduleHeartbeat(ws,Math.floor(Math.random()*this.heartbeatMs));if(this.session?.session_id&&this.seq!==null)this.send(ws,{op:6,d:{token:this.env.DISCORD_BOT_TOKEN,session_id:this.session.session_id,seq:this.seq}});else this.send(ws,{op:2,d:{token:this.env.DISCORD_BOT_TOKEN,intents:3,properties:{os:"cloudflare-workers",browser:"syndicate-hub",device:"syndicate-hub"}}});return;}
+  if(p.op===10){this.ctx.waitUntil(memberJoinDiag(this.env,"gateway_hello","Received HELLO; identifying with intents 3"));this.heartbeatMs=Number(p.d?.heartbeat_interval)||45000;this.scheduleHeartbeat(ws,Math.floor(Math.random()*this.heartbeatMs));if(this.session?.session_id&&this.seq!==null)this.send(ws,{op:6,d:{token:this.env.DISCORD_BOT_TOKEN,session_id:this.session.session_id,seq:this.seq}});else this.send(ws,{op:2,d:{token:this.env.DISCORD_BOT_TOKEN,intents:3,properties:{os:"cloudflare-workers",browser:"syndicate-hub",device:"syndicate-hub"}}});return;}
   if(p.op===11){this.waitingForAck=false;return;}if(p.op===1){this.waitingForAck=true;this.send(ws,{op:1,d:this.seq});return;}if(p.op===7){try{ws.close(4001,"Gateway requested reconnect");}catch{}return;}
   if(p.op===9){this.session=null;this.seq=null;await this.ctx.storage.delete("discord_session");setTimeout(()=>{if(ws===this.socket)try{ws.close(4002,"Invalid gateway session");}catch{}},1000);return;}
   if(p.op!==0)return;
-  if(p.t==="READY"){this.session={session_id:p.d.session_id,resume_gateway_url:p.d.resume_gateway_url,seq:this.seq};await this.ctx.storage.put("discord_session",this.session);return;}
+  if(p.t==="READY"){this.ctx.waitUntil(memberJoinDiag(this.env,"gateway_ready","READY received; bot user "+String(p.d?.user?.id||"unknown")));this.session={session_id:p.d.session_id,resume_gateway_url:p.d.resume_gateway_url,seq:this.seq};await this.ctx.storage.put("discord_session",this.session);return;}
   if(p.t==="GUILD_CREATE"&&p.d?.id===GUILD_ID&&Number.isFinite(p.d.member_count)){this.memberCount=p.d.member_count;await this.ctx.storage.put("member_count",this.memberCount);return;}
-  if(p.t==="GUILD_MEMBER_ADD"&&p.d?.guild_id===GUILD_ID){this.memberCount=Number(this.memberCount||0)+1;await this.ctx.storage.put("member_count",this.memberCount);p.d.memberCount=this.memberCount;this.ctx.waitUntil(handleMemberJoin(this.env,this,p.d).catch(e=>console.error("member join processing failed",String(e))));return;}
+  if(p.t==="GUILD_MEMBER_ADD"&&p.d?.guild_id===GUILD_ID){this.ctx.waitUntil(memberJoinDiag(this.env,"member_add","Received join for "+String(p.d?.user?.id||"unknown")));this.memberCount=Number(this.memberCount||0)+1;await this.ctx.storage.put("member_count",this.memberCount);p.d.memberCount=this.memberCount;this.ctx.waitUntil(handleMemberJoin(this.env,this,p.d).catch(e=>console.error("member join processing failed",String(e))));return;}
   if(p.t==="GUILD_MEMBER_REMOVE"&&p.d?.guild_id===GUILD_ID){this.memberCount=Math.max(0,Number(this.memberCount||0)-1);await this.ctx.storage.put("member_count",this.memberCount);}
  }
 }
@@ -1888,6 +1896,7 @@ async function refreshRobloxUpdates(env) {
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
+  ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
   if(env.MEMBER_JOIN_GATEWAY)ctx.waitUntil(env.MEMBER_JOIN_GATEWAY.getByName("member-join-listener").fetch("https://internal/start",{method:"POST"}).catch(e=>console.error("member gateway start",String(e))));
   ctx.waitUntil(removeObsoleteGetKeyDescription(env).catch(e=>console.error("bot description update",String(e))));
   ctx.waitUntil(maintainFeatureChannel(env).catch(e=>console.error("features maintenance",String(e))));
