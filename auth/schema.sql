@@ -7,3 +7,7 @@ CREATE TABLE IF NOT EXISTS member_keys (
  created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_member_keys_user ON member_keys(user_id);
+CREATE TABLE IF NOT EXISTS hub_execution_versions (
+ event_id INTEGER PRIMARY KEY,
+ version TEXT NOT NULL
+);
