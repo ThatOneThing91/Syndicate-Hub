@@ -5,22 +5,24 @@ async function handleMemberJoin(env,state,member){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_join_welcomes(user_id TEXT PRIMARY KEY,role_assigned INTEGER NOT NULL DEFAULT 0,welcome_sent INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  const prior=await env.DB.prepare("SELECT role_assigned,welcome_sent FROM member_join_welcomes WHERE user_id=?").bind(user.id).first();
  if(prior?.role_assigned&&prior?.welcome_sent)return;
- const [rr,cr,gr]=await Promise.all([discordApi(env,"/guilds/"+GUILD_ID+"/roles"),discordApi(env,"/guilds/"+GUILD_ID+"/channels"),discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=true")]);
+ const [rr,cr,gr,mr]=await Promise.all([discordApi(env,"/guilds/"+GUILD_ID+"/roles"),discordApi(env,"/guilds/"+GUILD_ID+"/channels"),discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=true"),discordApi(env,"/guilds/"+GUILD_ID+"/members?limit=1000")]);
  const initiate=rr.status===200&&Array.isArray(rr.data)?rr.data.find(r=>String(r.name||"").trim().toLowerCase()==="initiate"):null;
  let roleDone=!!prior?.role_assigned;
  if(!roleDone&&initiate){const r=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+user.id+"/roles/"+initiate.id,"PUT");roleDone=r.status===204;if(!roleDone)console.error("join role assignment failed",user.id,r.status,r.data);}
  else if(!initiate)console.error("join role assignment failed: Initiate role not found");
  const norm=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
  const intro=cr.status===200&&Array.isArray(cr.data)?cr.data.find(c=>[0,5].includes(c.type)&&norm(c.name)==="introductions"):null;
+ const general=cr.status===200&&Array.isArray(cr.data)?cr.data.find(c=>[0,5].includes(c.type)&&norm(c.name)==="general"):null;
+ const reactionRoles=cr.status===200&&Array.isArray(cr.data)?cr.data.find(c=>[0,5].includes(c.type)&&["reaction-roles","reaction-role","roles"].includes(norm(c.name))):null;
  let welcomeDone=!!prior?.welcome_sent;
  if(!welcomeDone&&intro){
   const guild=gr.status===200?gr.data:{};
   const icon=guild.icon?"https://cdn.discordapp.com/icons/"+GUILD_ID+"/"+guild.icon+"."+(String(guild.icon).startsWith("a_")?"gif":"png")+"?size=128":null;
   const avatar=user.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+"."+(String(user.avatar).startsWith("a_")?"gif":"png")+"?size=256":"https://cdn.discordapp.com/embed/avatars/"+Number((BigInt(user.id)>>22n)%6n)+".png";
-  const count=Number(member.memberCount||guild.approximate_member_count||0);
-  const description=["👋 <@"+user.id+"> just joined the server.","",...(count>0?["Member **#"+count+"**"]:[])].join("\n");
+  const count=Number(Array.isArray(mr.data)?mr.data.length:(guild.approximate_member_count||state.memberCount||0));
+  const description=["👋 Welcome to the server!","",...(count>0?["Member **#"+count+"**"]:[]),...(general?["Chat in <#"+general.id+">"]:[]),...(reactionRoles?["Choose your roles in <#"+reactionRoles.id+">"]:[])].join("\n");
   const embed={title:"Welcome!",description,color:0x9B72CF,author:{name:"Welcome to "+String(guild.name||"the server"),...(icon?{icon_url:icon}:{})},thumbnail:{url:avatar},footer:{text:"Glad you're here."},timestamp:new Date().toISOString()};
-  const sent=await discordApi(env,"/channels/"+intro.id+"/messages","POST",{allowed_mentions:{parse:[],users:[user.id]},embeds:[embed]});
+  const sent=await discordApi(env,"/channels/"+intro.id+"/messages","POST",{content:"<@"+user.id+"> just joined the server.",allowed_mentions:{parse:["users"],users:[user.id]},embeds:[embed]});
   welcomeDone=sent.status===200;if(!welcomeDone)console.error("join welcome message failed",user.id,sent.status,sent.data);
  }else if(!intro&&!welcomeDone)console.error("join welcome failed: introductions channel not found");
  await env.DB.prepare("INSERT INTO member_join_welcomes(user_id,role_assigned,welcome_sent,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET role_assigned=MAX(role_assigned,excluded.role_assigned),welcome_sent=MAX(welcome_sent,excluded.welcome_sent),updated_at=excluded.updated_at").bind(user.id,roleDone?1:0,welcomeDone?1:0,new Date().toISOString()).run();
