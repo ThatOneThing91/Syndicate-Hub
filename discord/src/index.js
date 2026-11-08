@@ -532,13 +532,15 @@ async function onlineUsers(env){
  return reply(rows.length?"🟢 **Active Syndicate Hub users ("+rows.length+")**\n"+rows.map(x=>"• **"+x.username+"** • Roblox ID `"+x.user_id+"` • last seen <t:"+Math.floor(Date.parse(x.last_seen)/1000)+":R>").join("\n"):"No users currently active (last heartbeat within 150 seconds).");
 }
 async function recentExecutions(env){
- const r=await env.DB.prepare("SELECT roblox_user_id,created_at FROM auth_events WHERE event_type='hub_launch' ORDER BY created_at DESC LIMIT 15").all();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS hub_execution_versions(event_id INTEGER PRIMARY KEY,version TEXT NOT NULL)").run();
+ const r=await env.DB.prepare("SELECT e.roblox_user_id,e.created_at,v.version FROM auth_events e LEFT JOIN hub_execution_versions v ON v.event_id=e.id WHERE e.event_type='hub_launch' ORDER BY e.created_at DESC LIMIT 15").all();
  const rows=await userLabels(r.results||[],"roblox_user_id");
- return reply(rows.length?"📋 **Recent Syndicate Hub executions**\n"+rows.map(x=>"• **"+x.username+"** • Roblox ID `"+x.roblox_user_id+"` • <t:"+Math.floor(Date.parse(x.created_at)/1000)+":R>").join("\n"):"No script executions recorded yet.");
+ return reply(rows.length?"📋 **Recent Syndicate Hub executions**\n"+rows.map(x=>"• **"+x.username+"** • Roblox ID `"+x.roblox_user_id+"` • Version `"+(x.version||"Unknown")+"` • <t:"+Math.floor(Date.parse(x.created_at)/1000)+":R>").join("\n"):"No script executions recorded yet.");
 }
 const EXECUTION_LOGS_PAUSED=false; // Discord execution notifications enabled
 async function sendExecutionLogs(env){
  const channel="1563495489662488587";
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS hub_execution_versions(event_id INTEGER PRIMARY KEY,version TEXT NOT NULL)").run();
  if(EXECUTION_LOGS_PAUSED){
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_activity_cursor(id INTEGER PRIMARY KEY CHECK(id=1), last_row INTEGER NOT NULL)").run();
   const max=await env.DB.prepare("SELECT COALESCE(MAX(id),0) AS n FROM auth_events").first();
@@ -549,7 +551,7 @@ async function sendExecutionLogs(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS discord_activity_cursor(id INTEGER PRIMARY KEY CHECK(id=1), last_row INTEGER NOT NULL)").run();
  const cursor=await env.DB.prepare("SELECT last_row FROM discord_activity_cursor WHERE id=1").first();
  if(!cursor){const max=await env.DB.prepare("SELECT COALESCE(MAX(id),0) AS n FROM auth_events").first();await env.DB.prepare("INSERT INTO discord_activity_cursor(id,last_row) VALUES(1,?)").bind(max.n).run();return;}
- const events=await env.DB.prepare("SELECT id,roblox_user_id,event_type,created_at FROM auth_events WHERE event_type IN ('hub_launch','hub_notification_test') AND id>? ORDER BY id ASC LIMIT 40").bind(cursor.last_row).all();
+ const events=await env.DB.prepare("SELECT e.id,e.roblox_user_id,e.event_type,e.created_at,v.version FROM auth_events e LEFT JOIN hub_execution_versions v ON v.event_id=e.id WHERE e.event_type IN ('hub_launch','hub_notification_test') AND e.id>? ORDER BY e.id ASC LIMIT 40").bind(cursor.last_row).all();
  for(const e of events.results||[]){
   let payload;
   if(e.event_type==="hub_notification_test"){
@@ -575,6 +577,7 @@ async function sendExecutionLogs(env){
     {name:"Roblox User ID",value:"["+uid+"](https://www.roblox.com/users/"+uid+"/profile)",inline:true},
     {name:"Key Status",value:key?(key.expires_at?"Active / Verified • Free (24 Hours)":"Active / Verified • Lifetime"):"Verified at launch",inline:true},
     {name:"Game",value:"Storage Hunters",inline:true},
+    {name:"Hub Version",value:String(e.version||"Unknown").slice(0,32),inline:true},
     {name:"Execution Status",value:"Successful",inline:true}
    ];
    payload={embeds:[{title:"✅ Script Executed",description:"A member successfully launched **Syndicate Hub** in Roblox.",color:10233776,fields,thumbnail:avatarUrl?{url:avatarUrl}:undefined,footer:{text:"Syndicate Hub • Execution Logs"},timestamp:e.created_at}]};
