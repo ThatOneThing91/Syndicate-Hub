@@ -9,7 +9,7 @@ const digestKey=(key,env)=>hash(env.KEY_PEPPER+":"+key);
 export default {
  async fetch(req,env,ctx){
   const url=new URL(req.url);
-  if(req.method==="GET"&&url.pathname==="/version")return json({version:"5.34"});
+  if(req.method==="GET"&&url.pathname==="/version")return json({version:"5.35"});
   if(!env.DB||!env.KEY_PEPPER||!env.ADMIN_TOKEN)return json({error:"Server not configured"},503);
   if(req.method==="GET"&&url.pathname==="/health")return json({ok:true});
   if(req.method==="POST"&&url.pathname==="/verify"){
