@@ -434,6 +434,27 @@ const enc = new TextEncoder();
 const hexBytes = s => new Uint8Array(s.match(/../g).map(x=>parseInt(x,16)));
 const sha = async s => [...new Uint8Array(await crypto.subtle.digest("SHA-256",enc.encode(s)))].map(x=>x.toString(16).padStart(2,"0")).join("");
 const reply = (message,ephemeral=true) => new Response(JSON.stringify({type:4,data:{content:message,flags:ephemeral?64:0,allowed_mentions:{parse:[]}}}),{headers:{"content-type":"application/json"}});
+async function joinClubEvent(i,env,eventId){
+ const user=i.member?.user||i.user;
+ if(!user?.id)return reply("Discord member information is unavailable.");
+ if(!env.DB)return reply("The event sign-up list is unavailable right now.");
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_participants(event_id TEXT NOT NULL,discord_user_id TEXT NOT NULL,username TEXT NOT NULL,joined_at TEXT NOT NULL,PRIMARY KEY(event_id,discord_user_id))").run();
+ const result=await env.DB.prepare("INSERT OR IGNORE INTO club_event_participants(event_id,discord_user_id,username,joined_at) VALUES(?,?,?,?)").bind(eventId,user.id,String(user.global_name||user.username||"Discord member").slice(0,100),new Date().toISOString()).run();
+ const row=await env.DB.prepare("SELECT COUNT(*) AS participant_count FROM club_event_participants WHERE event_id=?").bind(eventId).first();
+ const count=Number(row?.participant_count||0);
+ const current=i.message?.embeds?.[0];
+ if(current&&i.message?.id&&i.channel_id){
+  const fields=(Array.isArray(current.fields)?current.fields:[]).map(f=>({name:String(f.name||""),value:String(f.value||""),...(f.inline?{inline:true}:{})}));
+  const label=count+" "+(count===1?"person":"people")+" signed up";
+  const participantField=fields.find(f=>f.name.toLowerCase()==="participants");
+  if(participantField)participantField.value=label;else fields.push({name:"Participants",value:label,inline:true});
+  const updated={...(current.title?{title:current.title}:{}),...(current.description?{description:current.description}:{}),...(Number.isFinite(current.color)?{color:current.color}:{}),fields};
+  if(current.footer?.text)updated.footer={text:current.footer.text,...(current.footer.icon_url?{icon_url:current.footer.icon_url}:{})};
+  try{const edited=await discordApi(env,"/channels/"+i.channel_id+"/messages/"+i.message.id,"PATCH",{embeds:[updated]});if(edited.status<200||edited.status>=300)console.error("event participant count update",edited.status)}catch(e){console.error("event participant count update",String(e))}
+ }
+ const added=Number(result?.meta?.changes||0)>0;
+ return reply((added?"You’re signed up for Acid Rain. ":"You’re already on the participant list. ")+"Current participants: "+count+".");
+}
 async function validSignature(req,raw) {
  const signature=req.headers.get("X-Signature-Ed25519");
  const timestamp=req.headers.get("X-Signature-Timestamp");
@@ -1950,6 +1971,7 @@ export default {
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
+   if(i.type===3&&i.data?.custom_id?.startsWith("club_event_join:")){const eventId=String(i.data.custom_id.slice("club_event_join:".length));if(!/^[A-Za-z0-9_-]{1,60}$/.test(eventId))return reply("Invalid event sign-up button.");return delayedReply(i,env,ctx,()=>joinClubEvent(i,env,eventId));}
    if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_executor_"))return executorPlatformInteraction(i,env,ctx);
    if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_platform_"))return delayedReply(i,env,ctx,()=>togglePlatformRole(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("mg_"))return discordResponse(await deferredManagement(i,env,ctx));
