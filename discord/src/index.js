@@ -434,7 +434,152 @@ const enc = new TextEncoder();
 const hexBytes = s => new Uint8Array(s.match(/../g).map(x=>parseInt(x,16)));
 const sha = async s => [...new Uint8Array(await crypto.subtle.digest("SHA-256",enc.encode(s)))].map(x=>x.toString(16).padStart(2,"0")).join("");
 const reply = (message,ephemeral=true) => new Response(JSON.stringify({type:4,data:{content:message,flags:ephemeral?64:0,allowed_mentions:{parse:[]}}}),{headers:{"content-type":"application/json"}});
+
+const CLUB_EVENTS_CHANNEL="1564527132720234556";
+const LEGACY_ACID_EVENT="acid_rain_20261110_2330";
+async function ensureClubEventTables(env){
+ if(!env.DB)throw Error("Event database is unavailable");
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_events(event_id TEXT PRIMARY KEY,host_id TEXT,channel_id TEXT NOT NULL,message_id TEXT,start_unix INTEGER,location TEXT,profile_url TEXT,status TEXT NOT NULL,created_at TEXT NOT NULL,ended_at TEXT)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_participants(event_id TEXT NOT NULL,discord_user_id TEXT NOT NULL,username TEXT NOT NULL,joined_at TEXT NOT NULL,PRIMARY KEY(event_id,discord_user_id))").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_panels(channel_id TEXT PRIMARY KEY,message_id TEXT NOT NULL,created_at TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_setup(key TEXT PRIMARY KEY,value TEXT NOT NULL)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO club_events(event_id,host_id,channel_id,message_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)").bind(LEGACY_ACID_EVENT,null,CLUB_EVENTS_CHANNEL,"1569912342442024971",1794371400,"festivesillygirls server",null,"active","2026-11-11T03:11:10.164Z").run();
+}
+function clubEventModal(){
+ const field=(id,label,placeholder,max=120)=>({type:1,components:[{type:4,custom_id:id,label,style:1,required:true,placeholder,min_length:1,max_length:max}]});
+ return discordResponse({type:9,data:{custom_id:"club_event_create_modal",title:"Create Acid Rain Event",components:[
+  field("event_date","Date (YYYY-MM-DD)","2026-11-11",10),
+  field("event_time","Start time (Eastern Time)","11:30 PM",10),
+  field("event_location","Server / location","My Roblox private server",150),
+  field("event_profile","Your Roblox profile link","https://www.roblox.com/users/123456/profile",140)
+ ]}});
+}
+function clubEventInput(i,id){
+ const field=(i.data?.components||[]).flatMap(row=>row.components||[]).find(x=>x.custom_id===id);
+ return String(field?.value||"").trim();
+}
+function clubEventStart(dateText,timeText){
+ const d=/^(20\d{2})-(\d{2})-(\d{2})$/.exec(dateText);
+ const t=/^(\d{1,2}):([0-5]\d)\s*(AM|PM)$/i.exec(timeText);
+ if(!d||!t)return null;
+ const year=Number(d[1]),month=Number(d[2]),day=Number(d[3]);
+ const check=new Date(Date.UTC(year,month-1,day));
+ if(check.getUTCFullYear()!==year||check.getUTCMonth()!==month-1||check.getUTCDate()!==day)return null;
+ const h=Number(t[1]),minute=Number(t[2]);if(h<1||h>12)return null;
+ const hour=(h%12)+(t[3].toUpperCase()==="PM"?12:0);
+ const tz=new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"});
+ const needed=[year,month,day,hour,minute];
+ for(const offset of [4,5]){
+  const unix=Math.floor((Date.UTC(year,month-1,day,hour,minute)+offset*3600000)/1000);
+  const parts=Object.fromEntries(tz.formatToParts(new Date(unix*1000)).map(p=>[p.type,Number(p.value)]));
+  if([parts.year,parts.month,parts.day,parts.hour,parts.minute].every((v,i)=>v===needed[i]))return unix;
+ }
+ return null;
+}
+function clubEventActions(eventId,ended=false){
+ return [{type:1,components:[
+  {type:2,style:3,custom_id:"club_event_join:"+eventId,label:"Join event",emoji:{name:"✅"},disabled:ended},
+  {type:2,style:2,custom_id:"club_event_view:"+eventId,label:"See Participants",emoji:{name:"👥"}},
+  {type:2,style:4,custom_id:"club_event_end:"+eventId,label:"End Event",disabled:ended}
+ ]}];
+}
+async function createClubEvent(i,env){
+ await ensureClubEventTables(env);
+ if(i.channel_id!==CLUB_EVENTS_CHANNEL)return reply("Create Acid Rain events from the Club Events channel.");
+ const host=i.member?.user||i.user;
+ if(!host?.id)return reply("Could not identify the event host.");
+ const date=clubEventInput(i,"event_date"),time=clubEventInput(i,"event_time");
+ const location=clubEventInput(i,"event_location").replace(/[\n\r\t<>@*_\[\]\x60]/g," ").replace(/\s+/g," ").trim();
+ const profile=clubEventInput(i,"event_profile");
+ const match=/^https:\/\/(?:www\.)?roblox\.com\/users\/(\d{1,20})\/profile\/?(?:\?.*)?$/i.exec(profile);
+ if(!match)return reply("Enter your Roblox profile URL, like https://www.roblox.com/users/123456/profile.");
+ if(location.length<3||location.length>150)return reply("Enter a server or location (3–150 characters).");
+ const start=clubEventStart(date,time);
+ if(!start)return reply("Enter a real date (YYYY-MM-DD) and an Eastern Time like 11:30 PM.");
+ if(start*1000<Date.now()+60000||start*1000>Date.now()+60*86400000)return reply("Choose a start time at least one minute from now and within the next 60 days.");
+ const existing=await env.DB.prepare("SELECT event_id FROM club_events WHERE host_id=? AND status IN ('active','creating') LIMIT 1").bind(host.id).first();
+ if(existing)return reply("You already have an open event. End that event before creating another.");
+ const eventId="acid_"+Math.floor(Date.now()/1000).toString(36)+"_"+crypto.randomUUID().replace(/-/g,"").slice(0,12);
+ const now=new Date().toISOString();
+ await env.DB.prepare("INSERT INTO club_events(event_id,host_id,channel_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?)").bind(eventId,host.id,CLUB_EVENTS_CHANNEL,start,location,"https://www.roblox.com/users/"+match[1]+"/profile","creating",now).run();
+ const payload={allowed_mentions:{parse:[]},embeds:[{
+  title:"☣️ CLUB EVENT: ACID RAIN",
+  description:"Acid Rain is back! Hosted by <@"+host.id+">.\n\n**Please sign up as a participant** using **Join event** below. Add the host's Roblox account before the event begins.",
+  color:0x9B72CF,
+  fields:[
+   {name:"When",value:"<t:"+start+":F> (<t:"+start+":R>)",inline:false},
+   {name:"Server / Location",value:location,inline:false},
+   {name:"Event Host",value:"<@"+host.id+">",inline:false},
+   {name:"Add the host on Roblox",value:"[Open Roblox profile](https://www.roblox.com/users/"+match[1]+"/profile)",inline:false},
+   {name:"Participants",value:"0 people signed up",inline:true}
+  ],footer:{text:"Shadow Syndicate • Club Events"}
+ }],components:clubEventActions(eventId)};
+ const posted=await discordApi(env,"/channels/"+CLUB_EVENTS_CHANNEL+"/messages","POST",payload);
+ if(![200,201].includes(posted.status)||!posted.data?.id){
+  await env.DB.prepare("UPDATE club_events SET status='failed' WHERE event_id=?").bind(eventId).run();
+  return reply("Could not post your event. Please try again.");
+ }
+ await env.DB.prepare("UPDATE club_events SET status='active',message_id=? WHERE event_id=?").bind(String(posted.data.id),eventId).run();
+ return reply("✅ Your Acid Rain event is live! [View the announcement](https://discord.com/channels/"+GUILD_ID+"/"+CLUB_EVENTS_CHANNEL+"/"+posted.data.id+"). The signup and End Event buttons are ready.");
+}
+async function endClubEvent(i,env,eventId){
+ await ensureClubEventTables(env);
+ const event=await env.DB.prepare("SELECT * FROM club_events WHERE event_id=?").bind(eventId).first();
+ if(!event)return reply("This event is not registered.");
+ if(event.channel_id!==i.channel_id||event.message_id!==i.message?.id)return reply("Use the End Event button on the original event announcement.");
+ const userId=i.member?.user?.id||i.user?.id;
+ if(userId!==event.host_id&&!hasManageMessages(i))return reply("Only the event creator or server staff can end this event.");
+ if(event.status==="ended")return reply("This event is already ended.");
+ if(event.status!=="active")return reply("This event cannot be ended right now.");
+ await env.DB.prepare("UPDATE club_events SET status='ended',ended_at=? WHERE event_id=? AND status='active'").bind(new Date().toISOString(),eventId).run();
+ const old=i.message?.embeds?.[0]||{};
+ const title=String(old.title||"☣️ CLUB EVENT: ACID RAIN").replace(/\s*[—-]\s*ENDED$/,"")+" — ENDED";
+ const description=String(old.description||"").slice(0,3200)+"\n\n**🔒 This event has ended. New participants can no longer join.**";
+ const embed={title,description,color:0x60606D,
+  ...(Array.isArray(old.fields)?{fields:old.fields}:{}),
+  ...(old.footer?{footer:{text:String(old.footer.text||"Shadow Syndicate • Club Events")}}:{})};
+ const patch=await discordApi(env,"/channels/"+event.channel_id+"/messages/"+event.message_id,"PATCH",{embeds:[embed],components:clubEventActions(eventId,true),allowed_mentions:{parse:[]}});
+ if(patch.status!==200)return reply("The event is closed to new signups, but I couldn't update the announcement. Please notify a moderator.");
+ return reply("🔒 Event ended. The Join event and End Event buttons are now disabled; participants can still be viewed.");
+}
+async function ensureClubEventPanel(env){
+ await ensureClubEventTables(env);
+ const channel=CLUB_EVENTS_CHANNEL;
+ const known=await env.DB.prepare("SELECT message_id FROM club_event_panels WHERE channel_id=?").bind(channel).first();
+ if(!known){
+  const payload={embeds:[{
+   title:"☣️ Create an Acid Rain Event",
+   description:"Want to host an Acid Rain event? Tap **Create Event** and fill in your date, start time, Roblox server/location, and Roblox profile link.\n\nYour announcement will be posted here with **Join event**, **See Participants**, and **End Event** buttons. Everyone can sign up; only the host or staff can end it.\n\n**Times are entered in Eastern Time (ET).** One active event per host. Creating an event does not ping @everyone.",
+   color:0x9B72CF,footer:{text:"Shadow Syndicate • Club Events"}
+  }],components:[{type:1,components:[{type:2,style:1,custom_id:"club_event_create",label:"Create Event",emoji:{name:"📅"}}]}],allowed_mentions:{parse:[]}};
+  const sent=await discordApi(env,"/channels/"+channel+"/messages","POST",payload);
+  if(![200,201].includes(sent.status)||!sent.data?.id)throw Error("Event panel send HTTP "+sent.status);
+  await env.DB.prepare("INSERT OR IGNORE INTO club_event_panels(channel_id,message_id,created_at) VALUES(?,?,?)").bind(channel,String(sent.data.id),new Date().toISOString()).run();
+ }
+ const done=await env.DB.prepare("SELECT value FROM club_event_setup WHERE key='legacy_end_button'").first();
+ if(!done){
+  const event=await env.DB.prepare("SELECT * FROM club_events WHERE event_id=?").bind(LEGACY_ACID_EVENT).first();
+  const existing=await discordApi(env,"/channels/"+channel+"/messages/"+event.message_id);
+  if(existing.status!==200)throw Error("Existing Acid Rain announcement not found: "+existing.status);
+  const rows=Array.isArray(existing.data?.components)?existing.data.components.map(x=>({...x,components:[...(x.components||[])]})):[];
+  const hasEnd=rows.some(x=>x.components?.some(c=>c.custom_id==="club_event_end:"+LEGACY_ACID_EVENT));
+  if(!hasEnd){
+   const row=rows.find(x=>x.type===1&&x.components?.some(c=>c.custom_id==="club_event_join:"+LEGACY_ACID_EVENT));
+   if(!row)throw Error("Existing Acid Rain join button not found; refusing to replace announcement");
+   if(row.components.length<5)row.components.push({type:2,style:4,label:"End Event",custom_id:"club_event_end:"+LEGACY_ACID_EVENT,disabled:event.status!=="active"});
+   else rows.push({type:1,components:[{type:2,style:4,label:"End Event",custom_id:"club_event_end:"+LEGACY_ACID_EVENT,disabled:event.status!=="active"}]});
+   const patch=await discordApi(env,"/channels/"+channel+"/messages/"+event.message_id,"PATCH",{components:rows});
+   if(patch.status!==200)throw Error("Legacy End Event button could not be added: "+patch.status);
+  }
+  await env.DB.prepare("INSERT OR REPLACE INTO club_event_setup(key,value) VALUES('legacy_end_button','installed')").run();
+ }
+}
+
 async function joinClubEvent(i,env,eventId){
+ await ensureClubEventTables(env);
+ const event=await env.DB.prepare("SELECT status,channel_id,message_id FROM club_events WHERE event_id=?").bind(eventId).first();
+ if(!event||event.channel_id!==i.channel_id||event.message_id!==i.message?.id)return reply("This event is unavailable.");
+ if(event.status!=='active')return reply("This event has ended. Sign-ups are closed.");
  const user=i.member?.user||i.user;
  if(!user?.id)return reply("Discord member information is unavailable.");
  if(!env.DB)return reply("The event sign-up list is unavailable right now.");
@@ -456,6 +601,7 @@ async function joinClubEvent(i,env,eventId){
  return reply((added?"You’re signed up for Acid Rain. ":"You’re already on the participant list. ")+"Current participants: "+count+".");
 }
 async function viewClubEventParticipants(i,env,eventId,requestedPage){
+ await ensureClubEventTables(env);
  if(!env.DB)return reply("The event participant list is unavailable right now.");
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_participants(event_id TEXT NOT NULL,discord_user_id TEXT NOT NULL,username TEXT NOT NULL,joined_at TEXT NOT NULL,PRIMARY KEY(event_id,discord_user_id))").run();
  const totalRow=await env.DB.prepare("SELECT COUNT(*) AS n FROM club_event_participants WHERE event_id=?").bind(eventId).first();
@@ -464,8 +610,9 @@ async function viewClubEventParticipants(i,env,eventId,requestedPage){
  const result=await env.DB.prepare("SELECT discord_user_id,username FROM club_event_participants WHERE event_id=? ORDER BY joined_at ASC LIMIT ? OFFSET ?").bind(eventId,pageSize,page*pageSize).all();
  const people=Array.isArray(result?.results)?result.results:[];
  const entries=people.map((person,j)=>String(page*pageSize+j+1)+". <@"+String(person.discord_user_id)+">");
- const title="Acid Rain • Participants";
- const description=(total?String(total)+" "+(total===1?"person has":"people have")+" signed up.\n\n"+entries.join("\n"):"No participants have signed up yet.")+"\n\nUse **Join event** on the announcement to sign up.";
+ const event=await env.DB.prepare("SELECT status FROM club_events WHERE event_id=?").bind(eventId).first();
+ const title="Acid Rain • Participants"+(event?.status==="ended"?" (Ended)":"");
+ const description=(total?String(total)+" "+(total===1?"person has":"people have")+" signed up.\n\n"+entries.join("\n"):"No participants have signed up yet.")+(event?.status==="ended"?"\n\n**This event has ended.**":"\n\nUse **Join event** on the announcement to sign up.");
  const buttons=[];
  if(page>0)buttons.push({type:2,style:2,label:"Previous",custom_id:"club_event_view:"+eventId+":"+(page-1)});
  if((page+1)*pageSize<total)buttons.push({type:2,style:2,label:"Next",custom_id:"club_event_view:"+eventId+":"+(page+1)});
@@ -1943,6 +2090,7 @@ export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
   ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
+  ctx.waitUntil(ensureClubEventPanel(env).catch(e=>console.error('club event panel',String(e))));
   if(env.MEMBER_JOIN_GATEWAY)ctx.waitUntil(env.MEMBER_JOIN_GATEWAY.getByName("member-join-listener").fetch("https://internal/start",{method:"POST"}).catch(e=>console.error("member gateway start",String(e))));
   ctx.waitUntil(removeObsoleteGetKeyDescription(env).catch(e=>console.error("bot description update",String(e))));
   ctx.waitUntil(maintainFeatureChannel(env).catch(e=>console.error("features maintenance",String(e))));
@@ -1993,6 +2141,13 @@ export default {
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
+   if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===3&&i.data?.custom_id==="club_event_create")return clubEventModal();
+   if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===5&&i.data?.custom_id==="club_event_create_modal")return delayedReply(i,env,ctx,()=>createClubEvent(i,env));
+   if(i.type===3&&i.data?.custom_id?.startsWith("club_event_end:")){
+    const eventId=String(i.data.custom_id.slice("club_event_end:".length));
+    if(!/^[A-Za-z0-9_-]{1,60}$/.test(eventId))return reply("Invalid event.");
+    return delayedReply(i,env,ctx,()=>endClubEvent(i,env,eventId));
+   }
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_join:")){const eventId=String(i.data.custom_id.slice("club_event_join:".length));if(!/^[A-Za-z0-9_-]{1,60}$/.test(eventId))return reply("Invalid event sign-up button.");return delayedReply(i,env,ctx,()=>joinClubEvent(i,env,eventId));}
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_view:")){const match=/^club_event_view:([A-Za-z0-9_-]{1,60})(?::([0-9]{1,4}))?$/.exec(i.data.custom_id);if(!match)return reply("Invalid participant-list button.");return delayedReply(i,env,ctx,()=>viewClubEventParticipants(i,env,match[1],Number(match[2]||0)));}
    if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_executor_"))return executorPlatformInteraction(i,env,ctx);
