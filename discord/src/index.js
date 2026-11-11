@@ -455,6 +455,28 @@ async function joinClubEvent(i,env,eventId){
  const added=Number(result?.meta?.changes||0)>0;
  return reply((added?"You’re signed up for Acid Rain. ":"You’re already on the participant list. ")+"Current participants: "+count+".");
 }
+async function viewClubEventParticipants(i,env,eventId,requestedPage){
+ if(!env.DB)return reply("The event participant list is unavailable right now.");
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_participants(event_id TEXT NOT NULL,discord_user_id TEXT NOT NULL,username TEXT NOT NULL,joined_at TEXT NOT NULL,PRIMARY KEY(event_id,discord_user_id))").run();
+ const totalRow=await env.DB.prepare("SELECT COUNT(*) AS n FROM club_event_participants WHERE event_id=?").bind(eventId).first();
+ const total=Number(totalRow?.n||0),pageSize=20;
+ const page=Math.max(0,Math.min(Math.max(0,Math.ceil(total/pageSize)-1),Number(requestedPage)||0));
+ const result=await env.DB.prepare("SELECT discord_user_id,username FROM club_event_participants WHERE event_id=? ORDER BY joined_at ASC LIMIT ? OFFSET ?").bind(eventId,pageSize,page*pageSize).all();
+ const people=Array.isArray(result?.results)?result.results:[];
+ const entries=people.map((person,j)=>String(page*pageSize+j+1)+". <@"+String(person.discord_user_id)+">");
+ const title="Acid Rain • Participants";
+ const description=(total?String(total)+" "+(total===1?"person has":"people have")+" signed up.\n\n"+entries.join("\n"):"No participants have signed up yet.")+"\n\nUse **Join event** on the announcement to sign up.";
+ const buttons=[];
+ if(page>0)buttons.push({type:2,style:2,label:"Previous",custom_id:"club_event_view:"+eventId+":"+(page-1)});
+ if((page+1)*pageSize<total)buttons.push({type:2,style:2,label:"Next",custom_id:"club_event_view:"+eventId+":"+(page+1)});
+ return discordResponse({type:4,data:{
+  flags:64,
+  embeds:[{title,description,color:0x9B72CF,footer:{text:"Page "+(page+1)+" of "+Math.max(1,Math.ceil(total/pageSize))+" • Visible only to you"}}],
+  ...(buttons.length?{components:[{type:1,components:buttons}]}:{}),
+  allowed_mentions:{parse:[]}
+ }});
+}
+
 async function validSignature(req,raw) {
  const signature=req.headers.get("X-Signature-Ed25519");
  const timestamp=req.headers.get("X-Signature-Timestamp");
@@ -1972,6 +1994,7 @@ export default {
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_join:")){const eventId=String(i.data.custom_id.slice("club_event_join:".length));if(!/^[A-Za-z0-9_-]{1,60}$/.test(eventId))return reply("Invalid event sign-up button.");return delayedReply(i,env,ctx,()=>joinClubEvent(i,env,eventId));}
+   if(i.type===3&&i.data?.custom_id?.startsWith("club_event_view:")){const match=/^club_event_view:([A-Za-z0-9_-]{1,60})(?::([0-9]{1,4}))?$/.exec(i.data.custom_id);if(!match)return reply("Invalid participant-list button.");return delayedReply(i,env,ctx,()=>viewClubEventParticipants(i,env,match[1],Number(match[2]||0)));}
    if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_executor_"))return executorPlatformInteraction(i,env,ctx);
    if(i.type===3&&i.data?.custom_id?.startsWith("syndicate_platform_"))return delayedReply(i,env,ctx,()=>togglePlatformRole(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("mg_"))return discordResponse(await deferredManagement(i,env,ctx));
