@@ -502,7 +502,7 @@ async function createClubEvent(i,env){
  const eventId="acid_"+Math.floor(Date.now()/1000).toString(36)+"_"+crypto.randomUUID().replace(/-/g,"").slice(0,12);
  const now=new Date().toISOString();
  await env.DB.prepare("INSERT INTO club_events(event_id,host_id,channel_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?)").bind(eventId,host.id,CLUB_EVENTS_CHANNEL,start,location,"https://www.roblox.com/users/"+match[1]+"/profile","creating",now).run();
- const payload={allowed_mentions:{parse:[]},embeds:[{
+ const payload={content:"@everyone",allowed_mentions:{parse:["everyone"]},embeds:[{
   title:"☣️ CLUB EVENT: ACID RAIN",
   description:"Acid Rain is back! Hosted by <@"+host.id+">.\n\n**Please sign up as a participant** using **Join event** below. Add the host's Roblox account before the event begins.",
   color:0x9B72CF,
@@ -549,12 +549,28 @@ async function ensureClubEventPanel(env){
  if(!known){
   const payload={embeds:[{
    title:"☣️ Create an Acid Rain Event",
-   description:"Want to host an Acid Rain event? Tap **Create Event** and fill in your date, start time, Roblox server/location, and Roblox profile link.\n\nYour announcement will be posted here with **Join event**, **See Participants**, and **End Event** buttons. Everyone can sign up; only the host or staff can end it.\n\n**Times are entered in Eastern Time (ET).** One active event per host. Creating an event does not ping @everyone.",
+   description:"Want to host an Acid Rain event? Tap **Create Event** and fill in your date, start time, Roblox server/location, and Roblox profile link.\n\nYour announcement will be posted here with **Join event**, **See Participants**, and **End Event** buttons. Everyone can sign up; only the host or staff can end it.\n\n**Times are entered in Eastern Time (ET).** One active event per host. New event announcements ping @everyone. Please only create events you're hosting.",
    color:0x9B72CF,footer:{text:"Shadow Syndicate • Club Events"}
   }],components:[{type:1,components:[{type:2,style:1,custom_id:"club_event_create",label:"Create Event",emoji:{name:"📅"}}]}],allowed_mentions:{parse:[]}};
   const sent=await discordApi(env,"/channels/"+channel+"/messages","POST",payload);
   if(![200,201].includes(sent.status)||!sent.data?.id)throw Error("Event panel send HTTP "+sent.status);
   await env.DB.prepare("INSERT OR IGNORE INTO club_event_panels(channel_id,message_id,created_at) VALUES(?,?,?)").bind(channel,String(sent.data.id),new Date().toISOString()).run();
+ }
+ const pingNote=await env.DB.prepare("SELECT value FROM club_event_setup WHERE key='panel_everyone_notice'").first();
+ if(!pingNote){
+  const current=await env.DB.prepare("SELECT message_id FROM club_event_panels WHERE channel_id=?").bind(channel).first();
+  if(current?.message_id){
+   const old=await discordApi(env,"/channels/"+channel+"/messages/"+current.message_id);
+   if(old.status!==200||!old.data?.embeds?.[0])throw Error("Cannot read Club Event creator panel for notice update");
+   const prior=old.data.embeds[0];
+   const desc=String(prior.description||"").replace("Creating an event does not ping @everyone.","New event announcements ping @everyone. Please only create events you're hosting.");
+   const changed=await discordApi(env,"/channels/"+channel+"/messages/"+current.message_id,"PATCH",{
+    embeds:[{title:String(prior.title||"☣️ Create an Acid Rain Event"),description:desc,color:0x9B72CF,footer:{text:"Shadow Syndicate • Club Events"}}],
+    allowed_mentions:{parse:[]}
+   });
+   if(changed.status!==200)throw Error("Cannot update Club Event creator panel: HTTP "+changed.status);
+   await env.DB.prepare("INSERT OR REPLACE INTO club_event_setup(key,value) VALUES('panel_everyone_notice','installed')").run();
+  }
  }
  const done=await env.DB.prepare("SELECT value FROM club_event_setup WHERE key='legacy_end_button'").first();
  if(!done){
