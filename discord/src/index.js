@@ -69,53 +69,33 @@ function joinChannel(channels,...names){
  const norm=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
  return (channels||[]).find(c=>[0,5].includes(c.type)&&names.includes(norm(c.name)))||null;
 }
+// Discord posts the native join message (and its sticker reply control).
+// This handler ONLY assigns Initiate. Never post a second bot welcome.
 async function handleMemberJoin(env,state,member){
- const user=member?.user;if(!env.DB||!user?.id||member.guild_id!==GUILD_ID||user.bot)return;
+ const user=member?.user;
+ if(!env.DB||!user?.id||member.guild_id!==GUILD_ID||user.bot)return;
  await ensureJoinTrackingTable(env);
  const joinedAt=String(member.joined_at||"");
  const prior=await env.DB.prepare("SELECT role_assigned,welcome_sent,joined_at FROM member_join_welcomes WHERE user_id=?").bind(user.id).first();
  const sameJoin=!!(joinedAt&&prior?.joined_at===joinedAt);
  if(sameJoin&&prior.role_assigned&&prior.welcome_sent)return;
- const [rr,cr,gr]=await Promise.all([discordApi(env,"/guilds/"+GUILD_ID+"/roles"),discordApi(env,"/guilds/"+GUILD_ID+"/channels"),discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=true")]);
+ const rr=await discordApi(env,"/guilds/"+GUILD_ID+"/roles");
  const initiate=rr.status===200&&Array.isArray(rr.data)?rr.data.find(r=>String(r.name||"").trim().toLowerCase()==="initiate"):null;
  let roleDone=!!(sameJoin&&prior?.role_assigned);
  if(initiate&&Array.isArray(member.roles)&&member.roles.includes(initiate.id))roleDone=true;
  if(!roleDone&&initiate){
-  const r=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+user.id+"/roles/"+initiate.id,"PUT");
-  roleDone=r.status===204;
-  if(!roleDone)await memberJoinDiag(env,"role_failure","Initiate role HTTP "+r.status+" for "+user.id+" "+JSON.stringify(r.data||{}).slice(0,170));
- }else if(!initiate){await memberJoinDiag(env,"role_failure","Initiate role missing or roles HTTP "+rr.status);}
- const channels=cr.status===200&&Array.isArray(cr.data)?cr.data:[];
- const intro=joinChannel(channels,"introductions");
- const general=joinChannel(channels,"general","general-chat");
- const reactionRoles=joinChannel(channels,"reaction-roles","reaction-role","choose-your-roles","choose-roles","roles");
- let welcomeDone=!!(sameJoin&&prior?.welcome_sent);
- if(!welcomeDone&&intro){
-  const guild=gr.status===200?gr.data||{}:{};
-  const icon=guild.icon?"https://cdn.discordapp.com/icons/"+GUILD_ID+"/"+guild.icon+"."+(String(guild.icon).startsWith("a_")?"gif":"png")+"?size=128":null;
-  const avatar=user.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+"."+(String(user.avatar).startsWith("a_")?"gif":"png")+"?size=256":"https://cdn.discordapp.com/embed/avatars/"+Number((BigInt(user.id)>>22n)%6n)+".png";
-  const count=Number(guild.approximate_member_count||guild.member_count||state?.memberCount||0);
-  const onlineRaw=guild.approximate_presence_count;
-  const online=onlineRaw==null?null:Number(onlineRaw);
-  const desc=["👋 Welcome to **Shadow Syndicate**!","",...(count>0?["You're member **#"+count.toLocaleString("en-US")+"**."]:[]),
-   ...(general?["💬 Say hello in <#"+general.id+">"]:[]),
-   ...(reactionRoles?["🎭 Choose your roles in <#"+reactionRoles.id+">"]:[])].join("\n");
-  const fields=[{name:"👥 Server Members",value:count>0?count.toLocaleString("en-US"):"Updating…",inline:true}];
-  if(online!==null&&Number.isFinite(online))fields.push({name:"🟢 Online Now",value:online.toLocaleString("en-US"),inline:true});
-  const embed={title:"Welcome!",description:desc,color:0x9B72CF,author:{name:"Welcome to "+String(guild.name||"Shadow Syndicate"),...(icon?{icon_url:icon}:{})},
-   thumbnail:{url:avatar},fields,footer:{text:"Member count updates automatically."},timestamp:new Date().toISOString()};
-  const sent=await discordApi(env,"/channels/"+intro.id+"/messages","POST",{content:"<@"+user.id+"> just joined the server.",allowed_mentions:{parse:[],users:[user.id]},embeds:[embed]});
-  welcomeDone=sent.status===200;
-  if(welcomeDone&&sent.data?.id){
-   try{
-    await env.DB.prepare("CREATE TABLE IF NOT EXISTS welcome_member_stats(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT NOT NULL,message_id TEXT NOT NULL,last_total INTEGER,last_online INTEGER,updated_at TEXT NOT NULL)").run();
-    await env.DB.prepare("INSERT INTO welcome_member_stats(id,channel_id,message_id,last_total,last_online,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET channel_id=excluded.channel_id,message_id=excluded.message_id,last_total=excluded.last_total,last_online=excluded.last_online,updated_at=excluded.updated_at").bind(intro.id,String(sent.data.id),count,online,new Date().toISOString()).run();
-   }catch(e){console.error("save welcome counter",String(e));}
-  }
-  if(!welcomeDone)await memberJoinDiag(env,"welcome_failure","Message HTTP "+sent.status+" for "+user.id+" "+JSON.stringify(sent.data||{}).slice(0,170));
- }else if(!intro&&!welcomeDone)await memberJoinDiag(env,"welcome_failure","Introductions channel missing; channels HTTP "+cr.status);
- await env.DB.prepare("INSERT INTO member_join_welcomes(user_id,role_assigned,welcome_sent,updated_at,joined_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET role_assigned=excluded.role_assigned,welcome_sent=excluded.welcome_sent,updated_at=excluded.updated_at,joined_at=excluded.joined_at").bind(user.id,roleDone?1:0,welcomeDone?1:0,new Date().toISOString(),joinedAt).run();
- await memberJoinDiag(env,"join_result","user "+user.id+" role="+roleDone+" welcome="+welcomeDone+" joined="+joinedAt);
+  const result=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+user.id+"/roles/"+initiate.id,"PUT");
+  roleDone=result.status===204;
+  if(!roleDone)await memberJoinDiag(env,"role_failure","Initiate role HTTP "+result.status+" for "+user.id+" "+JSON.stringify(result.data||{}).slice(0,170));
+ }else if(!initiate){
+  await memberJoinDiag(env,"role_failure","Initiate role missing or roles HTTP "+rr.status);
+ }
+ // The Discord system-channel welcome is managed by Discord itself.
+ // Mark the join as handled to keep retries focused on failed role assignments.
+ const welcomeDone=true;
+ await env.DB.prepare("INSERT INTO member_join_welcomes(user_id,role_assigned,welcome_sent,updated_at,joined_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET role_assigned=excluded.role_assigned,welcome_sent=excluded.welcome_sent,updated_at=excluded.updated_at,joined_at=excluded.joined_at")
+  .bind(user.id,roleDone?1:0,welcomeDone?1:0,new Date().toISOString(),joinedAt).run();
+ await memberJoinDiag(env,"join_result","user "+user.id+" role="+roleDone+" native_welcome=Discord joined="+joinedAt);
 }
 
 // The Gateway can silently stall. Reconcile recently joined members from
@@ -153,6 +133,40 @@ async function reconcileRecentJoins(env){
  if(restored)await memberJoinDiag(env,"reconcile_restored","Recovered "+restored+" recent join(s); scanned "+seen+" members");
 }
 
+// Keep the two navigation links visible in the channel topic, without
+// posting a second welcome message on every member join.
+async function ensureIntroductionLinksAndStickerReplies(env,channels,intro){
+ const general=joinChannel(channels,"general","general-chat");
+ const roles=joinChannel(channels,"reaction-roles","reaction-role","choose-your-roles","choose-roles","roles");
+ if(general&&roles){
+  const guide="💬 General: https://discord.com/channels/"+GUILD_ID+"/"+general.id+" | 🎭 Reaction Roles: https://discord.com/channels/"+GUILD_ID+"/"+roles.id;
+  const existing=String(intro.topic||"");
+  const marker="🧭 Start here: ";
+  const idx=existing.indexOf(marker);
+  const prefix=idx>=0?existing.slice(0,idx).trimEnd():existing.trim();
+  const next=(prefix?prefix+"\n\n":"")+marker+guide;
+  if(next.length<=1024&&next!==existing){
+   const patch=await discordApi(env,"/channels/"+intro.id,"PATCH",{topic:next});
+   if(patch.status!==200)await memberJoinDiag(env,"welcome_links_error","Intro topic HTTP "+patch.status);
+   else await memberJoinDiag(env,"welcome_links_enabled","General and Reaction Roles linked in introductions topic");
+  }
+ }else{
+  await memberJoinDiag(env,"welcome_links_error","Missing channel: general="+Boolean(general)+" reactionRoles="+Boolean(roles));
+ }
+ // Native reply stickers require that ordinary members can send messages.
+ // Preserve all other existing permission bits and overwrites.
+ const everyone=(intro.permission_overwrites||[]).find(o=>o.id===GUILD_ID&&o.type===0);
+ const SEND_MESSAGES=2048n;
+ const allow=BigInt(everyone?.allow||"0"),deny=BigInt(everyone?.deny||"0");
+ if(!(allow&SEND_MESSAGES)||(deny&SEND_MESSAGES)){
+  const resp=await discordApi(env,"/channels/"+intro.id+"/permissions/"+GUILD_ID,"PUT",{
+   type:0,allow:String(allow|SEND_MESSAGES),deny:String(deny&~SEND_MESSAGES)
+  });
+  if(resp.status===204)await memberJoinDiag(env,"sticker_reply_permissions","Enabled Send Messages for members in introductions");
+  else await memberJoinDiag(env,"sticker_reply_error","Permission update HTTP "+resp.status+" "+JSON.stringify(resp.data||{}).slice(0,150));
+ }
+}
+
 // These Discord system messages supply the native wave/sticker reply control;
 // custom bot embeds cannot produce Discord's built-in sticker greeting UI.
 async function configureNativeJoinGreeting(env){
@@ -164,6 +178,7 @@ async function configureNativeJoinGreeting(env){
  const [cr,gr]=await Promise.all([discordApi(env,"/guilds/"+GUILD_ID+"/channels"),discordApi(env,"/guilds/"+GUILD_ID)]);
  const intro=joinChannel(cr.status===200?cr.data:[],"introductions");
  if(!intro||gr.status!==200){await memberJoinDiag(env,"system_welcome_error","Channels "+cr.status+" guild "+gr.status+" introductions="+Boolean(intro));return;}
+ await ensureIntroductionLinksAndStickerReplies(env,cr.data,intro);
  const flags=Number(gr.data?.system_channel_flags||0),desired=flags&~9;
  if(gr.data.system_channel_id===intro.id&&flags===desired){
   await env.DB.prepare("UPDATE join_system_settings SET status='enabled' WHERE id=1").run();return;
@@ -2056,10 +2071,10 @@ async function maintainCommunitySetup(env){
  if(introductions.length!==1)throw Error("Expected one introductions channel; found "+introductions.length);
  const guild=await discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=false");
  if(guild.status!==200)throw Error("Could not read server settings: "+guild.status);
- const suppressJoin=Number(guild.data.system_channel_flags||0)|1;
+ const suppressJoin=Number(guild.data.system_channel_flags||0)&~9;
  if(guild.data.system_channel_id!==introductions[0].id||Number(guild.data.system_channel_flags||0)!==suppressJoin){
   const changed=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:introductions[0].id,system_channel_flags:suppressJoin});
-  if(changed.status!==200||changed.data?.system_channel_id!==introductions[0].id||!(Number(changed.data?.system_channel_flags||0)&1))throw Error("Could not configure introductions for custom join welcomes: "+changed.status);
+  if(changed.status!==200||changed.data?.system_channel_id!==introductions[0].id||(Number(changed.data?.system_channel_flags||0)&9))throw Error("Could not configure native introductions welcome: "+changed.status);
  }
  const club=channels.data.filter(c=>[0,5].includes(c.type)&&normalize(c.name)==="club-members");
  if(club.length>1)throw Error("More than one club members channel matched; leaving them untouched.");
@@ -2067,7 +2082,7 @@ async function maintainCommunitySetup(env){
   const removed=await discordApi(env,"/channels/"+club[0].id,"DELETE");
   if(removed.status!==204)throw Error("Could not delete the club members channel: "+removed.status);
  }
- const details={introductions_channel_id:introductions[0].id,join_notices:"discord_system_channel",deleted_club_channel_id:club[0]?.id||null};
+ const details={introductions_channel_id:introductions[0].id,join_notices:"discord_native_system_channel_sticker_replies",deleted_club_channel_id:club[0]?.id||null};
  await env.DB.prepare("INSERT INTO community_setup(id,revision,status,details,last_error,updated_at) VALUES(1,?,'ready',?,NULL,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,status='ready',details=excluded.details,last_error=NULL,updated_at=excluded.updated_at").bind(revision,JSON.stringify(details),new Date().toISOString()).run();
 }
 async function maintainFeatureChannel(env){
@@ -2342,7 +2357,7 @@ export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
   ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
-  ctx.waitUntil(refreshWelcomeMemberStats(env).catch(e=>console.error("welcome member stats",String(e))));
+  // Native Discord welcome is authoritative; don't edit legacy custom welcome embeds.
   ctx.waitUntil(reconcileRecentJoins(env).catch(e=>console.error("join reconciliation",String(e))));
   ctx.waitUntil(configureNativeJoinGreeting(env).catch(e=>console.error("native welcome settings",String(e))));
   ctx.waitUntil(ensureClubEventPanel(env).catch(e=>console.error('club event panel',String(e))));
