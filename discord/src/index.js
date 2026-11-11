@@ -9,7 +9,23 @@ import { DurableObject } from "cloudflare:workers";
 async function refreshWelcomeMemberStats(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS welcome_member_stats(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT NOT NULL,message_id TEXT NOT NULL,last_total INTEGER,last_online INTEGER,updated_at TEXT NOT NULL)").run();
- const current=await env.DB.prepare("SELECT channel_id,message_id,last_total,last_online,updated_at FROM welcome_member_stats WHERE id=1").first();
+ let current=await env.DB.prepare("SELECT channel_id,message_id,last_total,last_online,updated_at FROM welcome_member_stats WHERE id=1").first();
+ if(!current){
+  // Adopt the most recent welcome already sent by this bot, without reposting it.
+  const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
+  const normalize=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+  const intro=channels.status===200&&Array.isArray(channels.data)
+   ?channels.data.find(c=>[0,5].includes(c.type)&&normalize(c.name)==="introductions"):null;
+  if(!intro)return;
+  const history=await discordApi(env,"/channels/"+intro.id+"/messages?limit=100");
+  if(history.status!==200||!Array.isArray(history.data))return;
+  const mostRecent=history.data.find(m=>m.author?.id===APPLICATION_ID &&
+    Array.isArray(m.embeds)&&m.embeds.some(e=>e.title==="Welcome!"));
+  if(!mostRecent)return;
+  await env.DB.prepare("INSERT OR IGNORE INTO welcome_member_stats(id,channel_id,message_id,last_total,last_online,updated_at) VALUES(1,?,?,NULL,NULL,?)")
+   .bind(intro.id,String(mostRecent.id),"1970-01-01T00:00:00Z").run();
+  current=await env.DB.prepare("SELECT channel_id,message_id,last_total,last_online,updated_at FROM welcome_member_stats WHERE id=1").first();
+ }
  if(!current||Date.now()-Date.parse(current.updated_at||"")<60000)return;
  const response=await discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=true");
  if(response.status!==200)throw Error("Welcome count guild query HTTP "+response.status);
