@@ -442,27 +442,45 @@ async function ensureClubEventTables(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_events(event_id TEXT PRIMARY KEY,host_id TEXT,channel_id TEXT NOT NULL,message_id TEXT,start_unix INTEGER,location TEXT,profile_url TEXT,status TEXT NOT NULL,created_at TEXT NOT NULL,ended_at TEXT)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_participants(event_id TEXT NOT NULL,discord_user_id TEXT NOT NULL,username TEXT NOT NULL,joined_at TEXT NOT NULL,PRIMARY KEY(event_id,discord_user_id))").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_panels(channel_id TEXT PRIMARY KEY,message_id TEXT NOT NULL,created_at TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_host_profiles(discord_user_id TEXT PRIMARY KEY,roblox_username TEXT NOT NULL,roblox_user_id TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_setup(key TEXT PRIMARY KEY,value TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO club_events(event_id,host_id,channel_id,message_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)").bind(LEGACY_ACID_EVENT,null,CLUB_EVENTS_CHANNEL,"1569912342442024971",1794371400,"festivesillygirls server",null,"active","2026-11-11T03:11:10.164Z").run();
 }
 async function clubEventModal(i,env){
- // Reuse the host's latest successfully posted event profile. A changed URL is
- // already recorded with every new event and becomes the next default.
+ // Load the host's previously verified Roblox username for one-tap reuse.
  const userId=i.member?.user?.id||i.user?.id;
- let savedProfile="";
+ let savedUsername="";
  if(userId&&env.DB){
   try{
-   const previous=await env.DB.prepare("SELECT profile_url FROM club_events WHERE host_id=? AND status IN ('active','ended') AND profile_url IS NOT NULL ORDER BY created_at DESC LIMIT 1").bind(userId).first();
-   const link=String(previous?.profile_url||"");
-   if(/^https:\/\/www\.roblox\.com\/users\/\d{1,20}\/profile$/.test(link))savedProfile=link;
-  }catch(error){console.error("Previous Acid Rain host profile lookup",String(error))}
+   const saved=await env.DB.prepare("SELECT roblox_username FROM club_event_host_profiles WHERE discord_user_id=?").bind(userId).first();
+   if(/^[A-Za-z0-9_]{3,20}$/.test(String(saved?.roblox_username||"")))savedUsername=String(saved.roblox_username);
+  }catch(error){console.error("Saved event username lookup",String(error))}
+  // One-time compatibility for hosts who used the original profile URL form.
+  if(!savedUsername){
+   try{
+    const last=await env.DB.prepare("SELECT profile_url FROM club_events WHERE host_id=? AND status IN ('active','ended') AND profile_url IS NOT NULL ORDER BY created_at DESC LIMIT 1").bind(userId).first();
+    const match=/^https:\/\/(?:www\.)?roblox\.com\/users\/(\d{1,20})\/profile\/?$/.exec(String(last?.profile_url||""));
+    if(match){
+     const lookup=await fetch("https://users.roblox.com/v1/users",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({userIds:[Number(match[1])],excludeBannedUsers:false}),
+      signal:AbortSignal.timeout(1200)
+     });
+     if(lookup.ok){
+      const payload=await lookup.json();
+      const player=Array.isArray(payload?.data)?payload.data.find(x=>String(x.id)===match[1]):null;
+      if(player&&/^[A-Za-z0-9_]{3,20}$/.test(String(player.name||"")))savedUsername=String(player.name);
+     }
+    }
+   }catch(error){console.error("Legacy event username lookup",String(error))}
+  }
  }
  const field=(id,label,placeholder,max=120,defaultValue)=>({type:1,components:[{type:4,custom_id:id,label,style:1,required:true,placeholder,min_length:1,max_length:max,...(defaultValue?{value:defaultValue}:{})}]});
  return discordResponse({type:9,data:{custom_id:"club_event_create_modal",title:"Create Acid Rain Event",components:[
   field("event_date","Date (YYYY-MM-DD)","2026-11-11",10),
   field("event_time","Start time (Eastern Time)","11:30 PM",10),
   field("event_location","Server / location","My Roblox private server",150),
-  field("event_profile","Your Roblox profile link","https://www.roblox.com/users/123456/profile",140,savedProfile)
+  field("event_username","Your Roblox username (not display name)","RobloxUsername",20,savedUsername)
  ]}});
 }
 function clubEventInput(i,id){
@@ -501,18 +519,41 @@ async function createClubEvent(i,env){
  if(!host?.id)return reply("Could not identify the event host.");
  const date=clubEventInput(i,"event_date"),time=clubEventInput(i,"event_time");
  const location=clubEventInput(i,"event_location").replace(/[\n\r\t<>@*_\[\]\x60]/g," ").replace(/\s+/g," ").trim();
- const profile=clubEventInput(i,"event_profile");
- const match=/^https:\/\/(?:www\.)?roblox\.com\/users\/(\d{1,20})\/profile\/?(?:\?.*)?$/i.exec(profile);
- if(!match)return reply("Enter your Roblox profile URL, like https://www.roblox.com/users/123456/profile.");
+ const username=clubEventInput(i,"event_username").replace(/^@/,"");
+ if(!/^[A-Za-z0-9_]{3,20}$/.test(username))return reply("Enter your Roblox **username** (3–20 letters, numbers, or underscores), not your display name or profile URL.");
  if(location.length<3||location.length>150)return reply("Enter a server or location (3–150 characters).");
  const start=clubEventStart(date,time);
  if(!start)return reply("Enter a real date (YYYY-MM-DD) and an Eastern Time like 11:30 PM.");
  if(start*1000<Date.now()+60000||start*1000>Date.now()+60*86400000)return reply("Choose a start time at least one minute from now and within the next 60 days.");
  const existing=await env.DB.prepare("SELECT event_id FROM club_events WHERE host_id=? AND status IN ('active','creating') LIMIT 1").bind(host.id).first();
  if(existing)return reply("You already have an open event. End that event before creating another.");
+ // Resolve the exact username on Roblox before announcing anything.
+ // Roblox display names are not unique; use the canonical account ID for links.
+ let robloxUser;
+ try{
+  const lookup=await fetch("https://users.roblox.com/v1/usernames/users",{
+   method:"POST",
+   headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({usernames:[username],excludeBannedUsers:false}),
+   signal:AbortSignal.timeout(8000)
+  });
+  if(!lookup.ok)return reply("Roblox username verification is temporarily unavailable. Please try again in a moment.");
+  const payload=await lookup.json();
+  robloxUser=Array.isArray(payload?.data)?payload.data.find(x=>
+   String(x.requestedUsername||x.name||"").toLowerCase()===username.toLowerCase()
+   && /^\d{1,20}$/.test(String(x.id||""))
+   && /^[A-Za-z0-9_]{3,20}$/.test(String(x.name||""))
+  ):null;
+ }catch(error){
+  console.error("Acid Rain Roblox username resolution",String(error));
+  return reply("Couldn't verify that Roblox username right now. Please try again.");
+ }
+ if(!robloxUser)return reply("That Roblox **username** wasn't found. Check the account username (not its display name) and try again.");
+ const robloxId=String(robloxUser.id),robloxName=String(robloxUser.name);
+ const robloxProfile="https://www.roblox.com/users/"+robloxId+"/profile";
  const eventId="acid_"+Math.floor(Date.now()/1000).toString(36)+"_"+crypto.randomUUID().replace(/-/g,"").slice(0,12);
  const now=new Date().toISOString();
- await env.DB.prepare("INSERT INTO club_events(event_id,host_id,channel_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?)").bind(eventId,host.id,CLUB_EVENTS_CHANNEL,start,location,"https://www.roblox.com/users/"+match[1]+"/profile","creating",now).run();
+ await env.DB.prepare("INSERT INTO club_events(event_id,host_id,channel_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?)").bind(eventId,host.id,CLUB_EVENTS_CHANNEL,start,location,robloxProfile,"creating",now).run();
  const payload={content:"@everyone",allowed_mentions:{parse:["everyone"]},embeds:[{
   title:"☣️ CLUB EVENT: ACID RAIN",
   description:"Acid Rain is back! Hosted by <@"+host.id+">.\n\n**Please sign up as a participant** using **Join event** below. Add the host's Roblox account before the event begins.",
@@ -521,7 +562,7 @@ async function createClubEvent(i,env){
    {name:"When",value:"<t:"+start+":F> (<t:"+start+":R>)",inline:false},
    {name:"Server / Location",value:location,inline:false},
    {name:"Event Host",value:"<@"+host.id+">",inline:false},
-   {name:"Add the host on Roblox",value:"[Open Roblox profile](https://www.roblox.com/users/"+match[1]+"/profile)",inline:false},
+   {name:"Add the host on Roblox",value:"[Add @"+robloxName+" on Roblox]("+robloxProfile+")",inline:false},
    {name:"Participants",value:"0 people signed up",inline:true}
   ],footer:{text:"Shadow Syndicate • Club Events"}
  }],components:clubEventActions(eventId)};
@@ -531,6 +572,12 @@ async function createClubEvent(i,env){
   return reply("Could not post your event. Please try again.");
  }
  await env.DB.prepare("UPDATE club_events SET status='active',message_id=? WHERE event_id=?").bind(String(posted.data.id),eventId).run();
+ // Save the verified username so the next Create Event form opens prefilled.
+ try{
+  await env.DB.prepare("INSERT INTO club_event_host_profiles(discord_user_id,roblox_username,roblox_user_id,updated_at) VALUES(?,?,?,?) ON CONFLICT(discord_user_id) DO UPDATE SET roblox_username=excluded.roblox_username,roblox_user_id=excluded.roblox_user_id,updated_at=excluded.updated_at")
+   .bind(host.id,robloxName,robloxId,new Date().toISOString()).run();
+ }catch(error){console.error("Save event host Roblox username",String(error))}
+
  return reply("✅ Your Acid Rain event is live! [View the announcement](https://discord.com/channels/"+GUILD_ID+"/"+CLUB_EVENTS_CHANNEL+"/"+posted.data.id+"). The signup and End Event buttons are ready.");
 }
 async function endClubEvent(i,env,eventId){
@@ -560,7 +607,7 @@ async function ensureClubEventPanel(env){
  if(!known){
   const payload={embeds:[{
    title:"☣️ Create an Acid Rain Event",
-   description:"Want to host an Acid Rain event? Tap **Create Event** and fill in your date, start time, Roblox server/location, and Roblox profile link.\n\nYour announcement will be posted here with **Join event**, **See Participants**, and **End Event** buttons. Everyone can sign up; only the host or staff can end it.\n\n**Times are entered in Eastern Time (ET).** One active event per host. New event announcements ping @everyone. Please only create events you're hosting.",
+   description:"Want to host an Acid Rain event? Tap **Create Event** and fill in your date, start time, Roblox server/location, and your Roblox username. The bot finds and links your profile automatically, then remembers your username for next time.\n\nYour announcement will be posted here with **Join event**, **See Participants**, and **End Event** buttons. Everyone can sign up; only the host or staff can end it.\n\n**Times are entered in Eastern Time (ET).** One active event per host. New event announcements ping @everyone. Please only create events you're hosting.",
    color:0x9B72CF,footer:{text:"Shadow Syndicate • Club Events"}
   }],components:[{type:1,components:[{type:2,style:1,custom_id:"club_event_create",label:"Create Event",emoji:{name:"📅"}}]}],allowed_mentions:{parse:[]}};
   const sent=await discordApi(env,"/channels/"+channel+"/messages","POST",payload);
@@ -581,6 +628,24 @@ async function ensureClubEventPanel(env){
    });
    if(changed.status!==200)throw Error("Cannot update Club Event creator panel: HTTP "+changed.status);
    await env.DB.prepare("INSERT OR REPLACE INTO club_event_setup(key,value) VALUES('panel_everyone_notice','installed')").run();
+  }
+ }
+ // Update the original Create Event panel once, without reposting or pinging.
+ const usernamePanel=await env.DB.prepare("SELECT value FROM club_event_setup WHERE key='username_form_notice'").first();
+ if(!usernamePanel){
+  const panel=await env.DB.prepare("SELECT message_id FROM club_event_panels WHERE channel_id=?").bind(channel).first();
+  if(panel?.message_id){
+   const prior=await discordApi(env,"/channels/"+channel+"/messages/"+panel.message_id);
+   if(prior.status!==200||!prior.data?.embeds?.[0])throw Error("Could not load existing event creator announcement");
+   const old=prior.data.embeds[0];
+   const changed=String(old.description||"").replace("Roblox profile link.","your Roblox username. The bot finds and links your profile automatically, then remembers your username for next time.");
+   if(changed===old.description&&old.description?.includes("Roblox profile link"))throw Error("Could not replace creator instructions");
+   const response=await discordApi(env,"/channels/"+channel+"/messages/"+panel.message_id,"PATCH",{
+    embeds:[{title:String(old.title||"☣️ Create an Acid Rain Event"),description:changed,color:0x9B72CF,footer:{text:"Shadow Syndicate • Club Events"}}],
+    allowed_mentions:{parse:[]}
+   });
+   if(response.status!==200)throw Error("Event creator instructions update HTTP "+response.status);
+   await env.DB.prepare("INSERT OR REPLACE INTO club_event_setup(key,value) VALUES('username_form_notice','installed')").run();
   }
  }
  const done=await env.DB.prepare("SELECT value FROM club_event_setup WHERE key='legacy_end_button'").first();
