@@ -56,58 +56,147 @@ async function refreshWelcomeMemberStats(env){
   .bind(totalOk?total:current.last_total,onlineOk?online:current.last_online,stamp).run();
 }
 
+
+async function ensureJoinTrackingTable(env) {
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_join_welcomes(user_id TEXT PRIMARY KEY,role_assigned INTEGER NOT NULL DEFAULT 0,welcome_sent INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,joined_at TEXT)").run();
+ const columns=await env.DB.prepare("PRAGMA table_info(member_join_welcomes)").all();
+ if(!(columns.results||[]).some(c=>c.name==="joined_at")){
+  try{await env.DB.prepare("ALTER TABLE member_join_welcomes ADD COLUMN joined_at TEXT").run();}
+  catch(e){if(!String(e).toLowerCase().includes("duplicate column"))throw e;}
+ }
+}
+function joinChannel(channels,...names){
+ const norm=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+ return (channels||[]).find(c=>[0,5].includes(c.type)&&names.includes(norm(c.name)))||null;
+}
 async function handleMemberJoin(env,state,member){
- const user=member?.user;if(!user?.id||member.guild_id!==GUILD_ID)return;
- await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_join_welcomes(user_id TEXT PRIMARY KEY,role_assigned INTEGER NOT NULL DEFAULT 0,welcome_sent INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
- const prior=await env.DB.prepare("SELECT role_assigned,welcome_sent FROM member_join_welcomes WHERE user_id=?").bind(user.id).first();
- if(prior?.role_assigned&&prior?.welcome_sent)return;
+ const user=member?.user;if(!env.DB||!user?.id||member.guild_id!==GUILD_ID||user.bot)return;
+ await ensureJoinTrackingTable(env);
+ const joinedAt=String(member.joined_at||"");
+ const prior=await env.DB.prepare("SELECT role_assigned,welcome_sent,joined_at FROM member_join_welcomes WHERE user_id=?").bind(user.id).first();
+ const sameJoin=!!(joinedAt&&prior?.joined_at===joinedAt);
+ if(sameJoin&&prior.role_assigned&&prior.welcome_sent)return;
  const [rr,cr,gr]=await Promise.all([discordApi(env,"/guilds/"+GUILD_ID+"/roles"),discordApi(env,"/guilds/"+GUILD_ID+"/channels"),discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=true")]);
  const initiate=rr.status===200&&Array.isArray(rr.data)?rr.data.find(r=>String(r.name||"").trim().toLowerCase()==="initiate"):null;
- let roleDone=!!prior?.role_assigned;
- if(!roleDone&&initiate){const r=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+user.id+"/roles/"+initiate.id,"PUT");roleDone=r.status===204;if(!roleDone)console.error("join role assignment failed",user.id,r.status,r.data);}
- else if(!initiate)console.error("join role assignment failed: Initiate role not found");
- const norm=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
- const intro=cr.status===200&&Array.isArray(cr.data)?cr.data.find(c=>[0,5].includes(c.type)&&norm(c.name)==="introductions"):null;
- const general=cr.status===200&&Array.isArray(cr.data)?cr.data.find(c=>[0,5].includes(c.type)&&norm(c.name)==="general"):null;
- const reactionRoles=cr.status===200&&Array.isArray(cr.data)?cr.data.find(c=>[0,5].includes(c.type)&&["reaction-roles","reaction-role","roles"].includes(norm(c.name))):null;
- let welcomeDone=!!prior?.welcome_sent;
+ let roleDone=!!(sameJoin&&prior?.role_assigned);
+ if(initiate&&Array.isArray(member.roles)&&member.roles.includes(initiate.id))roleDone=true;
+ if(!roleDone&&initiate){
+  const r=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+user.id+"/roles/"+initiate.id,"PUT");
+  roleDone=r.status===204;
+  if(!roleDone)await memberJoinDiag(env,"role_failure","Initiate role HTTP "+r.status+" for "+user.id+" "+JSON.stringify(r.data||{}).slice(0,170));
+ }else if(!initiate){await memberJoinDiag(env,"role_failure","Initiate role missing or roles HTTP "+rr.status);}
+ const channels=cr.status===200&&Array.isArray(cr.data)?cr.data:[];
+ const intro=joinChannel(channels,"introductions");
+ const general=joinChannel(channels,"general","general-chat");
+ const reactionRoles=joinChannel(channels,"reaction-roles","reaction-role","choose-your-roles","choose-roles","roles");
+ let welcomeDone=!!(sameJoin&&prior?.welcome_sent);
  if(!welcomeDone&&intro){
-  const guild=gr.status===200?gr.data:{};
+  const guild=gr.status===200?gr.data||{}:{};
   const icon=guild.icon?"https://cdn.discordapp.com/icons/"+GUILD_ID+"/"+guild.icon+"."+(String(guild.icon).startsWith("a_")?"gif":"png")+"?size=128":null;
   const avatar=user.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+"."+(String(user.avatar).startsWith("a_")?"gif":"png")+"?size=256":"https://cdn.discordapp.com/embed/avatars/"+Number((BigInt(user.id)>>22n)%6n)+".png";
-  const count=Number(guild.approximate_member_count||guild.member_count||state.memberCount||0);
+  const count=Number(guild.approximate_member_count||guild.member_count||state?.memberCount||0);
   const onlineRaw=guild.approximate_presence_count;
   const online=onlineRaw==null?null:Number(onlineRaw);
-  const description=["👋 Welcome to **Shadow Syndicate**!","",...(count>0?["You're member **#"+count.toLocaleString("en-US")+"**."]:[]),
+  const desc=["👋 Welcome to **Shadow Syndicate**!","",...(count>0?["You're member **#"+count.toLocaleString("en-US")+"**."]:[]),
    ...(general?["💬 Say hello in <#"+general.id+">"]:[]),
    ...(reactionRoles?["🎭 Choose your roles in <#"+reactionRoles.id+">"]:[])].join("\n");
   const fields=[{name:"👥 Server Members",value:count>0?count.toLocaleString("en-US"):"Updating…",inline:true}];
   if(online!==null&&Number.isFinite(online))fields.push({name:"🟢 Online Now",value:online.toLocaleString("en-US"),inline:true});
-  const embed={title:"Welcome!",description,color:0x9B72CF,author:{name:"Welcome to "+String(guild.name||"Shadow Syndicate"),...(icon?{icon_url:icon}:{})},
+  const embed={title:"Welcome!",description:desc,color:0x9B72CF,author:{name:"Welcome to "+String(guild.name||"Shadow Syndicate"),...(icon?{icon_url:icon}:{})},
    thumbnail:{url:avatar},fields,footer:{text:"Member count updates automatically."},timestamp:new Date().toISOString()};
   const sent=await discordApi(env,"/channels/"+intro.id+"/messages","POST",{content:"<@"+user.id+"> just joined the server.",allowed_mentions:{parse:[],users:[user.id]},embeds:[embed]});
   welcomeDone=sent.status===200;
   if(welcomeDone&&sent.data?.id){
    try{
     await env.DB.prepare("CREATE TABLE IF NOT EXISTS welcome_member_stats(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT NOT NULL,message_id TEXT NOT NULL,last_total INTEGER,last_online INTEGER,updated_at TEXT NOT NULL)").run();
-    await env.DB.prepare("INSERT INTO welcome_member_stats(id,channel_id,message_id,last_total,last_online,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET channel_id=excluded.channel_id,message_id=excluded.message_id,last_total=excluded.last_total,last_online=excluded.last_online,updated_at=excluded.updated_at")
-     .bind(intro.id,String(sent.data.id),count,online,new Date().toISOString()).run();
-   }catch(error){console.error("save welcome counter target",String(error))}
+    await env.DB.prepare("INSERT INTO welcome_member_stats(id,channel_id,message_id,last_total,last_online,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET channel_id=excluded.channel_id,message_id=excluded.message_id,last_total=excluded.last_total,last_online=excluded.last_online,updated_at=excluded.updated_at").bind(intro.id,String(sent.data.id),count,online,new Date().toISOString()).run();
+   }catch(e){console.error("save welcome counter",String(e));}
   }
-  if(!welcomeDone)console.error("join welcome message failed",user.id,sent.status,sent.data);
- }else if(!intro&&!welcomeDone)console.error("join welcome failed: introductions channel not found");
- await env.DB.prepare("INSERT INTO member_join_welcomes(user_id,role_assigned,welcome_sent,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET role_assigned=MAX(role_assigned,excluded.role_assigned),welcome_sent=MAX(welcome_sent,excluded.welcome_sent),updated_at=excluded.updated_at").bind(user.id,roleDone?1:0,welcomeDone?1:0,new Date().toISOString()).run();
+  if(!welcomeDone)await memberJoinDiag(env,"welcome_failure","Message HTTP "+sent.status+" for "+user.id+" "+JSON.stringify(sent.data||{}).slice(0,170));
+ }else if(!intro&&!welcomeDone)await memberJoinDiag(env,"welcome_failure","Introductions channel missing; channels HTTP "+cr.status);
+ await env.DB.prepare("INSERT INTO member_join_welcomes(user_id,role_assigned,welcome_sent,updated_at,joined_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET role_assigned=excluded.role_assigned,welcome_sent=excluded.welcome_sent,updated_at=excluded.updated_at,joined_at=excluded.joined_at").bind(user.id,roleDone?1:0,welcomeDone?1:0,new Date().toISOString(),joinedAt).run();
+ await memberJoinDiag(env,"join_result","user "+user.id+" role="+roleDone+" welcome="+welcomeDone+" joined="+joinedAt);
+}
+
+// The Gateway can silently stall. Reconcile recently joined members from
+// Discord REST to recover missed events and retry transient API failures.
+async function reconcileRecentJoins(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await ensureJoinTrackingTable(env);
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS join_reconcile_state(id INTEGER PRIMARY KEY CHECK(id=1),last_run INTEGER NOT NULL)").run();
+ const now=Date.now(),prior=await env.DB.prepare("SELECT last_run FROM join_reconcile_state WHERE id=1").first();
+ if(prior&&now-Number(prior.last_run)<120000)return;
+ await env.DB.prepare("INSERT INTO join_reconcile_state(id,last_run) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET last_run=excluded.last_run").bind(now).run();
+ let after="",seen=0,restored=0;
+ for(let page=0;page<5;page++){
+  const response=await discordApi(env,"/guilds/"+GUILD_ID+"/members?limit=1000"+(after?"&after="+after:""));
+  if(response.status!==200||!Array.isArray(response.data)){
+   await memberJoinDiag(env,"reconcile_error","List guild members HTTP "+response.status);
+   return;
+  }
+  const members=response.data;
+  for(const member of members){
+   if(member?.user?.bot||!member?.user?.id||!member?.joined_at)continue;
+   seen++;
+   const joined=Date.parse(member.joined_at);
+   if(!Number.isFinite(joined)||joined<now-90*60000||joined>now+60000)continue;
+   const prior=await env.DB.prepare("SELECT joined_at,role_assigned,welcome_sent FROM member_join_welcomes WHERE user_id=?").bind(member.user.id).first();
+   if(prior?.joined_at===member.joined_at&&prior.role_assigned&&prior.welcome_sent)continue;
+   if(restored>=12)break;
+   try{await handleMemberJoin(env,{memberCount:0},{...member,guild_id:GUILD_ID});restored++;}
+   catch(e){await memberJoinDiag(env,"reconcile_error",String(e).slice(0,360));}
+  }
+  if(restored>=12||members.length<1000)break;
+  after=members[members.length-1]?.user?.id||"";
+  if(!after)break;
+ }
+ if(restored)await memberJoinDiag(env,"reconcile_restored","Recovered "+restored+" recent join(s); scanned "+seen+" members");
+}
+
+// These Discord system messages supply the native wave/sticker reply control;
+// custom bot embeds cannot produce Discord's built-in sticker greeting UI.
+async function configureNativeJoinGreeting(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS join_system_settings(id INTEGER PRIMARY KEY CHECK(id=1),last_checked INTEGER NOT NULL,status TEXT)").run();
+ const now=Date.now(),prior=await env.DB.prepare("SELECT last_checked FROM join_system_settings WHERE id=1").first();
+ if(prior&&now-Number(prior.last_checked)<15*60000)return;
+ await env.DB.prepare("INSERT INTO join_system_settings(id,last_checked,status) VALUES(1,?,'checking') ON CONFLICT(id) DO UPDATE SET last_checked=excluded.last_checked").bind(now).run();
+ const [cr,gr]=await Promise.all([discordApi(env,"/guilds/"+GUILD_ID+"/channels"),discordApi(env,"/guilds/"+GUILD_ID)]);
+ const intro=joinChannel(cr.status===200?cr.data:[],"introductions");
+ if(!intro||gr.status!==200){await memberJoinDiag(env,"system_welcome_error","Channels "+cr.status+" guild "+gr.status+" introductions="+Boolean(intro));return;}
+ const flags=Number(gr.data?.system_channel_flags||0),desired=flags&~9;
+ if(gr.data.system_channel_id===intro.id&&flags===desired){
+  await env.DB.prepare("UPDATE join_system_settings SET status='enabled' WHERE id=1").run();return;
+ }
+ const patch=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:intro.id,system_channel_flags:desired});
+ if(patch.status===200){
+  await env.DB.prepare("UPDATE join_system_settings SET status='enabled' WHERE id=1").run();
+  await memberJoinDiag(env,"system_welcome_enabled","Native greeting and sticker replies enabled in introductions");
+ }else{
+  await env.DB.prepare("UPDATE join_system_settings SET status=? WHERE id=1").bind("HTTP "+patch.status).run();
+  await memberJoinDiag(env,"system_welcome_error","Guild settings HTTP "+patch.status+" "+JSON.stringify(patch.data||{}).slice(0,220));
+ }
 }
 export class MemberJoinGateway extends DurableObject{
- constructor(ctx,env){super(ctx,env);this.socket=null;this.heartbeatTimer=null;this.heartbeatMs=45000;this.waitingForAck=false;this.seq=null;this.session=null;this.memberCount=0;}
+ constructor(ctx,env){super(ctx,env);this.socket=null;this.heartbeatTimer=null;this.heartbeatMs=45000;this.waitingForAck=false;this.seq=null;this.session=null;this.memberCount=0;this.connectedAt=0;this.lastAckAt=0;this.lastReadyAt=0;}
  async fetch(){try{await memberJoinDiag(this.env,"gateway_start","scheduled binding invoked");await this.connect();return new Response("Gateway listener starting",{status:202});}catch(e){console.error("Discord member gateway connect failed",String(e));return new Response("Gateway listener unavailable",{status:503});}}
  async alarm(){try{await this.connect();}catch(e){console.error("Discord member gateway reconnect failed",String(e));await this.ctx.storage.setAlarm(Date.now()+15000);}}
  async connect(){
-  if(this.socket&&(this.socket.readyState===0||this.socket.readyState===1))return;
+  if(this.socket&&(this.socket.readyState===0||this.socket.readyState===1)){
+   const now=Date.now(),age=now-this.connectedAt;
+   const stale=this.socket.readyState===0?age>30000:
+    (this.lastReadyAt===0&&age>90000)||(this.lastAckAt>0&&now-this.lastAckAt>Math.max(120000,this.heartbeatMs*3));
+   if(!stale)return;
+   await memberJoinDiag(this.env,"gateway_stale","Reconnecting stalled socket age="+age+" state="+this.socket.readyState);
+   try{this.socket.close(4000,"Gateway watchdog recovery");}catch{}
+   this.socket=null;this.waitingForAck=false;
+   if(this.heartbeatTimer){clearTimeout(this.heartbeatTimer);this.heartbeatTimer=null;}
+   this.session=null;await this.ctx.storage.delete("discord_session");
+  }
   const saved=await this.ctx.storage.get("discord_session")||null;this.session=saved;this.seq=saved?.seq??null;this.memberCount=Number(await this.ctx.storage.get("member_count")||0);
   const root=saved?.resume_gateway_url||"wss://gateway.discord.gg/",url=root+(root.includes("?")?"&":"?")+"v=10&encoding=json";
   await memberJoinDiag(this.env,"gateway_connect","Opening "+root);
-  const ws=new WebSocket(url);this.socket=ws;
+  const ws=new WebSocket(url);this.socket=ws;this.connectedAt=Date.now();this.lastReadyAt=0;this.lastAckAt=0;
   ws.addEventListener("open",()=>this.ctx.waitUntil(memberJoinDiag(this.env,"gateway_open","WebSocket opened")));
   ws.addEventListener("message",e=>this.ctx.waitUntil(this.onMessage(ws,e.data).catch(x=>console.error("Discord gateway message error",String(x)))));
   ws.addEventListener("close",e=>{this.ctx.waitUntil(memberJoinDiag(this.env,"gateway_close",String(e.code)+" "+String(e.reason||"")));if(this.socket===ws)this.socket=null;if(this.heartbeatTimer){clearTimeout(this.heartbeatTimer);this.heartbeatTimer=null;}this.waitingForAck=false;this.ctx.waitUntil(this.ctx.storage.setAlarm(Date.now()+15000).catch(()=>{}));console.error("Discord gateway closed",e.code,e.reason||"");});
@@ -119,13 +208,18 @@ export class MemberJoinGateway extends DurableObject{
   if(ws!==this.socket)return;const p=JSON.parse(typeof raw==="string"?raw:new TextDecoder().decode(raw));
   if(p.s!==null&&p.s!==undefined){this.seq=p.s;if(this.session){this.session.seq=this.seq;await this.ctx.storage.put("discord_session",this.session);}}
   if(p.op===10){this.ctx.waitUntil(memberJoinDiag(this.env,"gateway_hello","Received HELLO; identifying with intents 3"));this.heartbeatMs=Number(p.d?.heartbeat_interval)||45000;this.scheduleHeartbeat(ws,Math.floor(Math.random()*this.heartbeatMs));if(this.session?.session_id&&this.seq!==null)this.send(ws,{op:6,d:{token:this.env.DISCORD_BOT_TOKEN,session_id:this.session.session_id,seq:this.seq}});else this.send(ws,{op:2,d:{token:this.env.DISCORD_BOT_TOKEN,intents:3,properties:{os:"cloudflare-workers",browser:"syndicate-hub",device:"syndicate-hub"}}});return;}
-  if(p.op===11){this.waitingForAck=false;return;}if(p.op===1){this.waitingForAck=true;this.send(ws,{op:1,d:this.seq});return;}if(p.op===7){try{ws.close(4001,"Gateway requested reconnect");}catch{}return;}
+  if(p.op===11){this.waitingForAck=false;this.lastAckAt=Date.now();return;}if(p.op===1){this.waitingForAck=true;this.send(ws,{op:1,d:this.seq});return;}if(p.op===7){try{ws.close(4001,"Gateway requested reconnect");}catch{}return;}
   if(p.op===9){this.session=null;this.seq=null;await this.ctx.storage.delete("discord_session");setTimeout(()=>{if(ws===this.socket)try{ws.close(4002,"Invalid gateway session");}catch{}},1000);return;}
   if(p.op!==0)return;
-  if(p.t==="READY"){this.ctx.waitUntil(memberJoinDiag(this.env,"gateway_ready","READY received; bot user "+String(p.d?.user?.id||"unknown")));this.session={session_id:p.d.session_id,resume_gateway_url:p.d.resume_gateway_url,seq:this.seq};await this.ctx.storage.put("discord_session",this.session);return;}
+  if(p.t==="RESUMED"){this.lastReadyAt=Date.now();this.ctx.waitUntil(memberJoinDiag(this.env,"gateway_resumed","Discord session resumed"));return;}
+  if(p.t==="READY"){this.lastReadyAt=Date.now();this.ctx.waitUntil(memberJoinDiag(this.env,"gateway_ready","READY received; bot user "+String(p.d?.user?.id||"unknown")));this.session={session_id:p.d.session_id,resume_gateway_url:p.d.resume_gateway_url,seq:this.seq};await this.ctx.storage.put("discord_session",this.session);return;}
   if(p.t==="GUILD_CREATE"&&p.d?.id===GUILD_ID&&Number.isFinite(p.d.member_count)){this.memberCount=p.d.member_count;await this.ctx.storage.put("member_count",this.memberCount);return;}
   if(p.t==="GUILD_MEMBER_ADD"&&p.d?.guild_id===GUILD_ID){this.ctx.waitUntil(memberJoinDiag(this.env,"member_add","Received join for "+String(p.d?.user?.id||"unknown")));this.memberCount=Number(this.memberCount||0)+1;await this.ctx.storage.put("member_count",this.memberCount);p.d.memberCount=this.memberCount;this.ctx.waitUntil(handleMemberJoin(this.env,this,p.d).catch(e=>console.error("member join processing failed",String(e))));return;}
-  if(p.t==="GUILD_MEMBER_REMOVE"&&p.d?.guild_id===GUILD_ID){this.memberCount=Math.max(0,Number(this.memberCount||0)-1);await this.ctx.storage.put("member_count",this.memberCount);}
+  if(p.t==="GUILD_MEMBER_REMOVE"&&p.d?.guild_id===GUILD_ID){
+   this.memberCount=Math.max(0,Number(this.memberCount||0)-1);await this.ctx.storage.put("member_count",this.memberCount);
+   if(p.d?.user?.id)this.ctx.waitUntil((async()=>{await ensureJoinTrackingTable(this.env);await this.env.DB.prepare("DELETE FROM member_join_welcomes WHERE user_id=?").bind(p.d.user.id).run();await memberJoinDiag(this.env,"member_remove","Cleared welcome state for "+p.d.user.id);})().catch(e=>console.error("member leave cleanup",String(e))));
+   return;
+  }
  }
 }
 // Automatically maintained Discord status boards. Feed metadata is informational.
@@ -2249,6 +2343,8 @@ export default {
   if(!env.DISCORD_BOT_TOKEN)return;
   ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
   ctx.waitUntil(refreshWelcomeMemberStats(env).catch(e=>console.error("welcome member stats",String(e))));
+  ctx.waitUntil(reconcileRecentJoins(env).catch(e=>console.error("join reconciliation",String(e))));
+  ctx.waitUntil(configureNativeJoinGreeting(env).catch(e=>console.error("native welcome settings",String(e))));
   ctx.waitUntil(ensureClubEventPanel(env).catch(e=>console.error('club event panel',String(e))));
   if(env.MEMBER_JOIN_GATEWAY)ctx.waitUntil(env.MEMBER_JOIN_GATEWAY.getByName("member-join-listener").fetch("https://internal/start",{method:"POST"}).catch(e=>console.error("member gateway start",String(e))));
   ctx.waitUntil(removeObsoleteGetKeyDescription(env).catch(e=>console.error("bot description update",String(e))));
