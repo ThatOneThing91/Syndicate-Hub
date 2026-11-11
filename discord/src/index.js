@@ -445,13 +445,24 @@ async function ensureClubEventTables(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_setup(key TEXT PRIMARY KEY,value TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO club_events(event_id,host_id,channel_id,message_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)").bind(LEGACY_ACID_EVENT,null,CLUB_EVENTS_CHANNEL,"1569912342442024971",1794371400,"festivesillygirls server",null,"active","2026-11-11T03:11:10.164Z").run();
 }
-function clubEventModal(){
- const field=(id,label,placeholder,max=120)=>({type:1,components:[{type:4,custom_id:id,label,style:1,required:true,placeholder,min_length:1,max_length:max}]});
+async function clubEventModal(i,env){
+ // Reuse the host's latest successfully posted event profile. A changed URL is
+ // already recorded with every new event and becomes the next default.
+ const userId=i.member?.user?.id||i.user?.id;
+ let savedProfile="";
+ if(userId&&env.DB){
+  try{
+   const previous=await env.DB.prepare("SELECT profile_url FROM club_events WHERE host_id=? AND status IN ('active','ended') AND profile_url IS NOT NULL ORDER BY created_at DESC LIMIT 1").bind(userId).first();
+   const link=String(previous?.profile_url||"");
+   if(/^https:\/\/www\.roblox\.com\/users\/\d{1,20}\/profile$/.test(link))savedProfile=link;
+  }catch(error){console.error("Previous Acid Rain host profile lookup",String(error))}
+ }
+ const field=(id,label,placeholder,max=120,defaultValue)=>({type:1,components:[{type:4,custom_id:id,label,style:1,required:true,placeholder,min_length:1,max_length:max,...(defaultValue?{value:defaultValue}:{})}]});
  return discordResponse({type:9,data:{custom_id:"club_event_create_modal",title:"Create Acid Rain Event",components:[
   field("event_date","Date (YYYY-MM-DD)","2026-11-11",10),
   field("event_time","Start time (Eastern Time)","11:30 PM",10),
   field("event_location","Server / location","My Roblox private server",150),
-  field("event_profile","Your Roblox profile link","https://www.roblox.com/users/123456/profile",140)
+  field("event_profile","Your Roblox profile link","https://www.roblox.com/users/123456/profile",140,savedProfile)
  ]}});
 }
 function clubEventInput(i,id){
@@ -2157,7 +2168,7 @@ export default {
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
-   if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===3&&i.data?.custom_id==="club_event_create")return clubEventModal();
+   if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===3&&i.data?.custom_id==="club_event_create")return clubEventModal(i,env);
    if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===5&&i.data?.custom_id==="club_event_create_modal")return delayedReply(i,env,ctx,()=>createClubEvent(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_end:")){
     const eventId=String(i.data.custom_id.slice("club_event_end:".length));
