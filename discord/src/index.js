@@ -240,6 +240,9 @@ async function applyShadowRoleIcons(env){
   await env.DB.prepare("UPDATE shadow_role_icon_setup SET status='partial',updated_at=?,summary=? WHERE id=1").bind(new Date().toISOString(),"Could not list roles: HTTP "+response.status).run();return;
  }
  const roles=response.data.filter(r=>r&&r.id!==GUILD_ID&&!r.managed).sort((a,b)=>Number(a.position||0)-Number(b.position||0));
+ const me=await discordApi(env,"/users/@me");
+ const botMember=me.status===200&&me.data?.id?await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+me.data.id):{status:0,data:null};
+ const botRoles=roles.filter(r=>(botMember.data?.roles||[]).includes(r.id)).map(r=>({name:r.name,id:r.id,position:r.position}));
  let added=0,existing=0,failed=0;const errors=[];
  for(const role of roles){
   if(role.icon||role.unicode_emoji){existing++;continue;}
@@ -251,10 +254,10 @@ async function applyShadowRoleIcons(env){
    await new Promise(resolve=>setTimeout(resolve,wait));attempt++;
   }while(attempt<5);
   if(result.status===200){added++;}
-  else{failed++;errors.push(String(role.name||role.id)+": HTTP "+result.status);}
+  else{failed++;errors.push({name:role.name,id:role.id,position:role.position,status:result.status,response:result.data});}
   await new Promise(resolve=>setTimeout(resolve,550));
  }
- const summary=JSON.stringify({eligible:roles.length,added,alreadyIconed:existing,failed,errors:errors.slice(0,20)});
+ const summary=JSON.stringify({eligible:roles.length,added,alreadyIconed:existing,failed,botRolePositions:botRoles,errors:errors.slice(0,20)});
  await env.DB.prepare("UPDATE shadow_role_icon_setup SET status=?,updated_at=?,summary=? WHERE id=1").bind(failed?"partial":"done",new Date().toISOString(),summary).run();
  await memberJoinDiag(env,"role_icons_setup",summary);
 }
