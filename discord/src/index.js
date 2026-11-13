@@ -341,6 +341,7 @@ async function inspectBirthdayPanelButtons(env){
 }
 async function ensureClubNightPollPreview(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await inspectBirthdayPanelButtons(env);
  const channelId="1564527161216335902";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_night_poll_preview(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL DEFAULT 'pending',message_id TEXT,updated_at TEXT NOT NULL,error TEXT,countdown_message_id TEXT)").run();
  try{await env.DB.prepare("ALTER TABLE club_night_poll_preview ADD COLUMN countdown_message_id TEXT").run();}catch(e){}
