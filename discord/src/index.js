@@ -192,6 +192,126 @@ async function configureNativeJoinGreeting(env){
   await memberJoinDiag(env,"system_welcome_error","Guild settings HTTP "+patch.status+" "+JSON.stringify(patch.data||{}).slice(0,220));
  }
 }
+
+const SHADOW_LEAVE_LOG_CHANNEL = "1564527161216335902";
+function shadowRoleIcon(name, position=0) {
+ const n=String(name||"").toLowerCase();
+ const amount=n.match(/\$?\s*(\d+(?:\.\d+)?)\s*(million|billion|m|b)\b/i);
+ if(amount){
+  const value=Number(amount[1])*(/^b|billion$/i.test(amount[2])?1000:1);
+  if(value>=10000)return "🌌";
+  if(value>=5000)return "🐉";
+  if(value>=2000)return "👑";
+  if(value>=1500)return "🏆";
+  if(value>=1000)return "🏦";
+  if(value>=550)return "💎";
+  if(value>=350)return "💰";
+  if(value>=200)return "💵";
+  return "🪙";
+ }
+ if(/sovereign|owner|administrator|\badmin\b/.test(n))return "👑";
+ if(/\bpremium\b/.test(n))return "💎";
+ if(/\bvip\b|beta tester/.test(n))return "🏅";
+ if(/syndicate/.test(n))return "🐺";
+ if(/\binitiate\b/.test(n))return "🌙";
+ if(/booster|boost/.test(n))return "🚀";
+ if(/moderator|\bmod\b|staff|security/.test(n))return "🛡️";
+ if(/tester|testing/.test(n))return "🧪";
+ if(/verified/.test(n))return "✅";
+ if(/event|carnival/.test(n))return "🎭";
+ if(/giveaway|winner/.test(n))return "🎁";
+ if(/android/.test(n))return "🤖";
+ if(/ios|iphone|ipad|apple/.test(n))return "📱";
+ if(/windows|desktop|pc/.test(n))return "🖥️";
+ if(/xbox|playstation|console/.test(n))return "🎮";
+ const palette=["🔮","🗝️","⚔️","🧿","🪄","🦊","⚡","🌀","🪬","🪽","🎯","✨","🦇","🌑","🎟️","🪙"];
+ let h=0;for(const c of n)h=(h*31+c.charCodeAt(0))>>>0;
+ return palette[(h+Number(position||0))%palette.length];
+}
+async function applyShadowRoleIcons(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS shadow_role_icon_setup(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL,updated_at TEXT NOT NULL,summary TEXT)").run();
+ const prior=await env.DB.prepare("SELECT status,updated_at FROM shadow_role_icon_setup WHERE id=1").first();
+ if(prior&&["done","partial"].includes(prior.status))return;
+ if(prior?.status==="running"&&Date.now()-Date.parse(prior.updated_at||"")<120000)return;
+ await env.DB.prepare("INSERT INTO shadow_role_icon_setup(id,status,updated_at,summary) VALUES(1,'running',?,NULL) ON CONFLICT(id) DO UPDATE SET status='running',updated_at=excluded.updated_at").bind(new Date().toISOString()).run();
+ const response=await discordApi(env,"/guilds/"+GUILD_ID+"/roles");
+ if(response.status!==200||!Array.isArray(response.data)){
+  await env.DB.prepare("UPDATE shadow_role_icon_setup SET status='partial',updated_at=?,summary=? WHERE id=1").bind(new Date().toISOString(),"Could not list roles: HTTP "+response.status).run();return;
+ }
+ const roles=response.data.filter(r=>r&&r.id!==GUILD_ID&&!r.managed).sort((a,b)=>Number(a.position||0)-Number(b.position||0));
+ let added=0,existing=0,failed=0;const errors=[];
+ for(const role of roles){
+  if(role.icon||role.unicode_emoji){existing++;continue;}
+  let result,attempt=0;
+  do{
+   result=await discordApi(env,"/guilds/"+GUILD_ID+"/roles/"+role.id,"PATCH",{unicode_emoji:shadowRoleIcon(role.name,role.position)});
+   if(result.status!==429||attempt>=4)break;
+   const wait=Math.min(5000,Math.max(500,Number(result.data?.retry_after||1)*1000));
+   await new Promise(resolve=>setTimeout(resolve,wait));attempt++;
+  }while(attempt<5);
+  if(result.status===200){added++;}
+  else{failed++;errors.push(String(role.name||role.id)+": HTTP "+result.status);}
+  await new Promise(resolve=>setTimeout(resolve,550));
+ }
+ const summary=JSON.stringify({eligible:roles.length,added,alreadyIconed:existing,failed,errors:errors.slice(0,20)});
+ await env.DB.prepare("UPDATE shadow_role_icon_setup SET status=?,updated_at=?,summary=? WHERE id=1").bind(failed?"partial":"done",new Date().toISOString(),summary).run();
+ await memberJoinDiag(env,"role_icons_setup",summary);
+}
+async function queueShadowMemberLeave(env,user,eventSequence){
+ if(!env.DB||!user?.id)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_leave_notifications(event_key TEXT PRIMARY KEY,user_id TEXT NOT NULL,display_name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,message_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ const eventKey=String(eventSequence||Date.now())+":"+String(user.id);
+ const display=String(user.global_name||user.username||"A member").replace(/[@*_~<>\\]/g,"").slice(0,80)||"A member";
+ await env.DB.prepare("INSERT OR IGNORE INTO member_leave_notifications(event_key,user_id,display_name,status,attempts,created_at,updated_at) VALUES(?,?,?,'pending',0,?,?)").bind(eventKey,String(user.id),display,new Date().toISOString(),new Date().toISOString()).run();
+}
+async function flushShadowMemberLeaveNotifications(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_leave_notifications(event_key TEXT PRIMARY KEY,user_id TEXT NOT NULL,display_name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,message_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ const pending=await env.DB.prepare("SELECT event_key,user_id,display_name,attempts FROM member_leave_notifications WHERE status='pending' AND attempts<5 ORDER BY created_at LIMIT 10").all();
+ for(const item of pending.results||[]){
+  const digest=await sha("member-left:"+item.event_key);
+  const nonce=BigInt("0x"+digest.slice(0,18)).toString();
+  const sent=await discordApi(env,"/channels/"+SHADOW_LEAVE_LOG_CHANNEL+"/messages","POST",{
+   allowed_mentions:{parse:[]},nonce,enforce_nonce:true,
+   embeds:[{title:"Member left",description:"**"+item.display_name+"** left Shadow Syndicate.",color:0x71368A,footer:{text:"Member leave notification"}}]
+  });
+  if(sent.status===200&&sent.data?.id){
+   await env.DB.prepare("UPDATE member_leave_notifications SET status='sent',message_id=?,attempts=attempts+1,updated_at=? WHERE event_key=?").bind(String(sent.data.id),new Date().toISOString(),item.event_key).run();
+  }else{
+   await env.DB.prepare("UPDATE member_leave_notifications SET attempts=attempts+1,updated_at=? WHERE event_key=?").bind(new Date().toISOString(),item.event_key).run();
+   await memberJoinDiag(env,"member_leave_notice_error","Channel "+SHADOW_LEAVE_LOG_CHANNEL+" HTTP "+sent.status+" for "+item.user_id);
+  }
+  await new Promise(resolve=>setTimeout(resolve,550));
+ }
+}
+async function ensureShadowLeaveTestMessage(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_leave_test_message(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL DEFAULT 'pending',message_id TEXT,updated_at TEXT NOT NULL)").run();
+ const prior=await env.DB.prepare("SELECT status,updated_at FROM member_leave_test_message WHERE id=1").first();
+ if(prior?.status==="sent")return;
+ if(prior?.status==="sending"&&Date.now()-Date.parse(prior.updated_at||"")<120000)return;
+ await env.DB.prepare("INSERT INTO member_leave_test_message(id,status,updated_at) VALUES(1,'sending',?) ON CONFLICT(id) DO UPDATE SET status='sending',updated_at=excluded.updated_at").bind(new Date().toISOString()).run();
+ const channel=await discordApi(env,"/channels/"+SHADOW_LEAVE_LOG_CHANNEL);
+ if(channel.status!==200||channel.data?.guild_id!==GUILD_ID||![0,5].includes(channel.data?.type)){
+  await env.DB.prepare("UPDATE member_leave_test_message SET status='pending',updated_at=? WHERE id=1").bind(new Date().toISOString()).run();
+  await memberJoinDiag(env,"member_leave_test_error","Target channel unavailable or not a text channel; HTTP "+channel.status);return;
+ }
+ const digest=await sha("member-leave-setup-test:"+GUILD_ID+":"+SHADOW_LEAVE_LOG_CHANNEL);
+ const nonce=BigInt("0x"+digest.slice(0,18)).toString();
+ const result=await discordApi(env,"/channels/"+SHADOW_LEAVE_LOG_CHANNEL+"/messages","POST",{
+  allowed_mentions:{parse:[]},nonce,enforce_nonce:true,
+  embeds:[{title:"Member leave alerts are online",description:"This is a test message from the Syndicate Hub bot. Future posts here will let you know when someone leaves Shadow Syndicate.",color:0x71368A,footer:{text:"Setup test · no member leave occurred"}}]
+ });
+ if(result.status===200&&result.data?.id){
+  await env.DB.prepare("UPDATE member_leave_test_message SET status='sent',message_id=?,updated_at=? WHERE id=1").bind(String(result.data.id),new Date().toISOString()).run();
+  await memberJoinDiag(env,"member_leave_test_sent","Test message sent to "+SHADOW_LEAVE_LOG_CHANNEL);
+ }else{
+  await env.DB.prepare("UPDATE member_leave_test_message SET status='pending',updated_at=? WHERE id=1").bind(new Date().toISOString()).run();
+  await memberJoinDiag(env,"member_leave_test_error","Test message HTTP "+result.status);
+ }
+}
+
 export class MemberJoinGateway extends DurableObject{
  constructor(ctx,env){super(ctx,env);this.socket=null;this.heartbeatTimer=null;this.heartbeatMs=45000;this.waitingForAck=false;this.seq=null;this.session=null;this.memberCount=0;this.connectedAt=0;this.lastAckAt=0;this.lastReadyAt=0;}
  async fetch(){try{await memberJoinDiag(this.env,"gateway_start","scheduled binding invoked");await this.connect();return new Response("Gateway listener starting",{status:202});}catch(e){console.error("Discord member gateway connect failed",String(e));return new Response("Gateway listener unavailable",{status:503});}}
@@ -232,7 +352,10 @@ export class MemberJoinGateway extends DurableObject{
   if(p.t==="GUILD_MEMBER_ADD"&&p.d?.guild_id===GUILD_ID){this.ctx.waitUntil(memberJoinDiag(this.env,"member_add","Received join for "+String(p.d?.user?.id||"unknown")));this.memberCount=Number(this.memberCount||0)+1;await this.ctx.storage.put("member_count",this.memberCount);p.d.memberCount=this.memberCount;this.ctx.waitUntil(handleMemberJoin(this.env,this,p.d).catch(e=>console.error("member join processing failed",String(e))));return;}
   if(p.t==="GUILD_MEMBER_REMOVE"&&p.d?.guild_id===GUILD_ID){
    this.memberCount=Math.max(0,Number(this.memberCount||0)-1);await this.ctx.storage.put("member_count",this.memberCount);
-   if(p.d?.user?.id)this.ctx.waitUntil((async()=>{await ensureJoinTrackingTable(this.env);await this.env.DB.prepare("DELETE FROM member_join_welcomes WHERE user_id=?").bind(p.d.user.id).run();await memberJoinDiag(this.env,"member_remove","Cleared welcome state for "+p.d.user.id);})().catch(e=>console.error("member leave cleanup",String(e))));
+   if(p.d?.user?.id){
+    this.ctx.waitUntil((async()=>{await ensureJoinTrackingTable(this.env);await this.env.DB.prepare("DELETE FROM member_join_welcomes WHERE user_id=?").bind(p.d.user.id).run();await memberJoinDiag(this.env,"member_remove","Cleared welcome state for "+p.d.user.id);})().catch(e=>console.error("member leave cleanup",String(e))));
+    this.ctx.waitUntil(queueShadowMemberLeave(this.env,p.d.user,p.s).catch(e=>console.error("member leave queue",String(e))));
+   }
    return;
   }
  }
@@ -2357,6 +2480,9 @@ export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
   ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
+  ctx.waitUntil(applyShadowRoleIcons(env).catch(e=>console.error("role icon setup",String(e))));
+  ctx.waitUntil(flushShadowMemberLeaveNotifications(env).catch(e=>console.error("member leave notifications",String(e))));
+  ctx.waitUntil(ensureShadowLeaveTestMessage(env).catch(e=>console.error("member leave test message",String(e))));
   // Native Discord welcome is authoritative; don't edit legacy custom welcome embeds.
   ctx.waitUntil(reconcileRecentJoins(env).catch(e=>console.error("join reconciliation",String(e))));
   ctx.waitUntil(configureNativeJoinGreeting(env).catch(e=>console.error("native welcome settings",String(e))));
