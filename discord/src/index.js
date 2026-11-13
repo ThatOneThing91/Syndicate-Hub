@@ -367,23 +367,18 @@ async function ensureClubNightPollPreview(env){
  }
  await env.DB.prepare("UPDATE club_night_poll_preview SET countdown_message_id=?,updated_at=? WHERE id=1").bind(String(countdown.data.id),new Date().toISOString()).run();
  const when="<t:1794711600:F>";
- const content="🌧️☣️ **ACID RAIN EVENT** ☣️🌧️\n👀 **Club Status Check-In — Preview**\nWe’re planning to set Shadow Syndicate’s club status to **Active** for the kickoff at "+when+". We’ll launch an **Acid Rain** event to kick things off.\n\n**If you vote no:** a brass alarm will ring in the Hall of Mildly Disappointing Decisions. A goblin in a raincoat will escort you to the Dark Realm, where you will endure an eternity of dramatic thunder, lukewarm potion, and someone reading the club rules aloud one paragraph at a time. You will be named Assistant Keeper of the Damp Cloak and tasked with folding an infinite mountain of soggy capes while a choir chants, “They could have set their status to Active.” Every thousand years, a judge will offer you one appeal: “Was the Acid Rain event really that bad?” You must answer while a kazoo plays the saddest song ever composed. The Dark Realm’s customer service line will then place you on hold until the end of time.\n\nVoting no is absolutely allowed; the curse is fictional, and the teasing is only for fun. *Preview in mod-logs.*";
- const digest=await sha("club-status-poll-preview-v6:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
+ const content="🌧️☣️ **ACID RAIN EVENT** ☣️🌧️\n👀 **Club Status Check-In — Preview**\nShadow Syndicate plans to set its club status to **Active** for the kickoff at "+when+". We’ll launch an **Acid Rain** event to get things rolling.\n\n**Vote by reacting below:**\n✅ **YES:** I’ll set my club status to Active and join the kickoff.\n❌ **NO:** I regret to report that I must decline, and hereby accept immediate extradition to the Dark Realm. There, the Court of Unnecessarily Dramatic Consequences will sentence me to an eternity of dodging theatrical thunderbolts, drinking lukewarm potion from a suspicious goblet, and folding a mountain of rain-soaked capes that somehow keeps getting taller. A tiny goblin magistrate will read the charges in a voice that echoes for three business centuries: “Failure to set club status to Active.” I will be appointed Assistant Keeper of the Damp Cloak, forced to listen to a kazoo perform the world’s saddest ballad, and placed on hold by the Dark Realm’s customer service until the stars burn out. When the sentence is finally reviewed, the appeal form will ask only one question: “But did you at least vote in the poll?” A fate so cruel that even the rain will feel bad for me.";
+ const digest=await sha("club-status-poll-preview-v7:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
  const nonce=BigInt("0x"+digest.slice(0,18)).toString();
  const result=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
-  allowed_mentions:{parse:[]},nonce,enforce_nonce:true,content,
-  poll:{
-   question:{text:"Will you set your club status to Active for the kickoff?"},
-   answers:[
-    {poll_media:{text:"Yes — I’ll set it to Active",emoji:{name:"✅"}}},
-    {poll_media:{text:"No — cast me into the Dark Realm",emoji:{name:"❌"}}}
-   ],
-   duration:24,allow_multiselect:false,layout_type:1
-  }
+  allowed_mentions:{parse:[]},nonce,enforce_nonce:true,content
  });
  if(result.status===200&&result.data?.id){
   await env.DB.prepare("UPDATE club_night_poll_preview SET status='sent',message_id=?,updated_at=?,error=NULL WHERE id=1").bind(String(result.data.id),new Date().toISOString()).run();
-  await memberJoinDiag(env,"club_poll_preview_sent","Poll preview sent to "+channelId+"; message "+result.data.id);
+  const yesReaction=await discordApi(env,"/channels/"+channelId+"/messages/"+result.data.id+"/reactions/%E2%9C%85/@me","PUT");
+  const noReaction=await discordApi(env,"/channels/"+channelId+"/messages/"+result.data.id+"/reactions/%E2%9D%8C/@me","PUT");
+  if(yesReaction.status!==204||noReaction.status!==204)await memberJoinDiag(env,"club_poll_reaction_error","Reaction setup HTTP "+yesReaction.status+"/"+noReaction.status);
+  await memberJoinDiag(env,"club_poll_preview_sent","Reaction poll preview sent to "+channelId+"; message "+result.data.id);
  }else{
   const error="Poll preview post HTTP "+result.status+" "+JSON.stringify(result.data||{}).slice(0,300);
   await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
