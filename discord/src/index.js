@@ -2635,7 +2635,10 @@ export default {
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
-   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_register")return birthdayRegisterButton(i,env);\n   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_change")return birthdayChangeButton(i,env);\n   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_remove")return birthdayRemoveButton(i,env);\n   if(i.type===5&&i.data?.custom_id==="syndicate_birthday_modal")return birthdayModalSubmit(i,env);\n   if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===3&&i.data?.custom_id==="club_event_create")return clubEventModal(i,env);
+   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_register")return birthdayRegisterButton(i,env);
+   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_change")return birthdayChangeButton(i,env);
+   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_remove")return birthdayRemoveButton(i,env);
+   if(i.type===5&&i.data?.custom_id==="syndicate_birthday_modal")return birthdayModalSubmit(i,env);\n   if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===3&&i.data?.custom_id==="club_event_create")return clubEventModal(i,env);
    if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===5&&i.data?.custom_id==="club_event_create_modal")return delayedReply(i,env,ctx,()=>createClubEvent(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_end:")){
     const eventId=String(i.data.custom_id.slice("club_event_end:".length));
