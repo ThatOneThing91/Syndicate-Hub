@@ -316,45 +316,17 @@ async function ensureShadowLeaveTestMessage(env){
 }
 
 
-async function inspectBirthdayPanelButtons(env){
- if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
- await env.DB.prepare("CREATE TABLE IF NOT EXISTS birthday_panel_button_diagnostics(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL,report TEXT,updated_at TEXT NOT NULL)").run();
- const state=await env.DB.prepare("SELECT status FROM birthday_panel_button_diagnostics WHERE id=1").first();
- if(state?.status!=="pending")return;
- const targets=[
-  {id:"1564527127276290098",name:"choose-your-roles"},
-  {id:"1570590719549120682",name:"birthday-celebrations"},
-  {id:"1564527125896233073",name:"announcements"}
- ];
- const report=[];
- for(const target of targets){
-  const result=await discordApi(env,"/channels/"+target.id+"/messages?limit=100");
-  const messages=Array.isArray(result.data)?result.data:[];
-  report.push({channel:target.name,status:result.status,candidates:messages.filter(m=>String(m.content||"").toLowerCase().includes("birthday")||(m.components||[]).length).map(m=>({id:m.id,content:String(m.content||"").slice(0,700),components:(m.components||[]).map(row=>(row.components||[]).map(c=>({type:c.type,custom_id:c.custom_id,label:c.label,style:c.style,placeholder:c.placeholder}))) }))});
- }
- const known="1570597115477106689";
- for(const target of targets){
-  const result=await discordApi(env,"/channels/"+target.id+"/messages/"+known);
-  if(result.status===200)report.push({known_preview_channel:target.name,message:{id:result.data.id,content:String(result.data.content||"").slice(0,700),components:(result.data.components||[]).map(row=>(row.components||[]).map(c=>({type:c.type,custom_id:c.custom_id,label:c.label,style:c.style}))) }});
- }
- await env.DB.prepare("UPDATE birthday_panel_button_diagnostics SET status='done',report=?,updated_at=? WHERE id=1").bind(JSON.stringify(report),new Date().toISOString()).run();
-}
 async function ensureClubNightPollPreview(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
- await inspectBirthdayPanelButtons(env);
- const channelId="1564527161216335902";
+ const channelId="1564527125896233073";
+ const previousChannelId="1564527161216335902";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_night_poll_preview(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL DEFAULT 'pending',message_id TEXT,updated_at TEXT NOT NULL,error TEXT,countdown_message_id TEXT)").run();
  try{await env.DB.prepare("ALTER TABLE club_night_poll_preview ADD COLUMN countdown_message_id TEXT").run();}catch(e){}
  const prior=await env.DB.prepare("SELECT status,message_id,countdown_message_id,updated_at FROM club_night_poll_preview WHERE id=1").first();
- const target=Date.UTC(2026,10,15,3,0,0);
- const remaining=Math.max(0,target-Date.now());
- const days=Math.floor(remaining/86400000);
- const hours=Math.floor((remaining%86400000)/3600000);
- const minutes=Math.floor((remaining%3600000)/60000);
+ const target=Date.UTC(2026,10,15,3,0,0),remaining=Math.max(0,target-Date.now());
+ const days=Math.floor(remaining/86400000),hours=Math.floor((remaining%86400000)/3600000),minutes=Math.floor((remaining%3600000)/60000);
  const plural=(n,unit)=>n+" "+unit+(n===1?"":"s");
- const countdownContent=remaining===0
-  ?"✅ **The club status target time has arrived.**"
-  :"⏳ **Live countdown to Active status**\n"+plural(days,"day")+" · "+plural(hours,"hour")+" · "+plural(minutes,"minute")+" remaining";
+ const countdownContent=remaining===0?"✅ **The club status target time has arrived.**":"⏳ **Live countdown to Active status**\n"+plural(days,"day")+" · "+plural(hours,"hour")+" · "+plural(minutes,"minute")+" remaining";
  if(prior?.status==="sent"){
   if(prior.countdown_message_id){
    const updated=await discordApi(env,"/channels/"+channelId+"/messages/"+prior.countdown_message_id,"PATCH",{content:countdownContent,allowed_mentions:{parse:[]}});
@@ -362,57 +334,28 @@ async function ensureClubNightPollPreview(env){
    if(updated.status!==404){await memberJoinDiag(env,"club_poll_countdown_error","Countdown update HTTP "+updated.status);return;}
   }
   const created=await discordApi(env,"/channels/"+channelId+"/messages","POST",{content:countdownContent,allowed_mentions:{parse:[]}});
-  if(created.status===200&&created.data?.id){
-   await env.DB.prepare("UPDATE club_night_poll_preview SET countdown_message_id=?,updated_at=?,error=NULL WHERE id=1").bind(String(created.data.id),new Date().toISOString()).run();
-  }else await memberJoinDiag(env,"club_poll_countdown_error","Countdown create HTTP "+created.status);
+  if(created.status===200&&created.data?.id)await env.DB.prepare("UPDATE club_night_poll_preview SET countdown_message_id=?,updated_at=?,error=NULL WHERE id=1").bind(String(created.data.id),new Date().toISOString()).run();
+  else await memberJoinDiag(env,"club_poll_countdown_error","Countdown create HTTP "+created.status);
   return;
  }
  if(prior?.status==="sending"&&Date.now()-Date.parse(prior.updated_at||"")<120000)return;
  await env.DB.prepare("INSERT INTO club_night_poll_preview(id,status,updated_at,error) VALUES(1,'sending',?,NULL) ON CONFLICT(id) DO UPDATE SET status='sending',updated_at=excluded.updated_at,error=NULL").bind(new Date().toISOString()).run();
- for(const oldMessageId of [prior?.message_id,prior?.countdown_message_id].filter(Boolean)){
-  const removed=await discordApi(env,"/channels/"+channelId+"/messages/"+oldMessageId,"DELETE");
-  if(removed.status!==204&&removed.status!==404){
-   const error="Could not replace prior poll preview message: HTTP "+removed.status;
-   await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
-   await memberJoinDiag(env,"club_poll_preview_error",error);return;
-  }
+ for(const oldMessageId of [prior?.message_id,prior?.countdown_message_id].filter(Boolean))for(const oldChannelId of [channelId,previousChannelId]){
+  const removed=await discordApi(env,"/channels/"+oldChannelId+"/messages/"+oldMessageId,"DELETE");
+  if(removed.status!==204&&removed.status!==404){const error="Could not replace prior poll preview message: HTTP "+removed.status;await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();await memberJoinDiag(env,"club_poll_preview_error",error);return;}
  }
  const channel=await discordApi(env,"/channels/"+channelId);
- if(channel.status!==200||channel.data?.guild_id!==GUILD_ID||![0,5].includes(channel.data?.type)){
-  const error="Target mod logs channel unavailable or not text: HTTP "+channel.status;
-  await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
-  await memberJoinDiag(env,"club_poll_preview_error",error);return;
- }
+ if(channel.status!==200||channel.data?.guild_id!==GUILD_ID||![0,5].includes(channel.data?.type)){const error="Target announcements channel unavailable or not text: HTTP "+channel.status;await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();await memberJoinDiag(env,"club_poll_preview_error",error);return;}
  const countdown=await discordApi(env,"/channels/"+channelId+"/messages","POST",{content:countdownContent,allowed_mentions:{parse:[]}});
- if(countdown.status!==200||!countdown.data?.id){
-  const error="Live countdown post HTTP "+countdown.status;
-  await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
-  await memberJoinDiag(env,"club_poll_preview_error",error);return;
- }
+ if(countdown.status!==200||!countdown.data?.id){const error="Live countdown post HTTP "+countdown.status;await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();await memberJoinDiag(env,"club_poll_preview_error",error);return;}
  await env.DB.prepare("UPDATE club_night_poll_preview SET countdown_message_id=?,updated_at=? WHERE id=1").bind(String(countdown.data.id),new Date().toISOString()).run();
  const when="<t:1794711600:F>";
- const content="🌧️☣️ **ACID RAIN EVENT** ☣️🌧️\nWe’re planning to set Shadow Syndicate’s club status to **Active** for the kickoff at "+when+". We’ll launch an **Acid Rain** event to get things rolling.\n\n*See the live countdown above.*";
- const digest=await sha("club-status-poll-preview-v9:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
+ const content="@everyone 🌧️☣️ **ACID RAIN EVENT** ☣️🌧️\nWe’re planning to set Shadow Syndicate’s club status to **Active** for the kickoff at "+when+". We’ll launch an **Acid Rain** event to get things rolling.\n\n*See the live countdown above.*";
+ const digest=await sha("club-status-poll-announcement-v10:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
  const nonce=BigInt("0x"+digest.slice(0,18)).toString();
- const result=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
-  allowed_mentions:{parse:[]},nonce,enforce_nonce:true,content,
-  poll:{
-   question:{text:"Will you set your club status to Active for the kickoff?"},
-   answers:[
-    {poll_media:{text:"Yes — I’ll set my status to Active",emoji:{name:"✅"}}},
-    {poll_media:{text:"No — banished to Dark Realm, doomed to eternal torment!",emoji:{name:"❌"}}}
-   ],
-   duration:24,allow_multiselect:false,layout_type:1
-  }
- });
- if(result.status===200&&result.data?.id){
-  await env.DB.prepare("UPDATE club_night_poll_preview SET status='sent',message_id=?,updated_at=?,error=NULL WHERE id=1").bind(String(result.data.id),new Date().toISOString()).run();
-  await memberJoinDiag(env,"club_poll_preview_sent","Native poll preview sent to "+channelId+"; message "+result.data.id);
- }else{
-  const error="Poll preview post HTTP "+result.status+" "+JSON.stringify(result.data||{}).slice(0,300);
-  await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
-  await memberJoinDiag(env,"club_poll_preview_error",error);
- }
+ const result=await discordApi(env,"/channels/"+channelId+"/messages","POST",{allowed_mentions:{parse:["everyone"]},nonce,enforce_nonce:true,content,poll:{question:{text:"Are you ready to set your club status to Active?"},answers:[{poll_media:{text:"Yes — I’ll set my status to Active",emoji:{name:"✅"}}},{poll_media:{text:"No — banished to Dark Realm, doomed to eternal torment!",emoji:{name:"❌"}}}],duration:24,allow_multiselect:false,layout_type:1}});
+ if(result.status===200&&result.data?.id){await env.DB.prepare("UPDATE club_night_poll_preview SET status='sent',message_id=?,updated_at=?,error=NULL WHERE id=1").bind(String(result.data.id),new Date().toISOString()).run();await memberJoinDiag(env,"club_poll_preview_sent","Native poll posted to announcements with @everyone; message "+result.data.id);}
+ else{const error="Poll preview post HTTP "+result.status+" "+JSON.stringify(result.data||{}).slice(0,300);await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();await memberJoinDiag(env,"club_poll_preview_error",error);}
 }
 
 export class MemberJoinGateway extends DurableObject{
@@ -835,6 +778,57 @@ const enc = new TextEncoder();
 const hexBytes = s => new Uint8Array(s.match(/../g).map(x=>parseInt(x,16)));
 const sha = async s => [...new Uint8Array(await crypto.subtle.digest("SHA-256",enc.encode(s)))].map(x=>x.toString(16).padStart(2,"0")).join("");
 const reply = (message,ephemeral=true) => new Response(JSON.stringify({type:4,data:{content:message,flags:ephemeral?64:0,allowed_mentions:{parse:[]}}}),{headers:{"content-type":"application/json"}});
+
+function birthdayDateLabel(month,day){
+ return new Intl.DateTimeFormat("en-US",{month:"long",day:"numeric",timeZone:"UTC"}).format(new Date(Date.UTC(2000,Number(month)-1,Number(day))));
+}
+async function ensureBirthdayTable(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_birthdays(user_id TEXT PRIMARY KEY,birth_month INTEGER NOT NULL,birth_day INTEGER NOT NULL,updated_at TEXT NOT NULL)").run();
+}
+function birthdaySetModal(saved){
+ const value=saved?String(saved.birth_month).padStart(2,"0")+"/"+String(saved.birth_day).padStart(2,"0"):"";
+ return new Response(JSON.stringify({type:9,data:{custom_id:"syndicate_birthday_modal",title:"Set Your Birthday",components:[{type:1,components:[{type:4,custom_id:"birthday_mmdd",label:"Birthday (month/day)",style:1,min_length:3,max_length:5,required:true,placeholder:"MM/DD",...(value?{value}:{})}]}]}}),{headers:{"content-type":"application/json"}});
+}
+function birthdayEphemeral(content,components=[]){
+ return new Response(JSON.stringify({type:4,data:{content,flags:64,components,allowed_mentions:{parse:[]}}}),{headers:{"content-type":"application/json"}});
+}
+async function birthdayRegisterButton(i,env){
+ const userId=String(i.member?.user?.id||i.user?.id||"");
+ if(!userId)return reply("I couldn't identify your Discord account.");
+ await ensureBirthdayTable(env);
+ const saved=await env.DB.prepare("SELECT birth_month,birth_day FROM community_birthdays WHERE user_id=?").bind(userId).first();
+ if(!saved)return birthdaySetModal(null);
+ return birthdayEphemeral("Your saved birthday is **"+birthdayDateLabel(saved.birth_month,saved.birth_day)+"**.",[{type:1,components:[{type:2,style:1,label:"Change Birthday",custom_id:"syndicate_birthday_change"}]}]);
+}
+async function birthdayRemoveButton(i,env){
+ const userId=String(i.member?.user?.id||i.user?.id||"");
+ if(!userId)return reply("I couldn't identify your Discord account.");
+ await ensureBirthdayTable(env);
+ const saved=await env.DB.prepare("SELECT birth_month,birth_day FROM community_birthdays WHERE user_id=?").bind(userId).first();
+ if(!saved)return reply("You don't have a saved birthday to remove.");
+ await env.DB.prepare("DELETE FROM community_birthdays WHERE user_id=?").bind(userId).run();
+ return reply("Your birthday ("+birthdayDateLabel(saved.birth_month,saved.birth_day)+") has been removed.");
+}
+async function birthdayChangeButton(i,env){
+ const userId=String(i.member?.user?.id||i.user?.id||"");
+ if(!userId)return reply("I couldn't identify your Discord account.");
+ await ensureBirthdayTable(env);
+ const saved=await env.DB.prepare("SELECT birth_month,birth_day FROM community_birthdays WHERE user_id=?").bind(userId).first();
+ return birthdaySetModal(saved||null);
+}
+async function birthdayModalSubmit(i,env){
+ const userId=String(i.member?.user?.id||i.user?.id||"");
+ if(!userId)return reply("I couldn't identify your Discord account.");
+ const value=i.data.components?.flatMap(row=>row.components||[]).find(component=>component.custom_id==="birthday_mmdd")?.value||"";
+ const match=/^\s*(\d{1,2})\s*[\/.-]\s*(\d{1,2})\s*$/.exec(String(value));
+ if(!match)return reply("Enter your birthday as **MM/DD** (for example, 04/23).");
+ const month=Number(match[1]),day=Number(match[2]);
+ if(month<1||month>12||day<1||day>new Date(Date.UTC(2000,month,0)).getUTCDate())return reply("That date doesn't look valid. Enter a real month and day as **MM/DD**.");
+ await ensureBirthdayTable(env);
+ await env.DB.prepare("INSERT INTO community_birthdays(user_id,birth_month,birth_day,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET birth_month=excluded.birth_month,birth_day=excluded.birth_day,updated_at=excluded.updated_at").bind(userId,month,day,new Date().toISOString()).run();
+ return reply("Your birthday is saved as **"+birthdayDateLabel(month,day)+"**.");
+}
+
 
 const CLUB_EVENTS_CHANNEL="1564527132720234556";
 const LEGACY_ACID_EVENT="acid_rain_20261110_2330";
@@ -2641,7 +2635,7 @@ export default {
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
-   if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===3&&i.data?.custom_id==="club_event_create")return clubEventModal(i,env);
+   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_register")return birthdayRegisterButton(i,env);\n   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_change")return birthdayChangeButton(i,env);\n   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_remove")return birthdayRemoveButton(i,env);\n   if(i.type===5&&i.data?.custom_id==="syndicate_birthday_modal")return birthdayModalSubmit(i,env);\n   if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===3&&i.data?.custom_id==="club_event_create")return clubEventModal(i,env);
    if(i.channel_id===CLUB_EVENTS_CHANNEL&&i.type===5&&i.data?.custom_id==="club_event_create_modal")return delayedReply(i,env,ctx,()=>createClubEvent(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_end:")){
     const eventId=String(i.data.custom_id.slice("club_event_end:".length));
