@@ -57,12 +57,14 @@ async function refreshWelcomeMemberStats(env){
 }
 
 
-async function ensureJoinTrackingTable(env) {
- await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_join_welcomes(user_id TEXT PRIMARY KEY,role_assigned INTEGER NOT NULL DEFAULT 0,welcome_sent INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,joined_at TEXT)").run();
+async function ensureJoinTrackingTable(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_join_welcomes(user_id TEXT PRIMARY KEY,role_assigned INTEGER NOT NULL DEFAULT 0,welcome_sent INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,joined_at TEXT,welcome_message_id TEXT,welcome_channel_id TEXT,welcome_lease_until INTEGER NOT NULL DEFAULT 0)").run();
  const columns=await env.DB.prepare("PRAGMA table_info(member_join_welcomes)").all();
- if(!(columns.results||[]).some(c=>c.name==="joined_at")){
-  try{await env.DB.prepare("ALTER TABLE member_join_welcomes ADD COLUMN joined_at TEXT").run();}
-  catch(e){if(!String(e).toLowerCase().includes("duplicate column"))throw e;}
+ for(const [name,definition] of [["joined_at","TEXT"],["welcome_message_id","TEXT"],["welcome_channel_id","TEXT"],["welcome_lease_until","INTEGER NOT NULL DEFAULT 0"]]){
+  if(!(columns.results||[]).some(c=>c.name===name)){
+   try{await env.DB.prepare("ALTER TABLE member_join_welcomes ADD COLUMN "+name+" "+definition).run();}
+   catch(e){if(!String(e).toLowerCase().includes("duplicate column"))throw e;}
+  }
  }
 }
 function joinChannel(channels,...names){
@@ -76,9 +78,9 @@ async function handleMemberJoin(env,state,member){
  if(!env.DB||!user?.id||member.guild_id!==GUILD_ID||user.bot)return;
  await ensureJoinTrackingTable(env);
  const joinedAt=String(member.joined_at||"");
- const prior=await env.DB.prepare("SELECT role_assigned,welcome_sent,joined_at FROM member_join_welcomes WHERE user_id=?").bind(user.id).first();
+ const prior=await env.DB.prepare("SELECT role_assigned,welcome_sent,joined_at,welcome_message_id,welcome_lease_until FROM member_join_welcomes WHERE user_id=?").bind(user.id).first();
  const sameJoin=!!(joinedAt&&prior?.joined_at===joinedAt);
- if(sameJoin&&prior.role_assigned&&prior.welcome_sent)return;
+ if(sameJoin&&prior.role_assigned&&prior.welcome_sent&&prior.welcome_message_id)return;
  const rr=await discordApi(env,"/guilds/"+GUILD_ID+"/roles");
  const initiate=rr.status===200&&Array.isArray(rr.data)?rr.data.find(r=>String(r.name||"").trim().toLowerCase()==="initiate"):null;
  let roleDone=!!(sameJoin&&prior?.role_assigned);
@@ -87,15 +89,37 @@ async function handleMemberJoin(env,state,member){
   const result=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+user.id+"/roles/"+initiate.id,"PUT");
   roleDone=result.status===204;
   if(!roleDone)await memberJoinDiag(env,"role_failure","Initiate role HTTP "+result.status+" for "+user.id+" "+JSON.stringify(result.data||{}).slice(0,170));
- }else if(!initiate){
-  await memberJoinDiag(env,"role_failure","Initiate role missing or roles HTTP "+rr.status);
+ }else if(!initiate)await memberJoinDiag(env,"role_failure","Initiate role missing or roles HTTP "+rr.status);
+ const claimTime=Date.now(),leaseUntil=claimTime+90000;
+ const claim=await env.DB.prepare("INSERT INTO member_join_welcomes(user_id,role_assigned,welcome_sent,updated_at,joined_at,welcome_message_id,welcome_channel_id,welcome_lease_until) VALUES(?,?,0,?,?,NULL,NULL,?) ON CONFLICT(user_id) DO UPDATE SET role_assigned=excluded.role_assigned,welcome_sent=0,updated_at=excluded.updated_at,joined_at=excluded.joined_at,welcome_message_id=NULL,welcome_channel_id=NULL,welcome_lease_until=excluded.welcome_lease_until WHERE member_join_welcomes.joined_at IS NOT excluded.joined_at OR ((member_join_welcomes.welcome_sent=0 OR member_join_welcomes.welcome_message_id IS NULL) AND member_join_welcomes.welcome_lease_until<=?)")
+  .bind(user.id,roleDone?1:0,new Date().toISOString(),joinedAt,leaseUntil,claimTime).run();
+ if(Number(claim.meta?.changes||0)===0)return;
+ const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
+ const intro=joinChannel(channels.status===200?channels.data:[],"introductions");
+ if(!intro){
+  await env.DB.prepare("UPDATE member_join_welcomes SET role_assigned=?,welcome_sent=0,welcome_lease_until=0,updated_at=? WHERE user_id=? AND joined_at=?").bind(roleDone?1:0,new Date().toISOString(),user.id,joinedAt).run();
+  await memberJoinDiag(env,"welcome_failure","Could not find introductions channel; channels HTTP "+channels.status+" user "+user.id);return;
  }
- // The Discord system-channel welcome is managed by Discord itself.
- // Mark the join as handled to keep retries focused on failed role assignments.
- const welcomeDone=true;
- await env.DB.prepare("INSERT INTO member_join_welcomes(user_id,role_assigned,welcome_sent,updated_at,joined_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET role_assigned=excluded.role_assigned,welcome_sent=excluded.welcome_sent,updated_at=excluded.updated_at,joined_at=excluded.joined_at")
-  .bind(user.id,roleDone?1:0,welcomeDone?1:0,new Date().toISOString(),joinedAt).run();
- await memberJoinDiag(env,"join_result","user "+user.id+" role="+roleDone+" native_welcome=Discord joined="+joinedAt);
+ const guild=await discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=true");
+ const totalRaw=Number(state?.memberCount||0)>0?Number(state.memberCount):(guild.status===200?Number(guild.data?.approximate_member_count??guild.data?.member_count):0);
+ const onlineRaw=guild.status===200?Number(guild.data?.approximate_presence_count):NaN;
+ const fields=[];
+ if(Number.isFinite(totalRaw)&&totalRaw>0)fields.push({name:"👥 Server Members",value:totalRaw.toLocaleString("en-US"),inline:true});
+ if(Number.isFinite(onlineRaw)&&onlineRaw>=0)fields.push({name:"🟢 Online Now",value:onlineRaw.toLocaleString("en-US"),inline:true});
+ fields.push({name:"Get started",value:"💬 <#1563067669479948299>  ·  🎭 <#1564527127276290098>",inline:false});
+ const avatar=user.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+(String(user.avatar).startsWith("a_")?".gif":".png")+"?size=256":null;
+ const payload={allowed_mentions:{parse:[],users:[String(user.id)]},content:"👋 Welcome <@"+user.id+"> to Shadow Syndicate!",embeds:[{title:"Welcome!",description:"We’re glad you joined the Syndicate. Say hello and get settled in.",color:0x7c3aed,...(avatar?{thumbnail:{url:avatar}}:{}),fields,footer:{text:"Shadow Syndicate"}}]};
+ const sent=await discordApi(env,"/channels/"+intro.id+"/messages","POST",payload);
+ if(sent.status!==200||!sent.data?.id){
+  await env.DB.prepare("UPDATE member_join_welcomes SET role_assigned=?,welcome_sent=0,welcome_lease_until=0,updated_at=? WHERE user_id=? AND joined_at=?").bind(roleDone?1:0,new Date().toISOString(),user.id,joinedAt).run();
+  await memberJoinDiag(env,"welcome_failure","Welcome message HTTP "+sent.status+" for "+user.id+" "+JSON.stringify(sent.data||{}).slice(0,180));return;
+ }
+ const now=new Date().toISOString();
+ await env.DB.prepare("UPDATE member_join_welcomes SET role_assigned=?,welcome_sent=1,welcome_message_id=?,welcome_channel_id=?,welcome_lease_until=0,updated_at=? WHERE user_id=? AND joined_at=?")
+  .bind(roleDone?1:0,String(sent.data.id),String(intro.id),now,user.id,joinedAt).run();
+ await env.DB.prepare("INSERT INTO welcome_member_stats(id,channel_id,message_id,last_total,last_online,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET channel_id=excluded.channel_id,message_id=excluded.message_id,last_total=excluded.last_total,last_online=excluded.last_online,updated_at=excluded.updated_at")
+  .bind(String(intro.id),String(sent.data.id),Number.isFinite(totalRaw)&&totalRaw>0?totalRaw:null,Number.isFinite(onlineRaw)&&onlineRaw>=0?onlineRaw:null,"1970-01-01T00:00:00Z").run();
+ await memberJoinDiag(env,"join_result","user "+user.id+" role="+roleDone+" bot_welcome="+sent.data.id+" joined="+joinedAt);
 }
 
 // The Gateway can silently stall. Reconcile recently joined members from
@@ -120,8 +144,8 @@ async function reconcileRecentJoins(env){
    seen++;
    const joined=Date.parse(member.joined_at);
    if(!Number.isFinite(joined)||joined<now-90*60000||joined>now+60000)continue;
-   const prior=await env.DB.prepare("SELECT joined_at,role_assigned,welcome_sent FROM member_join_welcomes WHERE user_id=?").bind(member.user.id).first();
-   if(prior?.joined_at===member.joined_at&&prior.role_assigned&&prior.welcome_sent)continue;
+   const prior=await env.DB.prepare("SELECT joined_at,role_assigned,welcome_sent,welcome_message_id FROM member_join_welcomes WHERE user_id=?").bind(member.user.id).first();
+   if(prior?.joined_at===member.joined_at&&prior.role_assigned&&prior.welcome_sent&&prior.welcome_message_id)continue;
    if(restored>=12)break;
    try{await handleMemberJoin(env,{memberCount:0},{...member,guild_id:GUILD_ID});restored++;}
    catch(e){await memberJoinDiag(env,"reconcile_error",String(e).slice(0,360));}
@@ -179,14 +203,14 @@ async function configureNativeJoinGreeting(env){
  const intro=joinChannel(cr.status===200?cr.data:[],"introductions");
  if(!intro||gr.status!==200){await memberJoinDiag(env,"system_welcome_error","Channels "+cr.status+" guild "+gr.status+" introductions="+Boolean(intro));return;}
  await ensureIntroductionLinksAndStickerReplies(env,cr.data,intro);
- const flags=Number(gr.data?.system_channel_flags||0),desired=flags&~9;
+ const flags=Number(gr.data?.system_channel_flags||0),desired=flags|1;
  if(gr.data.system_channel_id===intro.id&&flags===desired){
   await env.DB.prepare("UPDATE join_system_settings SET status='enabled' WHERE id=1").run();return;
  }
  const patch=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:intro.id,system_channel_flags:desired});
  if(patch.status===200){
   await env.DB.prepare("UPDATE join_system_settings SET status='enabled' WHERE id=1").run();
-  await memberJoinDiag(env,"system_welcome_enabled","Native greeting and sticker replies enabled in introductions");
+  await memberJoinDiag(env,"system_welcome_enabled","Native join notice suppressed; bot welcome enabled in introductions");
  }else{
   await env.DB.prepare("UPDATE join_system_settings SET status=? WHERE id=1").bind("HTTP "+patch.status).run();
   await memberJoinDiag(env,"system_welcome_error","Guild settings HTTP "+patch.status+" "+JSON.stringify(patch.data||{}).slice(0,220));
@@ -2281,7 +2305,7 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
 }
 async function maintainCommunitySetup(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
- const revision="introductions-custom-welcome-and-join-role-v2";
+ const revision="introductions-bot-welcome-and-join-role-v3";
  const saved=await env.DB.prepare("SELECT revision,status FROM community_setup WHERE id=1").first();
  if(saved?.revision===revision&&saved.status==="ready")return;
  const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
@@ -2291,10 +2315,10 @@ async function maintainCommunitySetup(env){
  if(introductions.length!==1)throw Error("Expected one introductions channel; found "+introductions.length);
  const guild=await discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=false");
  if(guild.status!==200)throw Error("Could not read server settings: "+guild.status);
- const suppressJoin=Number(guild.data.system_channel_flags||0)&~9;
+ const suppressJoin=Number(guild.data.system_channel_flags||0)|1;
  if(guild.data.system_channel_id!==introductions[0].id||Number(guild.data.system_channel_flags||0)!==suppressJoin){
   const changed=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:introductions[0].id,system_channel_flags:suppressJoin});
-  if(changed.status!==200||changed.data?.system_channel_id!==introductions[0].id||(Number(changed.data?.system_channel_flags||0)&9))throw Error("Could not configure native introductions welcome: "+changed.status);
+  if(changed.status!==200||changed.data?.system_channel_id!==introductions[0].id||((Number(changed.data?.system_channel_flags||0)&1)===0))throw Error("Could not suppress native introductions welcome: "+changed.status);
  }
  const club=channels.data.filter(c=>[0,5].includes(c.type)&&normalize(c.name)==="club-members");
  if(club.length>1)throw Error("More than one club members channel matched; leaving them untouched.");
