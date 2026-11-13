@@ -319,15 +319,36 @@ async function ensureShadowLeaveTestMessage(env){
 async function ensureClubNightPollPreview(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
  const channelId="1564527161216335902";
- await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_night_poll_preview(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL DEFAULT 'pending',message_id TEXT,updated_at TEXT NOT NULL,error TEXT)").run();
- const prior=await env.DB.prepare("SELECT status,message_id,updated_at FROM club_night_poll_preview WHERE id=1").first();
- if(prior?.status==="sent")return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_night_poll_preview(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL DEFAULT 'pending',message_id TEXT,updated_at TEXT NOT NULL,error TEXT,countdown_message_id TEXT)").run();
+ try{await env.DB.prepare("ALTER TABLE club_night_poll_preview ADD COLUMN countdown_message_id TEXT").run();}catch(e){}
+ const prior=await env.DB.prepare("SELECT status,message_id,countdown_message_id,updated_at FROM club_night_poll_preview WHERE id=1").first();
+ const target=Date.UTC(2026,10,15,3,0,0);
+ const remaining=Math.max(0,target-Date.now());
+ const days=Math.floor(remaining/86400000);
+ const hours=Math.floor((remaining%86400000)/3600000);
+ const minutes=Math.floor((remaining%3600000)/60000);
+ const plural=(n,unit)=>n+" "+unit+(n===1?"":"s");
+ const countdownContent=remaining===0
+  ?"✅ **The club status target time has arrived.**"
+  :"⏳ **Live countdown to Active status**\n"+plural(days,"day")+" · "+plural(hours,"hour")+" · "+plural(minutes,"minute")+" remaining\n*Refreshes every minute.*";
+ if(prior?.status==="sent"){
+  if(prior.countdown_message_id){
+   const updated=await discordApi(env,"/channels/"+channelId+"/messages/"+prior.countdown_message_id,"PATCH",{content:countdownContent,allowed_mentions:{parse:[]}});
+   if(updated.status===200)return;
+   if(updated.status!==404){await memberJoinDiag(env,"club_poll_countdown_error","Countdown update HTTP "+updated.status);return;}
+  }
+  const created=await discordApi(env,"/channels/"+channelId+"/messages","POST",{content:countdownContent,allowed_mentions:{parse:[]}});
+  if(created.status===200&&created.data?.id){
+   await env.DB.prepare("UPDATE club_night_poll_preview SET countdown_message_id=?,updated_at=?,error=NULL WHERE id=1").bind(String(created.data.id),new Date().toISOString()).run();
+  }else await memberJoinDiag(env,"club_poll_countdown_error","Countdown create HTTP "+created.status);
+  return;
+ }
  if(prior?.status==="sending"&&Date.now()-Date.parse(prior.updated_at||"")<120000)return;
  await env.DB.prepare("INSERT INTO club_night_poll_preview(id,status,updated_at,error) VALUES(1,'sending',?,NULL) ON CONFLICT(id) DO UPDATE SET status='sending',updated_at=excluded.updated_at,error=NULL").bind(new Date().toISOString()).run();
- if(prior?.message_id){
-  const removed=await discordApi(env,"/channels/"+channelId+"/messages/"+prior.message_id,"DELETE");
+ for(const oldMessageId of [prior?.message_id,prior?.countdown_message_id].filter(Boolean)){
+  const removed=await discordApi(env,"/channels/"+channelId+"/messages/"+oldMessageId,"DELETE");
   if(removed.status!==204&&removed.status!==404){
-   const error="Could not replace prior poll preview: HTTP "+removed.status;
+   const error="Could not replace prior poll preview message: HTTP "+removed.status;
    await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
    await memberJoinDiag(env,"club_poll_preview_error",error);return;
   }
@@ -338,10 +359,16 @@ async function ensureClubNightPollPreview(env){
   await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
   await memberJoinDiag(env,"club_poll_preview_error",error);return;
  }
+ const countdown=await discordApi(env,"/channels/"+channelId+"/messages","POST",{content:countdownContent,allowed_mentions:{parse:[]}});
+ if(countdown.status!==200||!countdown.data?.id){
+  const error="Live countdown post HTTP "+countdown.status;
+  await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
+  await memberJoinDiag(env,"club_poll_preview_error",error);return;
+ }
+ await env.DB.prepare("UPDATE club_night_poll_preview SET countdown_message_id=?,updated_at=? WHERE id=1").bind(String(countdown.data.id),new Date().toISOString()).run();
  const when="<t:1794711600:F>";
- const countdown="<t:1794711600:R>";
- const content="👀 **Club Status Check-In — Preview**\nWe’re planning to set Shadow Syndicate’s club status to **Active** at "+when+".\n⏳ **Countdown:** "+countdown+"\nAn **Acid Rain** event is planned for the same time.\n\n*Preview in mod logs.*";
- const digest=await sha("club-status-poll-preview-v3:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
+ const content="👀 **Club Status Check-In — Preview**\nWe’re planning to set Shadow Syndicate’s club status to **Active** at "+when+".\nAn **Acid Rain** event is planned for the same time.\n\n*See the live countdown above.*";
+ const digest=await sha("club-status-poll-preview-v4:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
  const nonce=BigInt("0x"+digest.slice(0,18)).toString();
  const result=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
   allowed_mentions:{parse:[]},nonce,enforce_nonce:true,content,
@@ -350,7 +377,7 @@ async function ensureClubNightPollPreview(env){
    answers:[
     {poll_media:{text:"Yes — I’ll set it to Active",emoji:{name:"✅"}}},
     {poll_media:{text:"I need help switching it to Active",emoji:{name:"🛠️"}}},
-    {poll_media:{text:"No — banished to the Dark Realm for eternity. So cruel!",emoji:{name:"❌"}}}
+    {poll_media:{text:"No — banished to Dark Realm, doomed to eternal torment!",emoji:{name:"❌"}}}
    ],
    duration:24,allow_multiselect:false,layout_type:1
   }
