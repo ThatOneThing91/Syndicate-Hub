@@ -334,7 +334,7 @@ async function ensureClubNightPollPreview(env){
  const remaining=Math.max(0,target-Date.now());
  const hours=Math.floor(remaining/3600000),minutes=Math.floor((remaining%3600000)/60000);
  const when="<t:1794711600:F>";
- const content="👀 **Club Night Poll — Preview**\\nWe’re planning to get Shadow Syndicate active as a club **Saturday, November 14 at 10:00 PM ET** ("+when+").\\n⏳ **Starts in "+hours+" hour"+(hours===1?"":"s")+" and "+minutes+" minute"+(minutes===1?"":"s")+".**\\nAn **Acid Rain** event is planned for the same time.\\n\\n*Preview in mod logs so you can check the wording and layout.*";
+ const content="👀 **Club Night Poll — Preview**\nWe’re planning to get Shadow Syndicate active as a club **Saturday, November 14 at 10:00 PM ET** ("+when+").\n⏳ **Starts in "+hours+" hour"+(hours===1?"":"s")+" and "+minutes+" minute"+(minutes===1?"":"s")+".**\nAn **Acid Rain** event is planned for the same time.\n\n*Preview in mod logs so you can check the wording and layout.*";
  const digest=await sha("club-night-poll-preview:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
  const nonce=BigInt("0x"+digest.slice(0,18)).toString();
  const result=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
