@@ -350,7 +350,7 @@ async function ensureClubNightPollPreview(env){
    answers:[
     {poll_media:{text:"Yes — I’ll set it to Active",emoji:{name:"✅"}}},
     {poll_media:{text:"I need help switching it to Active",emoji:{name:"🛠️"}}},
-    {poll_media:{text:"I can’t join this time",emoji:{name:"❌"}}}
+    {poll_media:{text:"No — banished to the Dark Realm for eternity. So cruel!",emoji:{name:"❌"}}}
    ],
    duration:24,allow_multiselect:false,layout_type:1
   }
