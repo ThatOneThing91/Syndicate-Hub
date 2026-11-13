@@ -367,7 +367,7 @@ async function ensureClubNightPollPreview(env){
  }
  await env.DB.prepare("UPDATE club_night_poll_preview SET countdown_message_id=?,updated_at=? WHERE id=1").bind(String(countdown.data.id),new Date().toISOString()).run();
  const when="<t:1794711600:F>";
- const content="🌧️☣️ **ACID RAIN EVENT** ☣️🌧️\n👀 **Club Status Check-In — Preview**\nWe’re planning to set Shadow Syndicate’s club status to **Active** for Acid Rain at "+when+".\n\n*See the live countdown above.*";
+ const content="🌧️☣️ **ACID RAIN EVENT** ☣️🌧️\n👀 **Club Status Check-In — Preview**\nShadow Syndicate is planning to set its club status to **Active** for the Acid Rain event at "+when+". The live countdown is just above this post; the rain is fictional until further notice, so please do not test it with an umbrella.\n\n**If you vote no:** a brass alarm will ring in the Hall of Mildly Disappointing Decisions. A goblin in a raincoat will escort you to the Dark Realm, where you will endure an eternity of dramatic thunder, lukewarm potion, and someone reading the club rules aloud one paragraph at a time. You will be named Assistant Keeper of the Damp Cloak and tasked with folding an infinite mountain of soggy capes while a choir chants, “They could have set their status to Active.” Every thousand years, a judge will offer you one appeal: “Was the Acid Rain event really that bad?” You must answer while a kazoo plays the saddest song ever composed. The Dark Realm’s customer service line will then place you on hold until the end of time.\n\nVoting no is absolutely allowed; the curse is fictional, and the teasing is only for fun. *Preview in mod-logs.*";
  const digest=await sha("club-status-poll-preview-v4:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
  const nonce=BigInt("0x"+digest.slice(0,18)).toString();
  const result=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
@@ -376,7 +376,7 @@ async function ensureClubNightPollPreview(env){
    question:{text:"Will you set your club status to Active for the Acid Rain event?"},
    answers:[
     {poll_media:{text:"Yes — I’ll set it to Active",emoji:{name:"✅"}}},
-    {poll_media:{text:"No — banished to Dark Realm, doomed to eternal torment!",emoji:{name:"❌"}}}
+    {poll_media:{text:"No — cast me into the Dark Realm",emoji:{name:"❌"}}}
    ],
    duration:24,allow_multiselect:false,layout_type:1
   }
