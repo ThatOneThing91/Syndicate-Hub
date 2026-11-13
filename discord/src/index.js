@@ -117,6 +117,7 @@ async function handleMemberJoin(env,state,member){
  const now=new Date().toISOString();
  await env.DB.prepare("UPDATE member_join_welcomes SET role_assigned=?,welcome_sent=1,welcome_message_id=?,welcome_channel_id=?,welcome_lease_until=0,updated_at=? WHERE user_id=? AND joined_at=?")
   .bind(roleDone?1:0,String(sent.data.id),String(intro.id),now,user.id,joinedAt).run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS welcome_member_stats(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT NOT NULL,message_id TEXT NOT NULL,last_total INTEGER,last_online INTEGER,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT INTO welcome_member_stats(id,channel_id,message_id,last_total,last_online,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET channel_id=excluded.channel_id,message_id=excluded.message_id,last_total=excluded.last_total,last_online=excluded.last_online,updated_at=excluded.updated_at")
   .bind(String(intro.id),String(sent.data.id),Number.isFinite(totalRaw)&&totalRaw>0?totalRaw:null,Number.isFinite(onlineRaw)&&onlineRaw>=0?onlineRaw:null,"1970-01-01T00:00:00Z").run();
  await memberJoinDiag(env,"join_result","user "+user.id+" role="+roleDone+" bot_welcome="+sent.data.id+" joined="+joinedAt);
