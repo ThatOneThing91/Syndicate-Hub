@@ -320,31 +320,37 @@ async function ensureClubNightPollPreview(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
  const channelId="1564527161216335902";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_night_poll_preview(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL DEFAULT 'pending',message_id TEXT,updated_at TEXT NOT NULL,error TEXT)").run();
- const prior=await env.DB.prepare("SELECT status,updated_at FROM club_night_poll_preview WHERE id=1").first();
+ const prior=await env.DB.prepare("SELECT status,message_id,updated_at FROM club_night_poll_preview WHERE id=1").first();
  if(prior?.status==="sent")return;
  if(prior?.status==="sending"&&Date.now()-Date.parse(prior.updated_at||"")<120000)return;
  await env.DB.prepare("INSERT INTO club_night_poll_preview(id,status,updated_at,error) VALUES(1,'sending',?,NULL) ON CONFLICT(id) DO UPDATE SET status='sending',updated_at=excluded.updated_at,error=NULL").bind(new Date().toISOString()).run();
+ if(prior?.message_id){
+  const removed=await discordApi(env,"/channels/"+channelId+"/messages/"+prior.message_id,"DELETE");
+  if(removed.status!==204&&removed.status!==404){
+   const error="Could not replace prior poll preview: HTTP "+removed.status;
+   await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
+   await memberJoinDiag(env,"club_poll_preview_error",error);return;
+  }
+ }
  const channel=await discordApi(env,"/channels/"+channelId);
  if(channel.status!==200||channel.data?.guild_id!==GUILD_ID||![0,5].includes(channel.data?.type)){
   const error="Target mod logs channel unavailable or not text: HTTP "+channel.status;
   await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
   await memberJoinDiag(env,"club_poll_preview_error",error);return;
  }
- const target=Date.UTC(2026,10,15,3,0,0);
- const remaining=Math.max(0,target-Date.now());
- const hours=Math.floor(remaining/3600000),minutes=Math.floor((remaining%3600000)/60000);
  const when="<t:1794711600:F>";
- const content="👀 **Club Night Poll — Preview**\nWe’re planning to get Shadow Syndicate active as a club **Saturday, November 14 at 10:00 PM ET** ("+when+").\n⏳ **Starts in "+hours+" hour"+(hours===1?"":"s")+" and "+minutes+" minute"+(minutes===1?"":"s")+".**\nAn **Acid Rain** event is planned for the same time.\n\n*Preview in mod logs so you can check the wording and layout.*";
- const digest=await sha("club-night-poll-preview:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
+ const countdown="<t:1794711600:R>";
+ const content="👀 **Club Status Check-In — Preview**\nWe’re planning to set Shadow Syndicate’s club status to **Active** at "+when+".\n⏳ **Countdown:** "+countdown+"\nAn **Acid Rain** event is planned for the same time.\n\n*Preview in mod logs.*";
+ const digest=await sha("club-status-poll-preview-v2:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
  const nonce=BigInt("0x"+digest.slice(0,18)).toString();
  const result=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
   allowed_mentions:{parse:[]},nonce,enforce_nonce:true,content,
   poll:{
-   question:{text:"Are you ready to get Shadow Syndicate active as a club tomorrow night?"},
+   question:{text:"Will you set your club status to Active for the Acid Rain event?"},
    answers:[
-    {poll_media:{text:"Yes, I’m in",emoji:{name:"✅"}}},
-    {poll_media:{text:"Maybe — I’ll confirm",emoji:{name:"🤔"}}},
-    {poll_media:{text:"I can’t make it",emoji:{name:"❌"}}}
+    {poll_media:{text:"Yes — I’ll set it to Active",emoji:{name:"✅"}}},
+    {poll_media:{text:"I need help switching it to Active",emoji:{name:"🛠️"}}},
+    {poll_media:{text:"I can’t join this time",emoji:{name:"❌"}}}
    ],
    duration:24,allow_multiselect:false,layout_type:1
   }
