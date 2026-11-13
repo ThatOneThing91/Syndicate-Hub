@@ -341,7 +341,7 @@ async function ensureClubNightPollPreview(env){
  const when="<t:1794711600:F>";
  const countdown="<t:1794711600:R>";
  const content="👀 **Club Status Check-In — Preview**\nWe’re planning to set Shadow Syndicate’s club status to **Active** at "+when+".\n⏳ **Countdown:** "+countdown+"\nAn **Acid Rain** event is planned for the same time.\n\n*Preview in mod logs.*";
- const digest=await sha("club-status-poll-preview-v2:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
+ const digest=await sha("club-status-poll-preview-v3:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
  const nonce=BigInt("0x"+digest.slice(0,18)).toString();
  const result=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
   allowed_mentions:{parse:[]},nonce,enforce_nonce:true,content,
