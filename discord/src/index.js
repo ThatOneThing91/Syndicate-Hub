@@ -360,7 +360,7 @@ async function ensureClubNightPollPreview(env){
  if(prior?.status==="sent"){
   if(prior.countdown_message_id){
    const updated=await discordApi(env,"/channels/"+channelId+"/messages/"+prior.countdown_message_id,"PATCH",{content:countdownContent,allowed_mentions:{parse:[]}});
-   if(updated.status===200)return;
+   if(updated.status===200){await env.DB.prepare("UPDATE club_night_poll_preview SET updated_at=?,error=NULL WHERE id=1").bind(new Date().toISOString()).run();return;}
    if(updated.status!==404){await memberJoinDiag(env,"club_poll_countdown_error","Countdown update HTTP "+updated.status);return;}
   }
   const created=await discordApi(env,"/channels/"+channelId+"/messages","POST",{content:countdownContent,allowed_mentions:{parse:[]}});
