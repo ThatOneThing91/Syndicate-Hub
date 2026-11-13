@@ -106,14 +106,14 @@ async function handleMemberJoin(env,state,member){
  const guild=await discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=true");
  const totalRaw=Number(state?.memberCount||0)>0?Number(state.memberCount):(guild.status===200?Number(guild.data?.approximate_member_count??guild.data?.member_count):0);
  const onlineRaw=guild.status===200?Number(guild.data?.approximate_presence_count):NaN;
- const fields=[];
+ const guildName=guild.status===200?(guild.data?.name||"Shadow Syndicates"):"Shadow Syndicates";
+ const fields=[{name:"Getting started",value:"💬 Visit <#1563067669479948299> to chat.\n🎭 Pick your roles in <#1564527127276290098>.",inline:false}];
  if(Number.isFinite(totalRaw)&&totalRaw>0)fields.push({name:"👥 Server Members",value:totalRaw.toLocaleString("en-US"),inline:true});
  if(Number.isFinite(onlineRaw)&&onlineRaw>=0)fields.push({name:"🟢 Online Now",value:onlineRaw.toLocaleString("en-US"),inline:true});
- fields.push({name:"Getting started",value:"💬 Visit <#1563067669479948299> to chat.\n🎭 Pick your roles in <#1564527127276290098>.",inline:false});
  const avatar=user.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+(String(user.avatar).startsWith("a_")?".gif":".png")+"?size=256":null;
  const guildIcon=guild.status===200&&guild.data?.icon?"https://cdn.discordapp.com/icons/"+GUILD_ID+"/"+guild.data.icon+(String(guild.data.icon).startsWith("a_")?".gif":".png")+"?size=64":null;
  const memberNumber=Number.isFinite(totalRaw)&&totalRaw>0?totalRaw.toLocaleString("en-US"):"new";
- const payload={allowed_mentions:{parse:[],users:[String(user.id)]},content:"👋 Welcome <@"+user.id+">!",embeds:[{author:{name:guild.status===200?(guild.data?.name||"Shadow Syndicates"):"Shadow Syndicates",...(guildIcon?{icon_url:guildIcon}:{})},title:"Welcome!",description:"<@"+user.id+"> joined Shadow Syndicate!\nYou're member **#"+memberNumber+"**.",color:0x7c3aed,...(avatar?{thumbnail:{url:avatar}}:{}),fields,footer:{text:"Member count updates automatically."},timestamp:new Date().toISOString()}],components:[{type:1,components:[{type:2,style:1,label:"👋 Wave & celebrate!",custom_id:"welcome_wave:"+user.id}]}]};
+ const payload={allowed_mentions:{parse:[],users:[String(user.id)]},content:"👋 Welcome <@"+user.id+">!",embeds:[{author:{name:guildName,...(guildIcon?{icon_url:guildIcon}:{})},title:"Welcome!",description:"<@"+user.id+"> joined "+guildName+"!\nYou're member **#"+memberNumber+"**.",color:0x7c3aed,...(avatar?{thumbnail:{url:avatar}}:{}),fields,footer:{text:"Member count updates automatically."},timestamp:new Date().toISOString()}],components:[{type:1,components:[{type:2,style:1,label:"👋 Wave & celebrate!",custom_id:"welcome_wave:"+user.id}]}]};
  const sent=await discordApi(env,"/channels/"+intro.id+"/messages","POST",payload);
  if(sent.status!==200||!sent.data?.id){
   await env.DB.prepare("UPDATE member_join_welcomes SET role_assigned=?,welcome_sent=0,welcome_lease_until=0,updated_at=? WHERE user_id=? AND joined_at=?").bind(roleDone?1:0,new Date().toISOString(),user.id,joinedAt).run();
