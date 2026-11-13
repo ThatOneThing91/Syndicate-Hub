@@ -71,15 +71,18 @@ function joinChannel(channels,...names){
  const norm=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
  return (channels||[]).find(c=>[0,5].includes(c.type)&&names.includes(norm(c.name)))||null;
 }
-// Discord posts the native join message (and its sticker reply control).
-// This handler ONLY assigns Initiate. Never post a second bot welcome.
+function canonicalJoinTimestamp(value){
+ const ms=Date.parse(String(value||""));
+ return Number.isFinite(ms)?new Date(ms).toISOString():String(value||"");
+}
+// Send one branded welcome. Discord's native join message is suppressed separately.
 async function handleMemberJoin(env,state,member){
  const user=member?.user;
  if(!env.DB||!user?.id||member.guild_id!==GUILD_ID||user.bot)return;
  await ensureJoinTrackingTable(env);
- const joinedAt=String(member.joined_at||"");
+ const joinedAt=canonicalJoinTimestamp(member.joined_at);
  const prior=await env.DB.prepare("SELECT role_assigned,welcome_sent,joined_at,welcome_message_id,welcome_lease_until FROM member_join_welcomes WHERE user_id=?").bind(user.id).first();
- const sameJoin=!!(joinedAt&&prior?.joined_at===joinedAt);
+ const sameJoin=!!(joinedAt&&canonicalJoinTimestamp(prior?.joined_at)===joinedAt);
  if(sameJoin&&prior.role_assigned&&prior.welcome_sent&&prior.welcome_message_id)return;
  const rr=await discordApi(env,"/guilds/"+GUILD_ID+"/roles");
  const initiate=rr.status===200&&Array.isArray(rr.data)?rr.data.find(r=>String(r.name||"").trim().toLowerCase()==="initiate"):null;
@@ -106,9 +109,11 @@ async function handleMemberJoin(env,state,member){
  const fields=[];
  if(Number.isFinite(totalRaw)&&totalRaw>0)fields.push({name:"👥 Server Members",value:totalRaw.toLocaleString("en-US"),inline:true});
  if(Number.isFinite(onlineRaw)&&onlineRaw>=0)fields.push({name:"🟢 Online Now",value:onlineRaw.toLocaleString("en-US"),inline:true});
- fields.push({name:"Get started",value:"💬 <#1563067669479948299>  ·  🎭 <#1564527127276290098>",inline:false});
+ fields.push({name:"Getting started",value:"💬 Visit <#1563067669479948299> to chat.\n🎭 Pick your roles in <#1564527127276290098>.",inline:false});
  const avatar=user.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+(String(user.avatar).startsWith("a_")?".gif":".png")+"?size=256":null;
- const payload={allowed_mentions:{parse:[],users:[String(user.id)]},content:"👋 Welcome <@"+user.id+"> to Shadow Syndicate!",embeds:[{title:"Welcome!",description:"We’re glad you joined the Syndicate. Say hello and get settled in.",color:0x7c3aed,...(avatar?{thumbnail:{url:avatar}}:{}),fields,footer:{text:"Shadow Syndicate"}}]};
+ const guildIcon=guild.status===200&&guild.data?.icon?"https://cdn.discordapp.com/icons/"+GUILD_ID+"/"+guild.data.icon+(String(guild.data.icon).startsWith("a_")?".gif":".png")+"?size=64":null;
+ const memberNumber=Number.isFinite(totalRaw)&&totalRaw>0?totalRaw.toLocaleString("en-US"):"new";
+ const payload={allowed_mentions:{parse:[],users:[String(user.id)]},content:"👋 Welcome <@"+user.id+">!",embeds:[{author:{name:guild.status===200?(guild.data?.name||"Shadow Syndicates"):"Shadow Syndicates",...(guildIcon?{icon_url:guildIcon}:{})},title:"Welcome!",description:"<@"+user.id+"> joined Shadow Syndicate!\nYou're member **#"+memberNumber+"**.",color:0x7c3aed,...(avatar?{thumbnail:{url:avatar}}:{}),fields,footer:{text:"Member count updates automatically."},timestamp:new Date().toISOString()}],components:[{type:1,components:[{type:2,style:1,label:"👋 Wave & celebrate!",custom_id:"welcome_wave:"+user.id}]}]};
  const sent=await discordApi(env,"/channels/"+intro.id+"/messages","POST",payload);
  if(sent.status!==200||!sent.data?.id){
   await env.DB.prepare("UPDATE member_join_welcomes SET role_assigned=?,welcome_sent=0,welcome_lease_until=0,updated_at=? WHERE user_id=? AND joined_at=?").bind(roleDone?1:0,new Date().toISOString(),user.id,joinedAt).run();
@@ -146,7 +151,7 @@ async function reconcileRecentJoins(env){
    const joined=Date.parse(member.joined_at);
    if(!Number.isFinite(joined)||joined<now-90*60000||joined>now+60000)continue;
    const prior=await env.DB.prepare("SELECT joined_at,role_assigned,welcome_sent,welcome_message_id FROM member_join_welcomes WHERE user_id=?").bind(member.user.id).first();
-   if(prior?.joined_at===member.joined_at&&prior.role_assigned&&prior.welcome_sent&&prior.welcome_message_id)continue;
+   if(canonicalJoinTimestamp(prior?.joined_at)===canonicalJoinTimestamp(member.joined_at)&&prior.role_assigned&&prior.welcome_sent&&prior.welcome_message_id)continue;
    if(restored>=12)break;
    try{await handleMemberJoin(env,{memberCount:0},{...member,guild_id:GUILD_ID});restored++;}
    catch(e){await memberJoinDiag(env,"reconcile_error",String(e).slice(0,360));}
@@ -824,6 +829,19 @@ async function birthdayRegisterButton(i,env){
  const saved=await env.DB.prepare("SELECT birth_month,birth_day FROM community_birthdays WHERE user_id=?").bind(userId).first();
  if(!saved)return birthdaySetModal(null);
  return birthdayEphemeral("Your saved birthday is **"+birthdayDateLabel(saved.birth_month,saved.birth_day)+"**.",[{type:1,components:[{type:2,style:1,label:"Change Birthday",custom_id:"syndicate_birthday_change"}]}]);
+}
+async function welcomeWaveInteraction(i,env){
+ const match=/^welcome_wave:(\d{17,20})$/.exec(String(i.data?.custom_id||""));
+ if(!match)return reply("That welcome button is no longer valid.");
+ const joinedUserId=match[1],welcomerId=String(i.member?.user?.id||i.user?.id||"");
+ if(!welcomerId)return reply("I couldn't identify your Discord account.");
+ if(String(i.channel_id)!=="1564527128253436005")return reply("That welcome button only works in introductions.");
+ const posted=await discordApi(env,"/channels/"+i.channel_id+"/messages","POST",{
+  content:"🎉 **MAKE SOME NOISE!** <@"+welcomerId+"> welcomes <@"+joinedUserId+"> to the crew! 🥳",
+  allowed_mentions:{parse:[],users:[welcomerId,joinedUserId]}
+ });
+ if(posted.status!==200||!posted.data?.id)return reply("I couldn't post the celebration. Please try again.");
+ return reply("Welcome celebration posted!");
 }
 async function birthdayRemoveButton(i,env){
  const userId=String(i.member?.user?.id||i.user?.id||"");
@@ -2660,6 +2678,7 @@ export default {
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
+   if(i.type===3&&i.data?.custom_id?.startsWith("welcome_wave:"))return welcomeWaveInteraction(i,env);
    if(i.type===3&&i.data?.custom_id==="syndicate_birthday_register")return birthdayRegisterButton(i,env);
    if(i.type===3&&i.data?.custom_id==="syndicate_birthday_change")return birthdayChangeButton(i,env);
    if(i.type===3&&i.data?.custom_id==="syndicate_birthday_remove")return birthdayRemoveButton(i,env);
