@@ -316,6 +316,29 @@ async function ensureShadowLeaveTestMessage(env){
 }
 
 
+async function inspectBirthdayPanelButtons(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS birthday_panel_button_diagnostics(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL,report TEXT,updated_at TEXT NOT NULL)").run();
+ const state=await env.DB.prepare("SELECT status FROM birthday_panel_button_diagnostics WHERE id=1").first();
+ if(state?.status!=="pending")return;
+ const targets=[
+  {id:"1564527127276290098",name:"choose-your-roles"},
+  {id:"1570590719549120682",name:"birthday-celebrations"},
+  {id:"1564527125896233073",name:"announcements"}
+ ];
+ const report=[];
+ for(const target of targets){
+  const result=await discordApi(env,"/channels/"+target.id+"/messages?limit=100");
+  const messages=Array.isArray(result.data)?result.data:[];
+  report.push({channel:target.name,status:result.status,candidates:messages.filter(m=>String(m.content||"").toLowerCase().includes("birthday")||(m.components||[]).length).map(m=>({id:m.id,content:String(m.content||"").slice(0,700),components:(m.components||[]).map(row=>(row.components||[]).map(c=>({type:c.type,custom_id:c.custom_id,label:c.label,style:c.style,placeholder:c.placeholder}))) }))});
+ }
+ const known="1570597115477106689";
+ for(const target of targets){
+  const result=await discordApi(env,"/channels/"+target.id+"/messages/"+known);
+  if(result.status===200)report.push({known_preview_channel:target.name,message:{id:result.data.id,content:String(result.data.content||"").slice(0,700),components:(result.data.components||[]).map(row=>(row.components||[]).map(c=>({type:c.type,custom_id:c.custom_id,label:c.label,style:c.style}))) }});
+ }
+ await env.DB.prepare("UPDATE birthday_panel_button_diagnostics SET status='done',report=?,updated_at=? WHERE id=1").bind(JSON.stringify(report),new Date().toISOString()).run();
+}
 async function ensureClubNightPollPreview(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
  const channelId="1564527161216335902";
