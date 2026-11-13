@@ -315,6 +315,50 @@ async function ensureShadowLeaveTestMessage(env){
  }
 }
 
+
+async function ensureClubNightPollPreview(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ const channelId="1564527161216335902";
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_night_poll_preview(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL DEFAULT 'pending',message_id TEXT,updated_at TEXT NOT NULL,error TEXT)").run();
+ const prior=await env.DB.prepare("SELECT status,updated_at FROM club_night_poll_preview WHERE id=1").first();
+ if(prior?.status==="sent")return;
+ if(prior?.status==="sending"&&Date.now()-Date.parse(prior.updated_at||"")<120000)return;
+ await env.DB.prepare("INSERT INTO club_night_poll_preview(id,status,updated_at,error) VALUES(1,'sending',?,NULL) ON CONFLICT(id) DO UPDATE SET status='sending',updated_at=excluded.updated_at,error=NULL").bind(new Date().toISOString()).run();
+ const channel=await discordApi(env,"/channels/"+channelId);
+ if(channel.status!==200||channel.data?.guild_id!==GUILD_ID||![0,5].includes(channel.data?.type)){
+  const error="Target mod logs channel unavailable or not text: HTTP "+channel.status;
+  await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
+  await memberJoinDiag(env,"club_poll_preview_error",error);return;
+ }
+ const target=Date.UTC(2026,10,15,3,0,0);
+ const remaining=Math.max(0,target-Date.now());
+ const hours=Math.floor(remaining/3600000),minutes=Math.floor((remaining%3600000)/60000);
+ const when="<t:1794711600:F>";
+ const content="👀 **Club Night Poll — Preview**\\nWe’re planning to get Shadow Syndicate active as a club **Saturday, November 14 at 10:00 PM ET** ("+when+").\\n⏳ **Starts in "+hours+" hour"+(hours===1?"":"s")+" and "+minutes+" minute"+(minutes===1?"":"s")+".**\\nAn **Acid Rain** event is planned for the same time.\\n\\n*Preview in mod logs so you can check the wording and layout.*";
+ const digest=await sha("club-night-poll-preview:"+GUILD_ID+":"+channelId+":2026-11-14T22:00:00-05:00");
+ const nonce=BigInt("0x"+digest.slice(0,18)).toString();
+ const result=await discordApi(env,"/channels/"+channelId+"/messages","POST",{
+  allowed_mentions:{parse:[]},nonce,enforce_nonce:true,content,
+  poll:{
+   question:{text:"Are you ready to get Shadow Syndicate active as a club tomorrow night?"},
+   answers:[
+    {poll_media:{text:"Yes, I’m in",emoji:{name:"✅"}}},
+    {poll_media:{text:"Maybe — I’ll confirm",emoji:{name:"🤔"}}},
+    {poll_media:{text:"I can’t make it",emoji:{name:"❌"}}}
+   ],
+   duration:24,allow_multiselect:false,layout_type:1
+  }
+ });
+ if(result.status===200&&result.data?.id){
+  await env.DB.prepare("UPDATE club_night_poll_preview SET status='sent',message_id=?,updated_at=?,error=NULL WHERE id=1").bind(String(result.data.id),new Date().toISOString()).run();
+  await memberJoinDiag(env,"club_poll_preview_sent","Poll preview sent to "+channelId+"; message "+result.data.id);
+ }else{
+  const error="Poll preview post HTTP "+result.status+" "+JSON.stringify(result.data||{}).slice(0,300);
+  await env.DB.prepare("UPDATE club_night_poll_preview SET status='pending',updated_at=?,error=? WHERE id=1").bind(new Date().toISOString(),error).run();
+  await memberJoinDiag(env,"club_poll_preview_error",error);
+ }
+}
+
 export class MemberJoinGateway extends DurableObject{
  constructor(ctx,env){super(ctx,env);this.socket=null;this.heartbeatTimer=null;this.heartbeatMs=45000;this.waitingForAck=false;this.seq=null;this.session=null;this.memberCount=0;this.connectedAt=0;this.lastAckAt=0;this.lastReadyAt=0;}
  async fetch(){try{await memberJoinDiag(this.env,"gateway_start","scheduled binding invoked");await this.connect();return new Response("Gateway listener starting",{status:202});}catch(e){console.error("Discord member gateway connect failed",String(e));return new Response("Gateway listener unavailable",{status:503});}}
@@ -2483,6 +2527,7 @@ export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
   ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
+  ctx.waitUntil(ensureClubNightPollPreview(env).catch(e=>console.error("club night poll preview",String(e))));
   ctx.waitUntil(applyShadowRoleIcons(env).catch(e=>console.error("role icon setup",String(e))));
   ctx.waitUntil(flushShadowMemberLeaveNotifications(env).catch(e=>console.error("member leave notifications",String(e))));
   ctx.waitUntil(ensureShadowLeaveTestMessage(env).catch(e=>console.error("member leave test message",String(e))));
