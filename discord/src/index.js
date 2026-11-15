@@ -804,6 +804,65 @@ const PAYMENT_COMMAND = Object.freeze({
  ]}]
 });
 
+
+const ROBLOX_ACHIEVEMENT_ROLES = Object.freeze([
+ {key:"badge_347118512651055",kind:"badge",source_id:"347118512651055",name:"Yard Rookie",emoji:"🎉",color:0x76539A},
+ {key:"badge_4493384153488115",kind:"badge",source_id:"4493384153488115",name:"Bid Starter",emoji:"🔨",color:0x76539A},
+ {key:"badge_2156807070186054",kind:"badge",source_id:"2156807070186054",name:"Seasoned Bidder",emoji:"⚖️",color:0x76539A},
+ {key:"badge_968672732412664",kind:"badge",source_id:"968672732412664",name:"Auction Legend",emoji:"🏆",color:0x9169B5},
+ {key:"badge_4420209178775261",kind:"badge",source_id:"4420209178775261",name:"First Fortune",emoji:"🪙",color:0xA27A3F},
+ {key:"badge_293915234199352",kind:"badge",source_id:"293915234199352",name:"Golden Locker",emoji:"🔐",color:0xA27A3F},
+ {key:"badge_2832471902565333",kind:"badge",source_id:"2832471902565333",name:"Midnight Appraiser",emoji:"🌙",color:0x76539A},
+ {key:"badge_2044362288175197",kind:"badge",source_id:"2044362288175197",name:"Vault Architect",emoji:"🏦",color:0x9169B5},
+ {key:"badge_2117324818051101",kind:"badge",source_id:"2117324818051101",name:"Mutation Scholar",emoji:"🧪",color:0x76539A},
+ {key:"badge_2958892288718923",kind:"badge",source_id:"2958892288718923",name:"Gavel Keeper",emoji:"🏆",color:0x9169B5},
+ {key:"badge_2243860338697823",kind:"badge",source_id:"2243860338697823",name:"Safecracker",emoji:"🔓",color:0x76539A},
+ {key:"badge_2061046447793073",kind:"badge",source_id:"2061046447793073",name:"Star Grader",emoji:"🌟",color:0x9169B5},
+ {key:"badge_2174958257257604",kind:"badge",source_id:"2174958257257604",name:"Pristine Find",emoji:"💎",color:0x76539A},
+ {key:"badge_2384449047183669",kind:"badge",source_id:"2384449047183669",name:"Time Touched",emoji:"⏳",color:0x76539A},
+ {key:"badge_826078039185539",kind:"badge",source_id:"826078039185539",name:"Wrecking Crew",emoji:"🚘",color:0x76539A},
+ {key:"badge_3478268039149215",kind:"badge",source_id:"3478268039149215",name:"First Shift",emoji:"🌱",color:0x547B72},
+ {key:"badge_2636869078828444",kind:"badge",source_id:"2636869078828444",name:"Yard Regular",emoji:"🪙",color:0x547B72},
+ {key:"badge_4232052017572890",kind:"badge",source_id:"4232052017572890",name:"Yard Veteran",emoji:"🛠️",color:0x547B72},
+ {key:"badge_2369744542087671",kind:"badge",source_id:"2369744542087671",name:"Yard Fixture",emoji:"🌃",color:0x547B72},
+ {key:"badge_1711363422123520",kind:"badge",source_id:"1711363422123520",name:"Shadow Treasury",emoji:"💰",color:0xA27A3F},
+ {key:"badge_709835839666354",kind:"badge",source_id:"709835839666354",name:"Nothing But Net",emoji:"🏀",color:0x547B72},
+ {key:"badge_3295715232604647",kind:"badge",source_id:"3295715232604647",name:"Double Trouble",emoji:"🧬",color:0x76539A},
+ {key:"badge_2820769736120374",kind:"badge",source_id:"2820769736120374",name:"Triple Threat",emoji:"🧬",color:0x76539A},
+ {key:"badge_2726635232418986",kind:"badge",source_id:"2726635232418986",name:"Mutation Overload",emoji:"☣️",color:0x9169B5},
+ {key:"badge_2119370661379569",kind:"badge",source_id:"2119370661379569",name:"Junkyard Archivist",emoji:"📚",color:0x547B72},
+ {key:"badge_599586120872973",kind:"badge",source_id:"599586120872973",name:"Back Alley Archivist",emoji:"🗝️",color:0x547B72},
+ {key:"badge_4322087043340422",kind:"badge",source_id:"4322087043340422",name:"Farmyard Forager",emoji:"🌿",color:0x547B72},
+ {key:"badge_1542612394801402",kind:"badge",source_id:"1542612394801402",name:"Shipyard Salvager",emoji:"⚓",color:0x547B72},
+ {key:"badge_1523977774949788",kind:"badge",source_id:"1523977774949788",name:"Lucky Beachcomber",emoji:"🏖️",color:0x547B72},
+ {key:"badge_1951652142311679",kind:"badge",source_id:"1951652142311679",name:"Power Plant Specialist",emoji:"⚡",color:0x547B72},
+ {key:"badge_4343718850734940",kind:"badge",source_id:"4343718850734940",name:"Business Bay Broker",emoji:"🏙️",color:0x547B72},
+ {key:"badge_1748654945450203",kind:"badge",source_id:"1748654945450203",name:"Mine Cartographer",emoji:"⛏️",color:0x547B72},
+ {key:"badge_3443940266061497",kind:"badge",source_id:"3443940266061497",name:"Cargo Captain",emoji:"🚢",color:0x547B72},
+ {key:"badge_2779271482766260",kind:"badge",source_id:"2779271482766260",name:"Rail Runner",emoji:"🚂",color:0x547B72},
+ {key:"badge_253397934063860",kind:"badge",source_id:"253397934063860",name:"Fish Finder",emoji:"🎣",color:0x547B72},
+ {key:"badge_3416683540311532",kind:"badge",source_id:"3416683540311532",name:"Lost & Found Keeper",emoji:"🧳",color:0x547B72},
+ {key:"badge_2991713882977619",kind:"badge",source_id:"2991713882977619",name:"Lost Ledger Keeper",emoji:"📜",color:0x547B72},
+ {key:"pass_1883008475",kind:"gamepass",source_id:"1883008475",name:"Custom Ride",emoji:"🛻",color:0xA27A3F},
+ {key:"pass_1875507163",kind:"gamepass",source_id:"1875507163",name:"Quick Seller",emoji:"💸",color:0xA27A3F},
+ {key:"pass_1907078250",kind:"gamepass",source_id:"1907078250",name:"Plot Architect",emoji:"🏗️",color:0x76539A},
+ {key:"pass_1874691200",kind:"gamepass",source_id:"1874691200",name:"Lucky Grader",emoji:"🍀",color:0x547B72},
+ {key:"pass_1919438589",kind:"gamepass",source_id:"1919438589",name:"Gavel Collector",emoji:"🏆",color:0xA27A3F},
+ {key:"pass_1874365193",kind:"gamepass",source_id:"1874365193",name:"Heavy Hauler",emoji:"🚚",color:0x76539A},
+ {key:"pass_1874793187",kind:"gamepass",source_id:"1874793187",name:"Bottomless Pack",emoji:"🎒",color:0x76539A},
+ {key:"pass_1875633189",kind:"gamepass",source_id:"1875633189",name:"Celebrity",emoji:"🌟",color:0xA27A3F},
+ {key:"pass_1874943185",kind:"gamepass",source_id:"1874943185",name:"The Grand Exchange",emoji:"🛒",color:0xA27A3F},
+ {key:"pass_1876311152",kind:"gamepass",source_id:"1876311152",name:"Deal Chaser",emoji:"⏱️",color:0x547B72}
+]);
+
+
+const LINK_ROBLOX_COMMAND = Object.freeze({
+ name:"link-roblox",description:"Link your Roblox account for badge and gamepass roles",type:1,dm_permission:false
+});
+const UNLINK_ROBLOX_COMMAND = Object.freeze({
+ name:"unlink-roblox",description:"Unlink Roblox and remove your achievement roles",type:1,dm_permission:false
+});
+
 const enc = new TextEncoder();
 const hexBytes = s => new Uint8Array(s.match(/../g).map(x=>parseInt(x,16)));
 const sha = async s => [...new Uint8Array(await crypto.subtle.digest("SHA-256",enc.encode(s)))].map(x=>x.toString(16).padStart(2,"0")).join("");
@@ -1697,6 +1756,318 @@ async function ensureMemberIdRole(env,discordId,robloxId){
  if(added.status!==204)throw Error("Cannot assign Roblox ID role: "+added.status);
  await env.DB.prepare("INSERT INTO roblox_member_roles(discord_user_id,roblox_user_id,role_id,created_at) VALUES(?,?,?,?) ON CONFLICT(discord_user_id) DO UPDATE SET roblox_user_id=excluded.roblox_user_id,role_id=excluded.role_id").bind(discordId,String(robloxId),roleId,new Date().toISOString()).run();
 }
+
+async function ensureRobloxLinkTables(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_link_states(state TEXT PRIMARY KEY,discord_user_id TEXT NOT NULL,code_verifier TEXT NOT NULL,expires_at TEXT NOT NULL,created_at TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_discord_links(discord_user_id TEXT PRIMARY KEY,roblox_user_id TEXT NOT NULL UNIQUE,roblox_username TEXT NOT NULL,refresh_cipher TEXT NOT NULL,refresh_iv TEXT NOT NULL,original_nickname TEXT,next_sync_at TEXT NOT NULL,sync_started_at TEXT,sync_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+}
+function randomBase64Url(length){
+ const bytes=crypto.getRandomValues(new Uint8Array(length));
+ let binary="";for(const b of bytes)binary+=String.fromCharCode(b);
+ return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
+}
+function decodeBase64Url(value){
+ const normalized=String(value||"").replace(/-/g,"+").replace(/_/g,"/");
+ const padded=normalized+"=".repeat((4-normalized.length%4)%4);
+ const binary=atob(padded);
+ return Uint8Array.from(binary,c=>c.charCodeAt(0));
+}
+function bytesToBase64Url(bytes){
+ let binary="";for(const b of bytes)binary+=String.fromCharCode(b);
+ return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
+}
+async function robloxTokenCryptoKey(env){
+ if(!env.KEY_PEPPER)throw Error("Token encryption key is unavailable");
+ const material=await crypto.subtle.importKey("raw",enc.encode(env.KEY_PEPPER),"HKDF",false,["deriveKey"]);
+ return crypto.subtle.deriveKey({name:"HKDF",hash:"SHA-256",salt:enc.encode("syndicate-roblox-link-v1"),info:enc.encode("refresh-token")},material,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+}
+async function encryptRobloxRefreshToken(env,token){
+ const iv=crypto.getRandomValues(new Uint8Array(12));
+ const key=await robloxTokenCryptoKey(env);
+ const cipher=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,enc.encode(String(token)));
+ return {cipher:bytesToBase64Url(new Uint8Array(cipher)),iv:bytesToBase64Url(iv)};
+}
+async function decryptRobloxRefreshToken(env,cipher,iv){
+ const key=await robloxTokenCryptoKey(env);
+ const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:decodeBase64Url(iv)},key,decodeBase64Url(cipher));
+ return new TextDecoder().decode(plain);
+}
+function robloxOAuthConfig(env){
+ return {clientId:String(env.ROBLOX_CLIENT_ID||""),clientSecret:String(env.ROBLOX_CLIENT_SECRET||""),redirectUri:"https://syndicate-discord.loganmatthewsmall.workers.dev/roblox/oauth/callback"};
+}
+function linkRobloxResponse(content,url){
+ const data={content,flags:64,allowed_mentions:{parse:[]},components:url?[{type:1,components:[{type:2,style:5,label:"Connect Roblox",url}]}]:[]};
+ return new Response(JSON.stringify({type:4,data}),{headers:{"content-type":"application/json"}});
+}
+async function beginRobloxLink(i,env){
+ const did=String(i.member?.user?.id||i.user?.id||"");
+ if(!did)return reply("I couldn't identify your Discord account.");
+ await ensureRobloxLinkTables(env);
+ const existing=await env.DB.prepare("SELECT roblox_username FROM roblox_discord_links WHERE discord_user_id=?").bind(did).first();
+ if(existing)return reply("Your Discord account is already linked to Roblox username "+String(existing.roblox_username).replace(/[*_~|]/g,"")+". Use /unlink-roblox before linking another account.");
+ const config=robloxOAuthConfig(env);
+ if(!config.clientId||!config.clientSecret)return reply("Roblox account linking is not configured yet. The server owner needs to register the Roblox OAuth app and add its client ID and secret to the Syndicate Discord Worker.");
+ const state=randomBase64Url(32),verifier=randomBase64Url(48);
+ const digest=await crypto.subtle.digest("SHA-256",enc.encode(verifier));
+ const challenge=bytesToBase64Url(new Uint8Array(digest));
+ const now=new Date(),expires=new Date(now.getTime()+10*60*1000).toISOString();
+ await env.DB.prepare("DELETE FROM roblox_link_states WHERE expires_at<=?").bind(now.toISOString()).run();
+ await env.DB.prepare("INSERT INTO roblox_link_states(state,discord_user_id,code_verifier,expires_at,created_at) VALUES(?,?,?,?,?)").bind(state,did,verifier,expires,now.toISOString()).run();
+ const authorize=new URL("https://apis.roblox.com/oauth/v1/authorize");
+ authorize.searchParams.set("client_id",config.clientId);
+ authorize.searchParams.set("redirect_uri",config.redirectUri);
+ authorize.searchParams.set("scope","openid profile user.inventory-item:read");
+ authorize.searchParams.set("response_type","code");
+ authorize.searchParams.set("state",state);
+ authorize.searchParams.set("code_challenge",challenge);
+ authorize.searchParams.set("code_challenge_method","S256");
+ authorize.searchParams.set("prompt","consent");
+ return linkRobloxResponse("Connect your Roblox account to verify badges and gamepasses. Roblox will show the permissions before you approve. The bot will then set your server nickname to your Roblox username.",authorize.toString());
+}
+async function robloxOAuthToken(env,fields){
+ const config=robloxOAuthConfig(env);
+ const body=new URLSearchParams({...fields,client_id:config.clientId,client_secret:config.clientSecret});
+ const response=await fetch("https://apis.roblox.com/oauth/v1/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body.toString(),signal:AbortSignal.timeout(15000)});
+ const data=await response.json().catch(()=>null);
+ if(!response.ok||!data?.access_token)throw Error("Roblox authorization failed (HTTP "+response.status+").");
+ return data;
+}
+function robloxHtmlPage(title,message,status=200){
+ const safe=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+ const html="<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>"+safe(title)+"</title><style>body{margin:0;background:#18121f;color:#f7f2ff;font:16px system-ui;display:grid;min-height:100vh;place-items:center}.card{max-width:560px;margin:24px;padding:28px;border:1px solid #60447a;border-radius:18px;background:#241b2c;box-shadow:0 12px 40px #0007}h1{color:#c7a7ee;margin-top:0}p{line-height:1.6}</style></head><body><main class=\"card\"><h1>"+safe(title)+"</h1><p>"+safe(message)+"</p><p>You can close this tab and return to Discord.</p></main></body></html>";
+ return new Response(html,{status,headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","content-security-policy":"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"}});
+}
+async function robloxInventoryOwnership(accessToken,robloxUserId){
+ const badgeIds=ROBLOX_ACHIEVEMENT_ROLES.filter(x=>x.kind==="badge").map(x=>x.source_id);
+ const passIds=ROBLOX_ACHIEVEMENT_ROLES.filter(x=>x.kind==="gamepass").map(x=>x.source_id);
+ const url=new URL("https://apis.roblox.com/cloud/v2/users/"+encodeURIComponent(robloxUserId)+"/inventory-items");
+ url.searchParams.set("filter","badgeIds="+badgeIds.join(",")+";gamePassIds="+passIds.join(","));
+ url.searchParams.set("maxPageSize","100");
+ const owned=new Set();let pageToken="";
+ for(let page=0;page<5;page++){
+  if(pageToken)url.searchParams.set("pageToken",pageToken);
+  const response=await fetch(url.toString(),{headers:{Authorization:"Bearer "+accessToken},signal:AbortSignal.timeout(15000)});
+  const data=await response.json().catch(()=>null);
+  if(!response.ok||!Array.isArray(data?.inventoryItems))throw Error("Roblox inventory read failed (HTTP "+response.status+"). Confirm the inventory permission was approved.");
+  for(const item of data.inventoryItems){
+   const details=item?.assetDetails||{};
+   const sourceId=String(details.assetId??details.badgeId??details.gamePassId??"");
+   if(sourceId)owned.add(sourceId);
+  }
+  pageToken=String(data.nextPageToken||"");
+  if(!pageToken||!data.inventoryItems.length)break;
+ }
+ return owned;
+}
+async function syncRobloxMember(env,link,accessToken){
+ const discordId=String(link.discord_user_id),robloxId=String(link.roblox_user_id),username=String(link.roblox_username);
+ const member=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId);
+ if(member.status!==200)throw Error("Discord member lookup failed (HTTP "+member.status+").");
+ let nicknameUpdated=false;
+ if(member.data.nick!==username){
+  const changed=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId,"PATCH",{nick:username});
+  if(changed.status!==200)throw Error("Bot could not update the Discord nickname (HTTP "+changed.status+").");
+  nicknameUpdated=true;
+ }
+ const owned=await robloxInventoryOwnership(accessToken,robloxId);
+ const catalog=await env.DB.prepare("SELECT role_key,kind,source_id,role_id FROM roblox_achievement_role_catalog").all();
+ const byKey=new Map((catalog.results||[]).map(x=>[x.role_key,x]));
+ let added=0,removed=0;
+ const currentRoles=new Set((member.data.roles||[]).map(String));
+ for(const def of ROBLOX_ACHIEVEMENT_ROLES){
+  const row=byKey.get(def.key);
+  if(!row?.role_id)continue;
+  const has=owned.has(def.source_id),assigned=currentRoles.has(String(row.role_id));
+  if(has&&!assigned){
+   const result=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId+"/roles/"+row.role_id,"PUT");
+   if(result.status!==204)throw Error("Could not assign role "+def.name+" (HTTP "+result.status+").");
+   added++;
+  }else if(!has&&assigned){
+   const result=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId+"/roles/"+row.role_id,"DELETE");
+   if(result.status!==204)throw Error("Could not remove role "+def.name+" (HTTP "+result.status+").");
+   removed++;
+  }
+ }
+ return {owned:owned.size,added,removed,nicknameUpdated};
+}
+async function robloxOAuthCallback(request,env){
+ if(!env.DB)return robloxHtmlPage("Setup unavailable","The account-link service is not configured.",503);
+ await ensureRobloxLinkTables(env);
+ const url=new URL(request.url);
+ const oauthError=url.searchParams.get("error");
+ if(oauthError)return robloxHtmlPage("Link cancelled","Roblox authorization was not completed. You can run /link-roblox in Discord to try again.");
+ const state=String(url.searchParams.get("state")||""),code=String(url.searchParams.get("code")||"");
+ if(!/^[A-Za-z0-9_-]{32,100}$/.test(state)||!code)return robloxHtmlPage("Invalid link","The link expired or could not be verified. Start again with /link-roblox.",400);
+ const pending=await env.DB.prepare("SELECT discord_user_id,code_verifier,expires_at FROM roblox_link_states WHERE state=?").bind(state).first();
+ if(!pending||Date.parse(pending.expires_at)<=Date.now())return robloxHtmlPage("Link expired","Start again with /link-roblox in Discord.",400);
+ const deleted=await env.DB.prepare("DELETE FROM roblox_link_states WHERE state=?").bind(state).run();
+ if(!deleted.meta?.changes)return robloxHtmlPage("Link already used","Start a new link from Discord.",400);
+ const config=robloxOAuthConfig(env);
+ if(!config.clientId||!config.clientSecret)return robloxHtmlPage("Setup unavailable","The Roblox OAuth app is not configured yet.",503);
+ try{
+  const tokens=await robloxOAuthToken(env,{grant_type:"authorization_code",code,code_verifier:pending.code_verifier,redirect_uri:config.redirectUri});
+  const profileResponse=await fetch("https://apis.roblox.com/oauth/v1/userinfo",{headers:{Authorization:"Bearer "+tokens.access_token},signal:AbortSignal.timeout(15000)});
+  const profile=await profileResponse.json().catch(()=>null);
+  if(!profileResponse.ok||!/^\d{1,20}$/.test(String(profile?.sub||"")))throw Error("Roblox could not confirm the account identity.");
+  const robloxId=String(profile.sub),username=String(profile.preferred_username||"").trim();
+  if(!username||username.length>32)throw Error("Roblox did not provide a valid username.");
+  const existingRoblox=await env.DB.prepare("SELECT discord_user_id FROM roblox_discord_links WHERE roblox_user_id=?").bind(robloxId).first();
+  if(existingRoblox&&String(existingRoblox.discord_user_id)!==String(pending.discord_user_id))return robloxHtmlPage("Account already linked","This Roblox account is already linked to another Discord account. Contact a server administrator if you believe this is an error.",409);
+  const existingDiscord=await env.DB.prepare("SELECT roblox_user_id FROM roblox_discord_links WHERE discord_user_id=?").bind(pending.discord_user_id).first();
+  if(existingDiscord&&String(existingDiscord.roblox_user_id)!==robloxId)return robloxHtmlPage("Discord already linked","Unlink the existing Roblox account with /unlink-roblox before linking another one.",409);
+  const guildMember=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+pending.discord_user_id);
+  if(guildMember.status!==200)return robloxHtmlPage("Discord member not found","Return to the Shadow Syndicate server and start the link again.",404);
+  const prior=await env.DB.prepare("SELECT original_nickname FROM roblox_discord_links WHERE discord_user_id=?").bind(pending.discord_user_id).first();
+  const originalNickname=prior?prior.original_nickname:(guildMember.data.nick??null);
+  if(!tokens.refresh_token)throw Error("Roblox did not issue a refresh token.");
+  const secured=await encryptRobloxRefreshToken(env,tokens.refresh_token);
+  const now=new Date(),stamp=now.toISOString(),next=new Date(now.getTime()+15*60*1000).toISOString();
+  await env.DB.prepare("INSERT INTO roblox_discord_links(discord_user_id,roblox_user_id,roblox_username,refresh_cipher,refresh_iv,original_nickname,next_sync_at,sync_started_at,sync_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,NULL,NULL,?,?) ON CONFLICT(discord_user_id) DO UPDATE SET roblox_user_id=excluded.roblox_user_id,roblox_username=excluded.roblox_username,refresh_cipher=excluded.refresh_cipher,refresh_iv=excluded.refresh_iv,next_sync_at=excluded.next_sync_at,sync_started_at=NULL,sync_error=NULL,updated_at=excluded.updated_at").bind(String(pending.discord_user_id),robloxId,username,secured.cipher,secured.iv,originalNickname,next,stamp,stamp).run();
+  let result;
+  try{
+   result=await syncRobloxMember(env,{discord_user_id:String(pending.discord_user_id),roblox_user_id:robloxId,roblox_username:username},tokens.access_token);
+   await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_error=NULL,updated_at=? WHERE discord_user_id=?").bind(new Date(Date.now()+15*60*1000).toISOString(),new Date().toISOString(),String(pending.discord_user_id)).run();
+   return robloxHtmlPage("Roblox linked","Your Discord nickname is now set to "+username+". The bot found "+result.owned+" matching badge or gamepass item(s) and assigned "+result.added+" role(s). Role updates will refresh automatically about every 15 minutes.");
+  }catch(e){
+   await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_error=?,updated_at=? WHERE discord_user_id=?").bind(new Date(Date.now()+5*60*1000).toISOString(),String(e).slice(0,500),new Date().toISOString(),String(pending.discord_user_id)).run();
+   return robloxHtmlPage("Roblox linked; inventory sync needs attention","Your Roblox username was verified. The automatic role check could not finish yet. Confirm that you approved Roblox inventory access, then try again or contact the server owner. The bot will retry automatically.");
+  }
+ }catch(e){
+  console.error("Roblox OAuth callback",String(e));
+  return robloxHtmlPage("Could not finish linking","The Roblox connection did not finish. Return to Discord and start a fresh /link-roblox request.",502);
+ }
+}
+async function unlinkRobloxAccount(i,env){
+ const did=String(i.member?.user?.id||i.user?.id||"");
+ if(!did)return reply("I couldn't identify your Discord account.");
+ await ensureRobloxLinkTables(env);
+ const link=await env.DB.prepare("SELECT roblox_user_id,roblox_username,refresh_cipher,refresh_iv,original_nickname FROM roblox_discord_links WHERE discord_user_id=?").bind(did).first();
+ if(!link)return reply("There is no Roblox account linked to your Discord account.");
+ const catalog=await env.DB.prepare("SELECT role_id FROM roblox_achievement_role_catalog").all();
+ const member=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+did);
+ if(member.status===200){
+  const existing=new Set((member.data.roles||[]).map(String));
+  for(const row of catalog.results||[])if(row.role_id&&existing.has(String(row.role_id))){
+   const removed=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+did+"/roles/"+row.role_id,"DELETE");
+   if(removed.status!==204)console.error("Roblox unlink role removal",removed.status,row.role_id);
+  }
+  const restored=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+did,"PATCH",{nick:link.original_nickname||null});
+  if(restored.status!==200)console.error("Roblox unlink nickname restore",restored.status);
+ }
+ try{
+  const refresh=await decryptRobloxRefreshToken(env,link.refresh_cipher,link.refresh_iv);
+  const config=robloxOAuthConfig(env);
+  await fetch("https://apis.roblox.com/oauth/v1/token/revoke",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({token:refresh,client_id:config.clientId,client_secret:config.clientSecret}).toString()});
+ }catch(e){console.error("Roblox token revoke",String(e))}
+ await env.DB.prepare("DELETE FROM roblox_discord_links WHERE discord_user_id=?").bind(did).run();
+ return reply("Your Roblox account was unlinked. Achievement roles were removed, and your previous Discord nickname was restored.");
+}
+async function syncLinkedRobloxAccounts(env){
+ if(!env.DB||!env.ROBLOX_CLIENT_ID||!env.ROBLOX_CLIENT_SECRET)return;
+ await ensureRobloxLinkTables(env);
+ const now=Date.now(),stamp=new Date(now).toISOString();
+ const rows=await env.DB.prepare("SELECT discord_user_id,roblox_user_id,roblox_username,refresh_cipher,refresh_iv FROM roblox_discord_links WHERE next_sync_at<=? AND (sync_started_at IS NULL OR sync_started_at<=?) ORDER BY next_sync_at LIMIT 5").bind(stamp,new Date(now-10*60*1000).toISOString()).all();
+ for(const row of rows.results||[]){
+  const claim=await env.DB.prepare("UPDATE roblox_discord_links SET sync_started_at=?,updated_at=? WHERE discord_user_id=? AND next_sync_at<=? AND (sync_started_at IS NULL OR sync_started_at<=?)").bind(stamp,stamp,row.discord_user_id,stamp,new Date(now-10*60*1000).toISOString()).run();
+  if(!claim.meta?.changes)continue;
+  try{
+   const refresh=await decryptRobloxRefreshToken(env,row.refresh_cipher,row.refresh_iv);
+   const tokens=await robloxOAuthToken(env,{grant_type:"refresh_token",refresh_token:refresh});
+   if(!tokens.refresh_token)throw Error("Roblox did not rotate the refresh token.");
+   const secured=await encryptRobloxRefreshToken(env,tokens.refresh_token);
+   await env.DB.prepare("UPDATE roblox_discord_links SET refresh_cipher=?,refresh_iv=?,updated_at=? WHERE discord_user_id=?").bind(secured.cipher,secured.iv,new Date().toISOString(),row.discord_user_id).run();
+   await syncRobloxMember(env,row,tokens.access_token);
+   const next=new Date(Date.now()+15*60*1000).toISOString();
+   await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_started_at=NULL,sync_error=NULL,updated_at=? WHERE discord_user_id=?").bind(next,new Date().toISOString(),row.discord_user_id).run();
+  }catch(e){
+   const next=new Date(Date.now()+30*60*1000).toISOString();
+   await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_started_at=NULL,sync_error=?,updated_at=? WHERE discord_user_id=?").bind(next,String(e).slice(0,500),new Date().toISOString(),row.discord_user_id).run();
+   console.error("Roblox automatic sync",row.discord_user_id,String(e));
+  }
+ }
+}
+async function ensureRobloxAchievementRoles(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_achievement_role_catalog(role_key TEXT PRIMARY KEY,kind TEXT NOT NULL,source_id TEXT NOT NULL,role_name TEXT NOT NULL,role_id TEXT,emoji TEXT NOT NULL,color INTEGER NOT NULL,updated_at TEXT NOT NULL,UNIQUE(kind,source_id))").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_achievement_role_setup(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL DEFAULT 'pending',completed INTEGER NOT NULL DEFAULT 0,total INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0,last_error TEXT,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO roblox_achievement_role_setup(id,status,updated_at) VALUES(1,'pending',?)").bind(new Date().toISOString()).run();
+ const now=Date.now();
+ const claim=await env.DB.prepare("UPDATE roblox_achievement_role_setup SET status='running',lease_until=?,updated_at=? WHERE id=1 AND status!='ready' AND lease_until<=?").bind(now+55000,new Date(now).toISOString(),now).run();
+ if(!claim.meta?.changes)return;
+ try{
+  const stamp=new Date().toISOString();
+  await env.DB.batch(ROBLOX_ACHIEVEMENT_ROLES.map(d=>env.DB.prepare("INSERT INTO roblox_achievement_role_catalog(role_key,kind,source_id,role_name,emoji,color,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(role_key) DO UPDATE SET kind=excluded.kind,source_id=excluded.source_id,role_name=excluded.role_name,emoji=excluded.emoji,color=excluded.color,updated_at=excluded.updated_at").bind(d.key,d.kind,d.source_id,d.name,d.emoji,d.color,stamp)));
+  const existing=await discordApi(env,"/guilds/"+GUILD_ID+"/roles");
+  if(existing.status!==200||!Array.isArray(existing.data))throw Error("Could not list server roles (HTTP "+existing.status+").");
+  const allRoles=existing.data;
+  const mapped=await env.DB.prepare("SELECT role_key,role_id FROM roblox_achievement_role_catalog").all();
+  const ids=new Map((mapped.results||[]).map(r=>[r.role_key,r.role_id]));
+  const pending=ROBLOX_ACHIEVEMENT_ROLES.filter(d=>!ids.get(d.key)||!allRoles.some(r=>String(r.id)===String(ids.get(d.key))));
+  let made=0;
+  for(const d of pending){
+   const matches=allRoles.filter(r=>r.name===d.name&&!r.managed);
+   if(matches.length>1)throw Error("More than one role named "+d.name+"; leaving it unchanged.");
+   let role=matches[0]||null;
+   if(!role){
+    let created=await discordApi(env,"/guilds/"+GUILD_ID+"/roles","POST",{name:d.name,permissions:"0",color:d.color,hoist:false,mentionable:false,unicode_emoji:d.emoji});
+    for(let retry=0;created.status===429&&retry<3;retry++){
+     await new Promise(resolve=>setTimeout(resolve,Math.max(500,Number(created.data?.retry_after||1)*1000)));
+     created=await discordApi(env,"/guilds/"+GUILD_ID+"/roles","POST",{name:d.name,permissions:"0",color:d.color,hoist:false,mentionable:false,unicode_emoji:d.emoji});
+    }
+    if(created.status!==200||!created.data?.id)throw Error("Could not create "+d.name+" (HTTP "+created.status+"): "+String(created.data?.message||""));
+    role=created.data;
+    allRoles.push(role);
+    made++;
+    await new Promise(resolve=>setTimeout(resolve,450));
+   }
+   await env.DB.prepare("UPDATE roblox_achievement_role_catalog SET role_id=?,updated_at=? WHERE role_key=?").bind(String(role.id),new Date().toISOString(),d.key).run();
+   if(made>=8)break;
+  }
+  const refreshed=await env.DB.prepare("SELECT COUNT(*) AS total,SUM(CASE WHEN role_id IS NOT NULL THEN 1 ELSE 0 END) AS completed FROM roblox_achievement_role_catalog").first();
+  const complete=Number(refreshed?.completed||0),total=ROBLOX_ACHIEVEMENT_ROLES.length;
+  const status=complete===total?"ready":"running";
+  await env.DB.prepare("UPDATE roblox_achievement_role_setup SET status=?,completed=?,total=?,lease_until=0,last_error=NULL,updated_at=? WHERE id=1").bind(status,complete,total,new Date().toISOString()).run();
+  if(status==="ready")await cleanupLegacyNetWorthRoles(env,allRoles);
+ }catch(e){
+  await env.DB.prepare("UPDATE roblox_achievement_role_setup SET status='error',lease_until=?,last_error=?,updated_at=? WHERE id=1").bind(Date.now()+60000,String(e).slice(0,900),new Date().toISOString()).run();
+  console.error("Roblox achievement roles",String(e));
+ }
+}
+async function cleanupLegacyNetWorthRoles(env,roles){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_legacy_networth_cleanup(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL DEFAULT 'pending',removed INTEGER NOT NULL DEFAULT 0,last_error TEXT,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO roblox_legacy_networth_cleanup(id,status,updated_at) VALUES(1,'pending',?)").bind(new Date().toISOString()).run();
+ const state=await env.DB.prepare("SELECT status FROM roblox_legacy_networth_cleanup WHERE id=1").first();
+ if(state?.status==="done")return;
+ const targets=new Set();
+ for(let m=100;m<=500;m+=25)targets.add(m);
+ for(let m=550;m<=1000;m+=50)targets.add(m);
+ for(const m of [1500,2000,5000,10000])targets.add(m);
+ const normalize=s=>String(s||"").toLowerCase().replace(/,/g,"").replace(/million/g,"m").replace(/billion/g,"b");
+ const targetRole=role=>{
+  const name=normalize(role.name);
+  if(!/(net\s*worth|networth|total\s*worth)/.test(name))return false;
+  const values=[];
+  for(const match of name.matchAll(/\$?\s*(\d+(?:\.\d+)?)\s*(m|b)\b/g)){
+   const n=Number(match[1])*(match[2]==="b"?1000:1);
+   if(Number.isFinite(n))values.push(n);
+  }
+  for(const match of name.matchAll(/\$?\s*(\d{1,3}(?:\d{3}){2,4})\b/g)){
+   const n=Number(match[1]);
+   if(Number.isFinite(n))values.push(n/1000000);
+  }
+  return values.some(v=>targets.has(v));
+ };
+ let removed=0;
+ for(const role of roles){
+  if(!role||role.managed||role.id===GUILD_ID||!targetRole(role))continue;
+  const result=await discordApi(env,"/guilds/"+GUILD_ID+"/roles/"+role.id,"DELETE");
+  if(result.status===204||result.status===404)removed++;
+  else console.error("Legacy net-worth role cleanup",role.name,result.status);
+  await new Promise(resolve=>setTimeout(resolve,350));
+ }
+ await env.DB.prepare("UPDATE roblox_legacy_networth_cleanup SET status='done',removed=?,last_error=NULL,updated_at=? WHERE id=1").bind(removed,new Date().toISOString()).run();
+}
+
 async function revokeDepartedMember(env,discordId){
  const rows=await env.DB.prepare("SELECT DISTINCT d.roblox_user_id FROM discord_key_issuance d JOIN member_keys m ON m.key_hash=d.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0").bind(discordId,GUILD_ID).all();
  const result=await env.DB.prepare("UPDATE member_keys SET revoked=1 WHERE revoked=0 AND key_hash IN (SELECT key_hash FROM discord_key_issuance WHERE discord_user_id=? AND guild_id=?)").bind(discordId,GUILD_ID).run();
@@ -2277,7 +2648,7 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v12-payment-method-selector";
+ const revision="premium-only-buttons-v13-roblox-link-commands";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
@@ -2286,7 +2657,7 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const globalPath="/applications/"+APPLICATION_ID+"/commands";
   const guildPath="/applications/"+APPLICATION_ID+"/guilds/"+GUILD_ID+"/commands";
   await platformDiscord(env,globalPath,"PUT",[]);
-  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND,ROLE_COMMAND,CLOSE_COMMAND,VERIFIED_COMMAND,PAYMENT_COMMAND]);
+  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND,ROLE_COMMAND,CLOSE_COMMAND,VERIFIED_COMMAND,PAYMENT_COMMAND,LINK_ROBLOX_COMMAND,UNLINK_ROBLOX_COMMAND]);
   const globalCommands=(await platformDiscord(env,globalPath)).data;
   const guildCommands=(await platformDiscord(env,guildPath)).data;
   if(!Array.isArray(globalCommands)||globalCommands.length)throw Error("Global slash command removal was not confirmed.");
@@ -2296,11 +2667,15 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const closeCommand=guildCommands.find(command=>command.name==="close"&&command.type===1);
   const verifiedCommand=guildCommands.find(command=>command.name==="verified"&&command.type===1);
   const paymentCommand=guildCommands.find(command=>command.name==="payment"&&command.type===1);
+  const linkRobloxCommand=guildCommands.find(command=>command.name==="link-roblox"&&command.type===1);
+  const unlinkRobloxCommand=guildCommands.find(command=>command.name==="unlink-roblox"&&command.type===1);
   if(!purgeCommand)throw Error("Purge slash command registration was not confirmed.");
   if(!roleCommand)throw Error("Role slash command registration was not confirmed.");
   if(!closeCommand)throw Error("Close slash command registration was not confirmed.");
   if(!verifiedCommand)throw Error("Verified slash command registration was not confirmed.");
   if(!paymentCommand)throw Error("Payment slash command registration was not confirmed.");
+  if(!linkRobloxCommand)throw Error("Roblox link command registration was not confirmed.");
+  if(!unlinkRobloxCommand)throw Error("Roblox unlink command registration was not confirmed.");
   const channel=(await platformDiscord(env,"/channels/1563145457910153319")).data;
   if(channel.guild_id!==GUILD_ID)throw Error("Premium channel is not in this server.");
   const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
@@ -2621,6 +2996,8 @@ export default {
   ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
   ctx.waitUntil(ensureClubNightPollPreview(env).catch(e=>console.error("club night poll preview",String(e))));
   ctx.waitUntil(applyShadowRoleIcons(env).catch(e=>console.error("role icon setup",String(e))));
+  ctx.waitUntil(ensureRobloxAchievementRoles(env).catch(e=>console.error("Roblox role catalog",String(e))));
+  ctx.waitUntil(syncLinkedRobloxAccounts(env).catch(e=>console.error("Roblox account sync",String(e))));
   ctx.waitUntil(flushShadowMemberLeaveNotifications(env).catch(e=>console.error("member leave notifications",String(e))));
   ctx.waitUntil(ensureShadowLeaveTestMessage(env).catch(e=>console.error("member leave test message",String(e))));
   // Native Discord welcome is authoritative; don't edit legacy custom welcome embeds.
@@ -2646,6 +3023,7 @@ export default {
  },
  async fetch(req,env,ctx) {
   const url=new URL(req.url);
+  if(req.method==="GET"&&url.pathname==="/roblox/oauth/callback")return robloxOAuthCallback(req,env);
   if(req.method==="GET"&&url.pathname==="/health")return new Response(JSON.stringify({ok:true,app:APPLICATION_ID}),{headers:{"content-type":"application/json"}});
   if(req.method==="POST"&&url.pathname==="/internal/execution-flush"){
    const timestamp=req.headers.get("x-syndicate-timestamp")||"";
@@ -2671,6 +3049,8 @@ export default {
    if(i.data?.name==="close")return delayedReply(i,env,ctx,()=>deletePremiumTicket(i,env));
    if(i.data?.name==="verified")return delayedReply(i,env,ctx,()=>verifyTicketMember(i,env),false);
    if(i.data?.name==="payment")return delayedReply(i,env,ctx,()=>sendPremiumPaymentLink(i,env));
+   if(i.data?.name==="link-roblox")return delayedReply(i,env,ctx,()=>beginRobloxLink(i,env));
+   if(i.data?.name==="unlink-roblox")return delayedReply(i,env,ctx,()=>unlinkRobloxAccount(i,env));
    return reply("That slash command is not available.");
   }
   if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
