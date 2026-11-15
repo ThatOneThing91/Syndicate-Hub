@@ -2070,9 +2070,11 @@ async function cleanupLegacyNetWorthRoles(env,roles){
  for(let m=100;m<=500;m+=25)targets.add(m);
  for(let m=550;m<=1000;m+=50)targets.add(m);
  for(const m of [1500,2000,5000,10000])targets.add(m);
- const normalize=s=>String(s||"").toLowerCase().replace(/,/g,"").replace(/million/g,"m").replace(/billion/g,"b");
+ const normalize=s=>String(s||"").toLowerCase().replace(/,/g,"").replace(/million/g,"m").replace(/billion/g,"b").replace(/[^a-z0-9$]+/g," ").trim();
+ const legacyNames=new Set(["millionaire","elite collector","treasure baron","storage mogul","wealthy elite","fortune hunter","diamond tycoon","vault master","syndicate tycoon","fortune legend","storage emperor","ultra wealthy","billionaire elite","billionaire","starter stash","growing stash","high roller","storage tycoon"]);
  const targetRole=role=>{
   const name=normalize(role.name);
+  if(legacyNames.has(name))return true;
   if(!/(net\s*worth|networth|total\s*worth)/.test(name))return false;
   const values=[];
   for(const match of name.matchAll(/\$?\s*(\d+(?:\.\d+)?)\s*(m|b)\b/g)){
