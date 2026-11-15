@@ -3020,6 +3020,19 @@ async function refreshRobloxUpdates(env) {
  }
 }
 
+async function snapshotGuildRoleAudit(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ const cleanup=await env.DB.prepare("SELECT status FROM roblox_legacy_networth_cleanup WHERE id=1").first();
+ if(cleanup?.status!=="done")return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_role_audit_snapshot(id INTEGER PRIMARY KEY CHECK(id=1),roles_json TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ const saved=await env.DB.prepare("SELECT id FROM roblox_role_audit_snapshot WHERE id=1").first();
+ if(saved)return;
+ const result=await discordApi(env,"/guilds/"+GUILD_ID+"/roles");
+ if(result.status!==200||!Array.isArray(result.data))throw Error("Could not capture the current role audit.");
+ const roles=result.data.map(r=>({id:String(r.id),name:String(r.name),managed:!!r.managed,color:Number(r.color||0)}));
+ await env.DB.prepare("INSERT INTO roblox_role_audit_snapshot(id,roles_json,updated_at) VALUES(1,?,?)").bind(JSON.stringify(roles),new Date().toISOString()).run();
+}
+
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
@@ -3027,6 +3040,7 @@ export default {
   ctx.waitUntil(ensureClubNightPollPreview(env).catch(e=>console.error("club night poll preview",String(e))));
   ctx.waitUntil(applyShadowRoleIcons(env).catch(e=>console.error("role icon setup",String(e))));
   ctx.waitUntil(ensureRobloxAchievementRoles(env).catch(e=>console.error("Roblox role catalog",String(e))));
+  ctx.waitUntil(snapshotGuildRoleAudit(env).catch(e=>console.error("Roblox role audit",String(e))));
   ctx.waitUntil(syncLinkedRobloxAccounts(env).catch(e=>console.error("Roblox account sync",String(e))));
   ctx.waitUntil(flushShadowMemberLeaveNotifications(env).catch(e=>console.error("member leave notifications",String(e))));
   ctx.waitUntil(ensureShadowLeaveTestMessage(env).catch(e=>console.error("member leave test message",String(e))));
