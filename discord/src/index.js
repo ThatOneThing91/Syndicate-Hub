@@ -2049,7 +2049,7 @@ async function ensureRobloxAchievementRoles(env){
     await new Promise(resolve=>setTimeout(resolve,450));
    }
    await env.DB.prepare("UPDATE roblox_achievement_role_catalog SET role_id=?,updated_at=? WHERE role_key=?").bind(String(role.id),new Date().toISOString(),d.key).run();
-   if(made>=8)break;
+   if(made>=32)break;
   }
   const refreshed=await env.DB.prepare("SELECT COUNT(*) AS total,SUM(CASE WHEN role_id IS NOT NULL THEN 1 ELSE 0 END) AS completed FROM roblox_achievement_role_catalog").first();
   const complete=Number(refreshed?.completed||0),total=ROBLOX_ACHIEVEMENT_ROLES.length;
