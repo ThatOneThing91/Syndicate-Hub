@@ -2087,15 +2087,19 @@ async function cleanupLegacyNetWorthRoles(env,roles){
   }
   return values.some(v=>targets.has(v));
  };
- let removed=0;
+ let removed=0;const failures=[];
  for(const role of roles){
   if(!role||role.managed||role.id===GUILD_ID||!targetRole(role))continue;
   const result=await discordApi(env,"/guilds/"+GUILD_ID+"/roles/"+role.id,"DELETE");
   if(result.status===204||result.status===404)removed++;
-  else console.error("Legacy net-worth role cleanup",role.name,result.status);
+  else {
+   failures.push(String(role.name)+" ["+String(role.id)+"] HTTP "+result.status+" at role position "+String(role.position??"unknown"));
+   console.error("Legacy net-worth role cleanup",role.name,result.status);
+  }
   await new Promise(resolve=>setTimeout(resolve,350));
  }
- await env.DB.prepare("UPDATE roblox_legacy_networth_cleanup SET status='done',removed=?,last_error=NULL,updated_at=? WHERE id=1").bind(removed,new Date().toISOString()).run();
+ const cleanupStatus=failures.length?"error":"done";
+ await env.DB.prepare("UPDATE roblox_legacy_networth_cleanup SET status=?,removed=removed+?,last_error=?,updated_at=? WHERE id=1").bind(cleanupStatus,removed,failures.length?failures.join("; ").slice(0,900):null,new Date().toISOString()).run();
 }
 
 async function revokeDepartedMember(env,discordId){
