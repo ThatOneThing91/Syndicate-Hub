@@ -1732,6 +1732,20 @@ async function discordApi(env,path,method="GET",body){
  const r=await fetch("https://discord.com/api/v10"+path,{method,headers:{"Authorization":"Bot "+env.DISCORD_BOT_TOKEN,...(body?{"Content-Type":"application/json"}:{})},...(body?{body:JSON.stringify(body)}:{})});
  return {status:r.status,data:r.status===204?null:await r.json().catch(()=>null)};
 }
+async function discordRoleMembershipApi(env,path,method){
+ let result;
+ for(let attempt=0;attempt<5;attempt++){
+  result=await discordApi(env,path,method);
+  if(result.status!==429){
+   await new Promise(resolve=>setTimeout(resolve,150));
+   return result;
+  }
+  const delay=Math.max(500,Math.min(10000,Number(result.data?.retry_after||1)*1000));
+  await new Promise(resolve=>setTimeout(resolve,delay));
+ }
+ return result;
+}
+
 async function ensureMemberIdRole(env,discordId,robloxId){
  if(!/^\d{1,20}$/.test(String(robloxId))||!/^\d{15,22}$/.test(String(discordId)))return;
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_member_roles(discord_user_id TEXT PRIMARY KEY,roblox_user_id TEXT NOT NULL,role_id TEXT NOT NULL,created_at TEXT NOT NULL)").run();
@@ -1840,6 +1854,7 @@ function robloxHtmlPage(title,message,status=200){
 async function robloxInventoryOwnership(accessToken,robloxUserId){
  const badgeIds=ROBLOX_ACHIEVEMENT_ROLES.filter(x=>x.kind==="badge").map(x=>x.source_id);
  const passIds=ROBLOX_ACHIEVEMENT_ROLES.filter(x=>x.kind==="gamepass").map(x=>x.source_id);
+ const targetIds=new Set([...badgeIds,...passIds]);
  const url=new URL("https://apis.roblox.com/cloud/v2/users/"+encodeURIComponent(robloxUserId)+"/inventory-items");
  url.searchParams.set("filter","badgeIds="+badgeIds.join(",")+";gamePassIds="+passIds.join(","));
  url.searchParams.set("maxPageSize","100");
@@ -1850,9 +1865,12 @@ async function robloxInventoryOwnership(accessToken,robloxUserId){
   const data=await response.json().catch(()=>null);
   if(!response.ok||!Array.isArray(data?.inventoryItems))throw Error("Roblox inventory read failed (HTTP "+response.status+"). Confirm the inventory permission was approved.");
   for(const item of data.inventoryItems){
-   const details=item?.assetDetails||{};
-   const sourceId=String(details.assetId??details.badgeId??details.gamePassId??"");
-   if(sourceId)owned.add(sourceId);
+   const candidates=[
+    item?.assetDetails?.assetId,item?.badgeDetails?.badgeId,item?.badgeDetails?.id,
+    item?.gamePassDetails?.gamePassId,item?.gamePassDetails?.id,item?.passDetails?.gamePassId,
+    item?.passDetails?.id,item?.assetId,item?.badgeId,item?.gamePassId
+   ];
+   for(const candidate of candidates){const id=String(candidate??"");if(targetIds.has(id))owned.add(id);}
   }
   pageToken=String(data.nextPageToken||"");
   if(!pageToken||!data.inventoryItems.length)break;
@@ -1863,12 +1881,6 @@ async function syncRobloxMember(env,link,accessToken){
  const discordId=String(link.discord_user_id),robloxId=String(link.roblox_user_id),username=String(link.roblox_username);
  const member=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId);
  if(member.status!==200)throw Error("Discord member lookup failed (HTTP "+member.status+").");
- let nicknameUpdated=false;
- if(member.data.nick!==username){
-  const changed=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId,"PATCH",{nick:username});
-  if(changed.status!==200)throw Error("Bot could not update the Discord nickname (HTTP "+changed.status+").");
-  nicknameUpdated=true;
- }
  const owned=await robloxInventoryOwnership(accessToken,robloxId);
  const catalog=await env.DB.prepare("SELECT role_key,kind,source_id,role_id FROM roblox_achievement_role_catalog").all();
  const byKey=new Map((catalog.results||[]).map(x=>[x.role_key,x]));
@@ -1879,16 +1891,22 @@ async function syncRobloxMember(env,link,accessToken){
   if(!row?.role_id)continue;
   const has=owned.has(def.source_id),assigned=currentRoles.has(String(row.role_id));
   if(has&&!assigned){
-   const result=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId+"/roles/"+row.role_id,"PUT");
+   const result=await discordRoleMembershipApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId+"/roles/"+row.role_id,"PUT");
    if(result.status!==204)throw Error("Could not assign role "+def.name+" (HTTP "+result.status+").");
    added++;
   }else if(!has&&assigned){
-   const result=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId+"/roles/"+row.role_id,"DELETE");
+   const result=await discordRoleMembershipApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId+"/roles/"+row.role_id,"DELETE");
    if(result.status!==204)throw Error("Could not remove role "+def.name+" (HTTP "+result.status+").");
    removed++;
   }
  }
- return {owned:owned.size,added,removed,nicknameUpdated};
+ let nicknameUpdated=false,nicknameError=null;
+ if(member.data.nick!==username){
+  const changed=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId,"PATCH",{nick:username});
+  if(changed.status===200)nicknameUpdated=true;
+  else nicknameError="Nickname update could not be applied (HTTP "+changed.status+"); achievement role checks succeeded.";
+ }
+ return {owned:owned.size,added,removed,nicknameUpdated,nicknameError};
 }
 async function robloxOAuthCallback(request,env){
  if(!env.DB)return robloxHtmlPage("Setup unavailable","The account-link service is not configured.",503);
@@ -1921,13 +1939,21 @@ async function robloxOAuthCallback(request,env){
   const originalNickname=prior?prior.original_nickname:(guildMember.data.nick??null);
   if(!tokens.refresh_token)throw Error("Roblox did not issue a refresh token.");
   const secured=await encryptRobloxRefreshToken(env,tokens.refresh_token);
-  const now=new Date(),stamp=now.toISOString(),next=new Date(now.getTime()+15*60*1000).toISOString();
+  const now=new Date(),stamp=now.toISOString(),next=new Date(now.getTime()+60000).toISOString();
   await env.DB.prepare("INSERT INTO roblox_discord_links(discord_user_id,roblox_user_id,roblox_username,refresh_cipher,refresh_iv,original_nickname,next_sync_at,sync_started_at,sync_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,NULL,NULL,?,?) ON CONFLICT(discord_user_id) DO UPDATE SET roblox_user_id=excluded.roblox_user_id,roblox_username=excluded.roblox_username,refresh_cipher=excluded.refresh_cipher,refresh_iv=excluded.refresh_iv,next_sync_at=excluded.next_sync_at,sync_started_at=NULL,sync_error=NULL,updated_at=excluded.updated_at").bind(String(pending.discord_user_id),robloxId,username,secured.cipher,secured.iv,originalNickname,next,stamp,stamp).run();
   let result;
   try{
+   const roleSetup=await env.DB.prepare("SELECT status FROM roblox_achievement_role_setup WHERE id=1").first();
+   if(roleSetup?.status!=="ready"){
+    const nick=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+pending.discord_user_id,"PATCH",{nick:username});
+    const nickNote=nick.status===200?"Your Discord nickname is now set to "+username+".":"The Roblox account is linked; Discord did not allow the nickname change.";
+    await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_error=?,updated_at=? WHERE discord_user_id=?").bind(new Date(Date.now()+60000).toISOString(),nick.status===200?null:"Nickname update failed with HTTP "+nick.status,new Date().toISOString(),String(pending.discord_user_id)).run();
+    return robloxHtmlPage("Roblox linked",nickNote+" Badge and gamepass roles will sync once the role setup finishes, then refresh automatically about every 15 minutes.");
+   }
    result=await syncRobloxMember(env,{discord_user_id:String(pending.discord_user_id),roblox_user_id:robloxId,roblox_username:username},tokens.access_token);
-   await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_error=NULL,updated_at=? WHERE discord_user_id=?").bind(new Date(Date.now()+15*60*1000).toISOString(),new Date().toISOString(),String(pending.discord_user_id)).run();
-   return robloxHtmlPage("Roblox linked","Your Discord nickname is now set to "+username+". The bot found "+result.owned+" matching badge or gamepass item(s) and assigned "+result.added+" role(s). Role updates will refresh automatically about every 15 minutes.");
+   await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_error=?,updated_at=? WHERE discord_user_id=?").bind(new Date(Date.now()+15*60*1000).toISOString(),result.nicknameError,new Date().toISOString(),String(pending.discord_user_id)).run();
+   const nickNote=result.nicknameUpdated?"Your Discord nickname is now set to "+username+".":result.nicknameError?"The Roblox account is linked, but Discord blocked the nickname change.":"Your Discord nickname already matches your Roblox username.";
+   return robloxHtmlPage("Roblox linked",nickNote+" The bot found "+result.owned+" matching badge or gamepass item(s), assigned "+result.added+" role(s), and will refresh the roles about every 15 minutes.");
   }catch(e){
    await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_error=?,updated_at=? WHERE discord_user_id=?").bind(new Date(Date.now()+5*60*1000).toISOString(),String(e).slice(0,500),new Date().toISOString(),String(pending.discord_user_id)).run();
    return robloxHtmlPage("Roblox linked; inventory sync needs attention","Your Roblox username was verified. The automatic role check could not finish yet. Confirm that you approved Roblox inventory access, then try again or contact the server owner. The bot will retry automatically.");
@@ -1948,7 +1974,7 @@ async function unlinkRobloxAccount(i,env){
  if(member.status===200){
   const existing=new Set((member.data.roles||[]).map(String));
   for(const row of catalog.results||[])if(row.role_id&&existing.has(String(row.role_id))){
-   const removed=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+did+"/roles/"+row.role_id,"DELETE");
+   const removed=await discordRoleMembershipApi(env,"/guilds/"+GUILD_ID+"/members/"+did+"/roles/"+row.role_id,"DELETE");
    if(removed.status!==204)console.error("Roblox unlink role removal",removed.status,row.role_id);
   }
   const restored=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+did,"PATCH",{nick:link.original_nickname||null});
@@ -1965,6 +1991,8 @@ async function unlinkRobloxAccount(i,env){
 async function syncLinkedRobloxAccounts(env){
  if(!env.DB||!env.ROBLOX_CLIENT_ID||!env.ROBLOX_CLIENT_SECRET)return;
  await ensureRobloxLinkTables(env);
+ const roleState=await env.DB.prepare("SELECT status FROM roblox_achievement_role_setup WHERE id=1").first();
+ if(roleState?.status!=="ready")return;
  const now=Date.now(),stamp=new Date(now).toISOString();
  const rows=await env.DB.prepare("SELECT discord_user_id,roblox_user_id,roblox_username,refresh_cipher,refresh_iv FROM roblox_discord_links WHERE next_sync_at<=? AND (sync_started_at IS NULL OR sync_started_at<=?) ORDER BY next_sync_at LIMIT 5").bind(stamp,new Date(now-10*60*1000).toISOString()).all();
  for(const row of rows.results||[]){
@@ -1976,9 +2004,9 @@ async function syncLinkedRobloxAccounts(env){
    if(!tokens.refresh_token)throw Error("Roblox did not rotate the refresh token.");
    const secured=await encryptRobloxRefreshToken(env,tokens.refresh_token);
    await env.DB.prepare("UPDATE roblox_discord_links SET refresh_cipher=?,refresh_iv=?,updated_at=? WHERE discord_user_id=?").bind(secured.cipher,secured.iv,new Date().toISOString(),row.discord_user_id).run();
-   await syncRobloxMember(env,row,tokens.access_token);
+   const syncResult=await syncRobloxMember(env,row,tokens.access_token);
    const next=new Date(Date.now()+15*60*1000).toISOString();
-   await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_started_at=NULL,sync_error=NULL,updated_at=? WHERE discord_user_id=?").bind(next,new Date().toISOString(),row.discord_user_id).run();
+   await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_started_at=NULL,sync_error=?,updated_at=? WHERE discord_user_id=?").bind(next,syncResult.nicknameError,new Date().toISOString(),row.discord_user_id).run();
   }catch(e){
    const next=new Date(Date.now()+30*60*1000).toISOString();
    await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_started_at=NULL,sync_error=?,updated_at=? WHERE discord_user_id=?").bind(next,String(e).slice(0,500),new Date().toISOString(),row.discord_user_id).run();
@@ -2009,10 +2037,10 @@ async function ensureRobloxAchievementRoles(env){
    if(matches.length>1)throw Error("More than one role named "+d.name+"; leaving it unchanged.");
    let role=matches[0]||null;
    if(!role){
-    let created=await discordApi(env,"/guilds/"+GUILD_ID+"/roles","POST",{name:d.name,permissions:"0",color:d.color,hoist:false,mentionable:false,unicode_emoji:d.emoji});
+    let created=await discordApi(env,"/guilds/"+GUILD_ID+"/roles","POST",{name:d.name,permissions:"0",color:d.color,hoist:false,mentionable:false});
     for(let retry=0;created.status===429&&retry<3;retry++){
      await new Promise(resolve=>setTimeout(resolve,Math.max(500,Number(created.data?.retry_after||1)*1000)));
-     created=await discordApi(env,"/guilds/"+GUILD_ID+"/roles","POST",{name:d.name,permissions:"0",color:d.color,hoist:false,mentionable:false,unicode_emoji:d.emoji});
+     created=await discordApi(env,"/guilds/"+GUILD_ID+"/roles","POST",{name:d.name,permissions:"0",color:d.color,hoist:false,mentionable:false});
     }
     if(created.status!==200||!created.data?.id)throw Error("Could not create "+d.name+" (HTTP "+created.status+"): "+String(created.data?.message||""));
     role=created.data;
