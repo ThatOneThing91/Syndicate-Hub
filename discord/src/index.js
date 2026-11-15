@@ -989,7 +989,7 @@ async function createClubEvent(i,env){
  const eventId=kind+"_"+Math.floor(Date.now()/1000).toString(36)+"_"+crypto.randomUUID().replace(/-/g,"").slice(0,12),now=new Date().toISOString();
  const eventName=kind==="bunker"?"MILITARY BUNKER • MILITARY BASE":"ACID RAIN";
  const eventTitle=kind==="bunker"?"🪖 CLUB EVENT: MILITARY BUNKER":"☣️ CLUB EVENT: ACID RAIN";
- const eventDescription=kind==="bunker"?"The Military Base Bunker is opening! Hosted by <@"+host.id+">.\\n\\n**Sign up below** and add the host's Roblox account before the event begins.":"Acid Rain is back! Hosted by <@"+host.id+">.\\n\\n**Sign up below** and add the host's Roblox account before the event begins.";
+ const eventDescription=kind==="bunker"?"The Military Base Bunker is opening! Hosted by <@"+host.id+">.\n\n**Sign up below** and add the host's Roblox account before the event begins.":"Acid Rain is back! Hosted by <@"+host.id+">.\n\n**Sign up below** and add the host's Roblox account before the event begins.";
  await env.DB.prepare("INSERT INTO club_events(event_id,host_id,channel_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?)").bind(eventId,host.id,CLUB_EVENTS_CHANNEL,start,kind==="bunker"?"Military Base Bunker":"Acid Rain",robloxProfile,"creating",now).run();
  const payload={content:"@everyone",allowed_mentions:{parse:["everyone"]},embeds:[{title:eventTitle,description:eventDescription,color:kind==="bunker"?0x596B88:0x9B72CF,fields:[
   {name:"Starts",value:"<t:"+start+":F> · <t:"+start+":R>",inline:false},
@@ -1080,7 +1080,7 @@ async function joinClubEvent(i,env,eventId){
   try{const edited=await discordApi(env,"/channels/"+i.channel_id+"/messages/"+i.message.id,"PATCH",{embeds:[updated]});if(edited.status<200||edited.status>=300)console.error("event participant count update",edited.status)}catch(e){console.error("event participant count update",String(e))}
  }
  const added=Number(result?.meta?.changes||0)>0;
- return reply((added?"You’re signed up for Acid Rain. ":"You’re already on the participant list. ")+"Current participants: "+count+".");
+ return reply((added?"You’re signed up for this event. ":"You’re already on the participant list. ")+"Current participants: "+count+".");
 }
 async function viewClubEventParticipants(i,env,eventId,requestedPage){
  await ensureClubEventTables(env);
@@ -1093,7 +1093,7 @@ async function viewClubEventParticipants(i,env,eventId,requestedPage){
  const people=Array.isArray(result?.results)?result.results:[];
  const entries=people.map((person,j)=>String(page*pageSize+j+1)+". <@"+String(person.discord_user_id)+">");
  const event=await env.DB.prepare("SELECT status FROM club_events WHERE event_id=?").bind(eventId).first();
- const title="Acid Rain • Participants"+(event?.status==="ended"?" (Ended)":"");
+ const title=(eventId.startsWith("bunker_")?"Military Bunker":"Acid Rain")+" • Participants"+(event?.status==="ended"?" (Ended)":"");
  const description=(total?String(total)+" "+(total===1?"person has":"people have")+" signed up.\n\n"+entries.join("\n"):"No participants have signed up yet.")+(event?.status==="ended"?"\n\n**This event has ended.**":"\n\nUse **Join event** on the announcement to sign up.");
  const buttons=[];
  if(page>0)buttons.push({type:2,style:2,label:"Previous",custom_id:"club_event_view:"+eventId+":"+(page-1)});
