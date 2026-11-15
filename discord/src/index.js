@@ -862,6 +862,13 @@ const LINK_ROBLOX_COMMAND = Object.freeze({
 const UNLINK_ROBLOX_COMMAND = Object.freeze({
  name:"unlink-roblox",description:"Unlink Roblox and remove your achievement roles",type:1,dm_permission:false
 });
+const BIRTHDAY_COMMAND = Object.freeze({
+ name:"birthday",
+ description:"View a server member's saved birthday",
+ type:1,
+ dm_permission:false,
+ options:[{type:6,name:"user",description:"Choose a server member",required:true}]
+});
 
 const enc = new TextEncoder();
 const hexBytes = s => new Uint8Array(s.match(/../g).map(x=>parseInt(x,16)));
@@ -888,6 +895,16 @@ async function birthdayRegisterButton(i,env){
  const saved=await env.DB.prepare("SELECT birth_month,birth_day FROM community_birthdays WHERE user_id=?").bind(userId).first();
  if(!saved)return birthdaySetModal(null);
  return birthdayEphemeral("Your saved birthday is **"+birthdayDateLabel(saved.birth_month,saved.birth_day)+"**.",[{type:1,components:[{type:2,style:1,label:"Change Birthday",custom_id:"syndicate_birthday_change"}]}]);
+}
+async function birthdayLookupCommand(i,env){
+ const targetId=String(i.data?.options?.find(option=>option.name==="user")?.value||"");
+ if(!/^\d{17,20}$/.test(targetId))return birthdayEphemeral("Choose a server member to look up.");
+ await ensureBirthdayTable(env);
+ const saved=await env.DB.prepare("SELECT birth_month,birth_day FROM community_birthdays WHERE user_id=?").bind(targetId).first();
+ const target=i.data?.resolved?.users?.[targetId]||i.data?.resolved?.members?.[targetId]?.user;
+ const name=target?.global_name||target?.username||("<@"+targetId+">");
+ if(!saved)return birthdayEphemeral(name+" hasn't registered a birthday yet.");
+ return birthdayEphemeral(name+"'s saved birthday is **"+birthdayDateLabel(saved.birth_month,saved.birth_day)+"**.");
 }
 async function welcomeWaveInteraction(i,env){
  const match=/^welcome_wave:(\d{17,20})$/.exec(String(i.data?.custom_id||""));
@@ -941,15 +958,16 @@ async function ensureClubEventTables(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_panels(channel_id TEXT PRIMARY KEY,message_id TEXT NOT NULL,created_at TEXT NOT NULL)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_host_profiles(discord_user_id TEXT PRIMARY KEY,roblox_username TEXT NOT NULL,roblox_user_id TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_setup(key TEXT PRIMARY KEY,value TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS club_event_cleanup(event_id TEXT PRIMARY KEY,channel_id TEXT NOT NULL,message_id TEXT NOT NULL,queued_at TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO club_events(event_id,host_id,channel_id,message_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)").bind(LEGACY_ACID_EVENT,null,CLUB_EVENTS_CHANNEL,"1569912342442024971",1794371400,"festivesillygirls server",null,"active","2026-11-11T03:11:10.164Z").run();
 }
 async function clubEventModal(i,env,eventType="acid"){
- const kind=eventType==="bunker"?"bunker":"acid";
+ const kind=eventType==="bunker"||eventType==="dual"?eventType:"acid";
  const userId=i.member?.user?.id||i.user?.id;
  let savedUsername="";
  if(userId&&env.DB){try{const saved=await env.DB.prepare("SELECT roblox_username FROM club_event_host_profiles WHERE discord_user_id=?").bind(userId).first();if(/^[A-Za-z0-9_]{3,20}$/.test(String(saved?.roblox_username||"")))savedUsername=String(saved.roblox_username)}catch(error){console.error("Saved event username lookup",String(error))}}
  const field=(id,label,placeholder,max=120,defaultValue)=>({type:1,components:[{type:4,custom_id:id,label,style:1,required:true,placeholder,min_length:1,max_length:max,...(defaultValue!==undefined?{value:defaultValue}:{})}]});
- return discordResponse({type:9,data:{custom_id:"club_event_create_modal:"+kind,title:kind==="bunker"?"Create Military Bunker Event":"Create Acid Rain Event",components:[
+ return discordResponse({type:9,data:{custom_id:"club_event_create_modal:"+kind,title:kind==="bunker"?"Create Military Bunker Event":kind==="dual"?"Create Dual Event":"Create Acid Rain Event",components:[
   field("event_username","Roblox username (not display name)","RobloxUsername",20,savedUsername||undefined),
   field("event_hours","Hours until start","0",4,"0"),
   field("event_minutes","Additional minutes until start","0",2,"0")
@@ -965,7 +983,7 @@ async function createClubEvent(i,env){
  await ensureClubEventTables(env);
  if(i.channel_id!==CLUB_EVENTS_CHANNEL)return reply("Create events from the Club Events channel.");
  const host=i.member?.user||i.user;if(!host?.id)return reply("Could not identify the event host.");
- const customId=String(i.data?.custom_id||""),kind=customId.endsWith(":bunker")?"bunker":"acid";
+ const customId=String(i.data?.custom_id||""),kind=customId.endsWith(":bunker")?"bunker":customId.endsWith(":dual")?"dual":"acid";
  const username=clubEventInput(i,"event_username").replace(/^@/,"");
  const hoursText=clubEventInput(i,"event_hours"),minutesText=clubEventInput(i,"event_minutes");
  if(!/^[A-Za-z0-9_]{3,20}$/.test(username))return reply("Enter your Roblox **username** (3–20 letters, numbers, or underscores), not your display name or profile URL.");
@@ -987,10 +1005,10 @@ async function createClubEvent(i,env){
  if(!robloxUser)return reply("That Roblox **username** wasn't found. Check the account username (not its display name) and try again.");
  const robloxId=String(robloxUser.id),robloxName=String(robloxUser.name),robloxProfile="https://www.roblox.com/users/"+robloxId+"/profile";
  const eventId=kind+"_"+Math.floor(Date.now()/1000).toString(36)+"_"+crypto.randomUUID().replace(/-/g,"").slice(0,12),now=new Date().toISOString();
- const eventName=kind==="bunker"?"MILITARY BUNKER • MILITARY BASE":"ACID RAIN";
- const eventTitle=kind==="bunker"?"🪖 CLUB EVENT: MILITARY BUNKER":"☣️ CLUB EVENT: ACID RAIN";
- const eventDescription=kind==="bunker"?"The Military Base Bunker is opening! Hosted by <@"+host.id+">.\n\n**Sign up below** and add the host's Roblox account before the event begins.":"Acid Rain is back! Hosted by <@"+host.id+">.\n\n**Sign up below** and add the host's Roblox account before the event begins.";
- await env.DB.prepare("INSERT INTO club_events(event_id,host_id,channel_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?)").bind(eventId,host.id,CLUB_EVENTS_CHANNEL,start,kind==="bunker"?"Military Base Bunker":"Acid Rain",robloxProfile,"creating",now).run();
+ const eventName=kind==="bunker"?"MILITARY BUNKER • MILITARY BASE":kind==="dual"?"ACID RAIN + MILITARY BUNKER • MILITARY BASE":"ACID RAIN";
+ const eventTitle=kind==="bunker"?"🪖 CLUB EVENT: MILITARY BUNKER":kind==="dual"?"⚔️ CLUB EVENT: ACID RAIN + MILITARY BUNKER":"☣️ CLUB EVENT: ACID RAIN";
+ const eventDescription=kind==="bunker"?"The Military Base Bunker is opening! Hosted by <@"+host.id+">.\n\n**Sign up below** and add the host's Roblox account before the event begins.":kind==="dual"?"Acid Rain and the Military Base Bunker are opening together! Hosted by <@"+host.id+">.\n\n**Sign up below** and add the host's Roblox account before the event begins.":"Acid Rain is back! Hosted by <@"+host.id+">.\n\n**Sign up below** and add the host's Roblox account before the event begins.";
+ await env.DB.prepare("INSERT INTO club_events(event_id,host_id,channel_id,start_unix,location,profile_url,status,created_at) VALUES(?,?,?,?,?,?,?,?)").bind(eventId,host.id,CLUB_EVENTS_CHANNEL,start,kind==="bunker"?"Military Base Bunker":kind==="dual"?"Acid Rain + Military Base Bunker":"Acid Rain",robloxProfile,"creating",now).run();
  const payload={content:"@everyone",allowed_mentions:{parse:["everyone"]},embeds:[{title:eventTitle,description:eventDescription,color:kind==="bunker"?0x596B88:0x9B72CF,fields:[
   {name:"Starts",value:"<t:"+start+":F> · <t:"+start+":R>",inline:false},
   {name:"Event",value:eventName,inline:true},{name:"Host",value:"<@"+host.id+">",inline:true},
@@ -1001,7 +1019,8 @@ async function createClubEvent(i,env){
  if(![200,201].includes(posted.status)||!posted.data?.id){await env.DB.prepare("UPDATE club_events SET status='failed' WHERE event_id=?").bind(eventId).run();return reply("Could not post your event. Please try again.");}
  await env.DB.prepare("UPDATE club_events SET status='active',message_id=? WHERE event_id=?").bind(String(posted.data.id),eventId).run();
  try{await env.DB.prepare("INSERT INTO club_event_host_profiles(discord_user_id,roblox_username,roblox_user_id,updated_at) VALUES(?,?,?,?) ON CONFLICT(discord_user_id) DO UPDATE SET roblox_username=excluded.roblox_username,roblox_user_id=excluded.roblox_user_id,updated_at=excluded.updated_at").bind(host.id,robloxName,robloxId,new Date().toISOString()).run()}catch(error){console.error("Save event host Roblox username",String(error))}
- return reply("✅ Your "+(kind==="bunker"?"Military Bunker":"Acid Rain")+" event is live! [View the announcement](https://discord.com/channels/"+GUILD_ID+"/"+CLUB_EVENTS_CHANNEL+"/"+posted.data.id+"). The signup and End Event buttons are ready.");
+ const eventLabel=kind==="bunker"?"Military Bunker":kind==="dual"?"Dual Event (Acid Rain + Military Bunker)":"Acid Rain";
+ return reply("✅ Your "+eventLabel+" event is live! [View the announcement](https://discord.com/channels/"+GUILD_ID+"/"+CLUB_EVENTS_CHANNEL+"/"+posted.data.id+"). The signup and End Event buttons are ready.");
 }
 
 async function endClubEvent(i,env,eventId){
@@ -1011,26 +1030,48 @@ async function endClubEvent(i,env,eventId){
  if(event.channel_id!==i.channel_id||event.message_id!==i.message?.id)return reply("Use the End Event button on the original event announcement.");
  const userId=i.member?.user?.id||i.user?.id;
  if(userId!==event.host_id&&!hasManageMessages(i))return reply("Only the event creator or server staff can end this event.");
- if(event.status==="ended")return reply("This event is already ended.");
+ if(event.status==="ended")return reply("This event has already ended.");
  if(event.status!=="active")return reply("This event cannot be ended right now.");
- await env.DB.prepare("UPDATE club_events SET status='ended',ended_at=? WHERE event_id=? AND status='active'").bind(new Date().toISOString(),eventId).run();
- const old=i.message?.embeds?.[0]||{};
- const title=String(old.title||"☣️ CLUB EVENT: ACID RAIN").replace(/\s*[—-]\s*ENDED$/,"")+" — ENDED";
- const description=String(old.description||"").slice(0,3200)+"\n\n**🔒 This event has ended. New participants can no longer join.**";
- const embed={title,description,color:0x60606D,
-  ...(Array.isArray(old.fields)?{fields:old.fields}:{}),
-  ...(old.footer?{footer:{text:String(old.footer.text||"Shadow Syndicate • Club Events")}}:{})};
- const patch=await discordApi(env,"/channels/"+event.channel_id+"/messages/"+event.message_id,"PATCH",{embeds:[embed],components:clubEventActions(eventId,true),allowed_mentions:{parse:[]}});
- if(patch.status!==200)return reply("The event is closed to new signups, but I couldn't update the announcement. Please notify a moderator.");
- return reply("🔒 Event ended. The Join event and End Event buttons are now disabled; participants can still be viewed.");
+ const endedAt=new Date().toISOString();
+ await env.DB.prepare("UPDATE club_events SET status='ended',ended_at=? WHERE event_id=? AND status='active'").bind(endedAt,eventId).run();
+ await env.DB.prepare("INSERT OR REPLACE INTO club_event_cleanup(event_id,channel_id,message_id,queued_at,attempts,last_error) VALUES(?,?,?,?,0,NULL)")
+  .bind(eventId,event.channel_id,event.message_id,endedAt).run();
+ let removed;
+ try{removed=await discordApi(env,"/channels/"+event.channel_id+"/messages/"+event.message_id,"DELETE");}
+ catch(error){removed={status:0,data:String(error)};}
+ if(removed?.status===204||removed?.status===404){
+  await env.DB.prepare("DELETE FROM club_event_cleanup WHERE event_id=?").bind(eventId).run();
+  return reply("🔒 Event ended and its announcement was deleted.");
+ }
+ const error=removed?.status?"Discord delete HTTP "+removed.status:String(removed?.data||"Delete failed").slice(0,500);
+ await env.DB.prepare("UPDATE club_event_cleanup SET attempts=attempts+1,last_error=? WHERE event_id=?").bind(error,eventId).run();
+ return reply("🔒 Event ended. Discord couldn't remove the announcement yet; the bot will keep retrying until it's deleted.");
+}
+async function cleanupEndedClubEvents(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await ensureClubEventTables(env);
+ const pending=await env.DB.prepare("SELECT event_id,channel_id,message_id FROM club_event_cleanup ORDER BY queued_at LIMIT 20").all();
+ for(const event of pending?.results||[]){
+  try{
+   const result=await discordApi(env,"/channels/"+event.channel_id+"/messages/"+event.message_id,"DELETE");
+   if(result.status===204||result.status===404){
+    await env.DB.prepare("DELETE FROM club_event_cleanup WHERE event_id=?").bind(event.event_id).run();
+   }else{
+    await env.DB.prepare("UPDATE club_event_cleanup SET attempts=attempts+1,last_error=? WHERE event_id=?").bind("Discord delete HTTP "+result.status,event.event_id).run();
+   }
+  }catch(error){
+   await env.DB.prepare("UPDATE club_event_cleanup SET attempts=attempts+1,last_error=? WHERE event_id=?").bind(String(error).slice(0,500),event.event_id).run();
+  }
+ }
 }
 async function ensureClubEventPanel(env){
  await ensureClubEventTables(env);
  const channel=CLUB_EVENTS_CHANNEL;
- const panelPayload={embeds:[{title:"🎟️ Club Event Creator",description:"Choose the event you’re hosting. Both forms ask for your Roblox username and how many hours and minutes until the start—no calendar date or server/location entry. Discord displays the start in each member’s local time with a relative countdown.\n\nEvent announcements ping @everyone and include **Join event**, **See Participants**, and **End Event** buttons. One active event per host.",color:0x7651A8,footer:{text:"Shadow Syndicate • Club Events"}}],
+ const panelPayload={embeds:[{title:"☣️ Create an Acid Rain Event",description:"Want to host an Acid Rain event? Tap **Create Acid Rain** and fill in your Roblox username and how many hours and minutes until the event starts. The bot finds and links your profile automatically, then remembers your username for next time.\n\nUse **Create Bunker Event** for the Military Base Bunker or **Host Dual Event** to run Acid Rain and the Bunker together.\n\nYour announcement will be posted here with **Join event**, **See Participants**, and **End Event** buttons. Everyone can sign up; only the host or staff can end it.\n\n**Enter the time until start in hours and minutes.** One active event per host. New event announcements ping @everyone. Please only create events you're hosting.",color:0x9B72CF,footer:{text:"Shadow Syndicate • Club Events"}}],
   components:[{type:1,components:[
    {type:2,style:1,custom_id:"club_event_create:acid",label:"Create Acid Rain",emoji:{name:"☣️"}},
-   {type:2,style:2,custom_id:"club_event_create:bunker",label:"Create Bunker Event",emoji:{name:"🪖"}}
+   {type:2,style:2,custom_id:"club_event_create:bunker",label:"Create Bunker Event",emoji:{name:"🪖"}},
+   {type:2,style:3,custom_id:"club_event_create:dual",label:"Host Dual Event",emoji:{name:"⚔️"}}
   ]}],allowed_mentions:{parse:[]}};
  const known=await env.DB.prepare("SELECT message_id FROM club_event_panels WHERE channel_id=?").bind(channel).first();
  let messageId=known?.message_id?String(known.message_id):"";
@@ -1093,7 +1134,8 @@ async function viewClubEventParticipants(i,env,eventId,requestedPage){
  const people=Array.isArray(result?.results)?result.results:[];
  const entries=people.map((person,j)=>String(page*pageSize+j+1)+". <@"+String(person.discord_user_id)+">");
  const event=await env.DB.prepare("SELECT status FROM club_events WHERE event_id=?").bind(eventId).first();
- const title=(eventId.startsWith("bunker_")?"Military Bunker":"Acid Rain")+" • Participants"+(event?.status==="ended"?" (Ended)":"");
+ const eventLabel=eventId.startsWith("dual_")?"Acid Rain + Military Bunker":eventId.startsWith("bunker_")?"Military Bunker":"Acid Rain";
+ const title=eventLabel+" • Participants"+(event?.status==="ended"?" (Ended)":"");
  const description=(total?String(total)+" "+(total===1?"person has":"people have")+" signed up.\n\n"+entries.join("\n"):"No participants have signed up yet.")+(event?.status==="ended"?"\n\n**This event has ended.**":"\n\nUse **Join event** on the announcement to sign up.");
  const buttons=[];
  if(page>0)buttons.push({type:2,style:2,label:"Previous",custom_id:"club_event_view:"+eventId+":"+(page-1)});
@@ -2575,7 +2617,7 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v13-roblox-link-commands";
+ const revision="premium-only-buttons-v14-birthday-command";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
@@ -2584,7 +2626,7 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const globalPath="/applications/"+APPLICATION_ID+"/commands";
   const guildPath="/applications/"+APPLICATION_ID+"/guilds/"+GUILD_ID+"/commands";
   await platformDiscord(env,globalPath,"PUT",[]);
-  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND,ROLE_COMMAND,CLOSE_COMMAND,VERIFIED_COMMAND,PAYMENT_COMMAND,LINK_ROBLOX_COMMAND,UNLINK_ROBLOX_COMMAND]);
+  await platformDiscord(env,guildPath,"PUT",[PURGE_COMMAND,ROLE_COMMAND,CLOSE_COMMAND,VERIFIED_COMMAND,PAYMENT_COMMAND,LINK_ROBLOX_COMMAND,UNLINK_ROBLOX_COMMAND,BIRTHDAY_COMMAND]);
   const globalCommands=(await platformDiscord(env,globalPath)).data;
   const guildCommands=(await platformDiscord(env,guildPath)).data;
   if(!Array.isArray(globalCommands)||globalCommands.length)throw Error("Global slash command removal was not confirmed.");
@@ -2596,6 +2638,7 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const paymentCommand=guildCommands.find(command=>command.name==="payment"&&command.type===1);
   const linkRobloxCommand=guildCommands.find(command=>command.name==="link-roblox"&&command.type===1);
   const unlinkRobloxCommand=guildCommands.find(command=>command.name==="unlink-roblox"&&command.type===1);
+  const birthdayCommand=guildCommands.find(command=>command.name==="birthday"&&command.type===1);
   if(!purgeCommand)throw Error("Purge slash command registration was not confirmed.");
   if(!roleCommand)throw Error("Role slash command registration was not confirmed.");
   if(!closeCommand)throw Error("Close slash command registration was not confirmed.");
@@ -2603,6 +2646,7 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   if(!paymentCommand)throw Error("Payment slash command registration was not confirmed.");
   if(!linkRobloxCommand)throw Error("Roblox link command registration was not confirmed.");
   if(!unlinkRobloxCommand)throw Error("Roblox unlink command registration was not confirmed.");
+  if(!birthdayCommand)throw Error("Birthday slash command registration was not confirmed.");
   const channel=(await platformDiscord(env,"/channels/1563145457910153319")).data;
   if(channel.guild_id!==GUILD_ID)throw Error("Premium channel is not in this server.");
   const roles=(await platformDiscord(env,"/guilds/"+GUILD_ID+"/roles")).data;
@@ -2617,7 +2661,7 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
   const beta=changed.permission_overwrites?.find(o=>o.type===0&&o.id===VIP_ROLE_ID);
   if(!(BigInt(everyone?.deny||"0")&1024n)||!(BigInt(premiumOverwrite?.allow||"0")&1024n)
    ||BigInt(beta?.allow||"0")&1024n)throw Error("Premium-only channel visibility was not confirmed.");
-  const details={channel_id:channel.id,channel_name:channel.name,required_role:premium.id,global_commands:globalCommands.length,guild_commands:guildCommands.length,purge_command_id:purgeCommand.id};
+  const details={channel_id:channel.id,channel_name:channel.name,required_role:premium.id,global_commands:globalCommands.length,guild_commands:guildCommands.length,purge_command_id:purgeCommand.id,birthday_command_id:birthdayCommand.id};
   await env.DB.prepare("UPDATE premium_channel_setup SET revision=?,status='ready',details=?,last_error=NULL,lease_until=0,updated_at=? WHERE id=1").bind(revision,JSON.stringify(details),new Date().toISOString()).run();
  }catch(e){
   await env.DB.prepare("UPDATE premium_channel_setup SET status='error',last_error=?,lease_until=?,updated_at=? WHERE id=1").bind(String(e).slice(0,1500),Date.now()+60000,new Date().toISOString()).run();
@@ -2933,6 +2977,7 @@ export default {
   ctx.waitUntil(reconcileRecentJoins(env).catch(e=>console.error("join reconciliation",String(e))));
   ctx.waitUntil(configureNativeJoinGreeting(env).catch(e=>console.error("native welcome settings",String(e))));
   ctx.waitUntil(ensureClubEventPanel(env).catch(e=>console.error('club event panel',String(e))));
+  ctx.waitUntil(cleanupEndedClubEvents(env).catch(e=>console.error("ended event cleanup",String(e))));
   if(env.MEMBER_JOIN_GATEWAY)ctx.waitUntil(env.MEMBER_JOIN_GATEWAY.getByName("member-join-listener").fetch("https://internal/start",{method:"POST"}).catch(e=>console.error("member gateway start",String(e))));
   ctx.waitUntil(removeObsoleteGetKeyDescription(env).catch(e=>console.error("bot description update",String(e))));
   ctx.waitUntil(maintainFeatureChannel(env).catch(e=>console.error("features maintenance",String(e))));
@@ -2972,6 +3017,7 @@ export default {
   if(![2,3,4,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
   if(i.type===4){if(i.data?.name==="role")return roleAutocomplete(i,env);return autocompleteResponse();}
   if(i.type===2){
+   if(i.data?.name==="birthday")return delayedReply(i,env,ctx,()=>birthdayLookupCommand(i,env));
    if(i.data?.name==="purge")return delayedReply(i,env,ctx,()=>purgeMessages(i,env));
    if(i.data?.name==="role"&&interactionOption(i,"action")?.value==="add")return delayedReply(i,env,ctx,()=>addRoleToMember(i,env));
    if(i.data?.name==="role"&&interactionOption(i,"action")?.value==="remove")return delayedReply(i,env,ctx,()=>removeRoleFromMember(i,env));
@@ -2983,25 +3029,26 @@ export default {
    return reply("That slash command is not available.");
   }
   const eventCreateId=String(i.data?.custom_id||"");
-  if(i.type===3&&(eventCreateId==="club_event_create"||/^club_event_create:(acid|bunker)$/.test(eventCreateId))){
+  const createEventMatch=/^club_event_create:(acid|bunker|dual)$/.exec(eventCreateId);
+  if(i.type===3&&(eventCreateId==="club_event_create"||createEventMatch)){
    if(i.channel_id!==CLUB_EVENTS_CHANNEL)return reply("Use the Club Events channel to create an event.");
-   return clubEventModal(i,env,eventCreateId.endsWith(":bunker")?"bunker":"acid");
+   return clubEventModal(i,env,createEventMatch?.[1]||"acid");
   }
-  if(i.type===5&&(eventCreateId==="club_event_create_modal"||/^club_event_create_modal:(acid|bunker)$/.test(eventCreateId))){
+  if(i.type===5&&(eventCreateId==="club_event_create_modal"||/^club_event_create_modal:(acid|bunker|dual)$/.test(eventCreateId))){
    if(i.channel_id!==CLUB_EVENTS_CHANNEL)return reply("Submit event forms in the Club Events channel.");
    if(!env.DB)return reply("The event service is temporarily unavailable.");
    return delayedReply(i,env,ctx,()=>createClubEvent(i,env));
   }
+  const birthdayId=String(i.data?.custom_id||"");
+  if(i.type===3&&birthdayId==="syndicate_birthday_register")return birthdayRegisterButton(i,env);
+  if(i.type===3&&birthdayId==="syndicate_birthday_change")return birthdayChangeButton(i,env);
+  if(i.type===3&&birthdayId==="syndicate_birthday_remove")return birthdayRemoveButton(i,env);
+  if(i.type===5&&birthdayId==="syndicate_birthday_modal")return birthdayModalSubmit(i,env);
   if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
    if(i.type===3&&i.data?.custom_id?.startsWith("welcome_wave:"))return welcomeWaveInteraction(i,env);
-   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_register")return birthdayRegisterButton(i,env);
-   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_change")return birthdayChangeButton(i,env);
-   if(i.type===3&&i.data?.custom_id==="syndicate_birthday_remove")return birthdayRemoveButton(i,env);
-   if(i.type===5&&i.data?.custom_id==="syndicate_birthday_modal")return birthdayModalSubmit(i,env);
-
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_end:")){
     const eventId=String(i.data.custom_id.slice("club_event_end:".length));
     if(!/^[A-Za-z0-9_-]{1,60}$/.test(eventId))return reply("Invalid event.");
