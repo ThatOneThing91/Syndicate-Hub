@@ -718,18 +718,17 @@ async function executorWindowsInteraction(i,env,page){
 function executorPlatformInteraction(i,env,ctx){
  const match=/^syndicate_executor_(?:nav_)?(windows|android|ios|mac)_([0-9]{1,3})$/.exec(i.data?.custom_id||"");
  if(!match)return reply("Choose a platform from the executor menu.");
- if(match[1]==="windows")return deferredComponentWork(i,env,ctx,()=>executorWindowsInteraction(i,env,Number(match[2])),Boolean(i.message?.flags&64));
- ctx.waitUntil((async()=>{
+ const page=Number(match[2]);
+ const updateOriginal=Boolean(i.message?.flags&64);
+ if(match[1]==="windows")return deferredComponentWork(i,env,ctx,()=>executorWindowsInteraction(i,env,page),updateOriginal);
+ return deferredComponentWork(i,env,ctx,async()=>{
   let body;
-  try{body=await executorPlatformPayload(env,match[1],Number(match[2]));}
+  try{body=await executorPlatformPayload(env,match[1],page);}
   catch(e){console.error("executor platform view",String(e));body={content:"Executor information could not be loaded. Try again shortly.",embeds:[],components:[executorPlatformButtons(match[1])]};}
   body.allowed_mentions={parse:[]};
-  const r=await fetch("https://discord.com/api/v10/webhooks/"+APPLICATION_ID+"/"+i.token+"/messages/@original",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(10000)});
-  if(!r.ok)console.error("executor platform response",r.status);
- })().catch(e=>console.error("executor platform delivery",String(e))));
- return discordResponse(i.message?.flags&64?{type:6}:{type:5,data:{flags:64}});
+  return {type:updateOriginal?7:4,data:{...body,...(updateOriginal?{}:{flags:64})}};
+ },updateOriginal);
 }
-
 async function executorDiscord(env, path, method, body) {
  for(let attempt=0;attempt<3;attempt++){
   const r=await fetch("https://discord.com/api/v10"+path,{method,headers:{Authorization:"Bot "+env.DISCORD_BOT_TOKEN,"Content-Type":"application/json"},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(10000)});
