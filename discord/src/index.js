@@ -1118,7 +1118,7 @@ async function upgradeBirthdayAnnouncementEmbeds(env){
  await ensureBirthdayTable(env);
  await ensureCelebrationTables(env);
  const local=birthdayLocalNow();
- const pending=await env.DB.prepare("SELECT s.user_id,s.channel_id,s.message_id FROM community_birthday_sends s JOIN community_birthdays b ON b.user_id=s.user_id WHERE s.year=? AND b.birth_month=? AND b.birth_day=?").bind(local.year,local.month,local.day).all();
+ const pending=await env.DB.prepare("SELECT s.user_id,s.channel_id,s.message_id FROM community_birthday_sends s WHERE s.year=? AND date(s.sent_at)=date('now')").bind(local.year).all();
  for(const row of pending?.results||[]){
   const userId=String(row.user_id||""),channelId=String(row.channel_id||""),messageId=String(row.message_id||"");
   if(!/^\d{17,20}$/.test(userId)||!/^\d{17,20}$/.test(channelId)||!/^\d{17,20}$/.test(messageId))continue;
