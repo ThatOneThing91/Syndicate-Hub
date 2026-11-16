@@ -2236,76 +2236,6 @@ async function postFreePanel(env){
 
 
 
-const SCRIPT_UPDATES_CHANNEL = "1564527153108750366";
-function scriptUpdatePayload(release) {
- if (!release || !/^[a-zA-Z0-9._-]{1,100}$/.test(release.id) ||
-     typeof release.title !== "string" || !release.title.trim() || release.title.length > 180 ||
-     typeof release.summary !== "string" || release.summary.length > 700 ||
-     !/^[a-f0-9]{40}$/.test(release.commit) || !Number.isFinite(Date.parse(release.published_at))) {
-  throw Error("Invalid script release");
- }
- const fields=[];
- for (const [key,label] of [["added","✨ NEW FEATURES"],["fixed","🛠️ FIXES"],["improved","⚡ IMPROVEMENTS"]]) {
-  const items=release[key] ?? [];
-  if (!Array.isArray(items) || items.length>8 || items.some(x=>typeof x!=="string"||!x.trim()||x.length>450)) throw Error("Invalid release section");
-  if(items.length) {
-   const value=items.map(x=>"• "+x).join("\n");
-   if(value.length>1024) throw Error("Release section too long");
-   fields.push({name:label,value,inline:false});
-  }
- }
- if(!fields.length)throw Error("Empty release");
- fields.push({name:"↻ GET THE UPDATE",value:"Re-execute Syndicate Hub to load the latest script. Use **Get Script** below to copy the loader.",inline:false});
- return {
-  allowed_mentions:{parse:[]},
-  embeds:[{
-   author:{name:"SYNDICATE HUB  •  OFFICIAL CHANGELOG"},
-   title:"💜 "+release.title,
-   description:"**STORAGE HUNTERS**  ·  `SCRIPT UPDATE`\n\n"+release.summary,
-   color:0x9B59F6,fields,
-   footer:{text:"Syndicate Hub • "+release.id+" • Build "+release.commit.slice(0,7)},
-   timestamp:release.published_at
-  }],
-  components:[{type:1,components:[
-   {type:2,style:1,label:"Get Script",custom_id:"syndicate_get_script",emoji:{name:"📜"}}
-  ]}]
- };
-}
-async function sendScriptUpdates(env) {
- // A durable outbox lets release summaries be queued after a verified script update.
- await env.DB.prepare("CREATE TABLE IF NOT EXISTS script_update_announcements(release_id TEXT PRIMARY KEY,commit_sha TEXT NOT NULL UNIQUE,release_json TEXT NOT NULL,created_at TEXT NOT NULL,sent_at TEXT,message_id TEXT,lease_until INTEGER NOT NULL DEFAULT 0,last_error TEXT)").run();
- const pending=await env.DB.prepare("SELECT * FROM script_update_announcements WHERE sent_at IS NULL AND lease_until<=? ORDER BY created_at LIMIT 3").bind(Date.now()).all();
- for(const row of pending.results||[]) {
-  const claim=await env.DB.prepare("UPDATE script_update_announcements SET lease_until=? WHERE release_id=? AND sent_at IS NULL AND lease_until<=?").bind(Date.now()+180000,row.release_id,Date.now()).run();
-  if(!claim.meta?.changes)continue;
-  const ageMs=Date.now()-Date.parse(row.created_at||"");
-  if(Number.isFinite(ageMs)&&ageMs>72*60*60*1000){
-   const skippedAt=new Date().toISOString();
-   await env.DB.prepare("UPDATE script_update_announcements SET sent_at=?,last_error=?,lease_until=0 WHERE release_id=? AND sent_at IS NULL").bind(skippedAt,"Skipped stale update after 72 hours; legacy changelog destination was removed.",row.release_id).run();
-   console.warn("Skipped stale script update",row.release_id);
-   continue;
-  }
-  try {
-   const release=JSON.parse(row.release_json);
-   if(release.id!==row.release_id||release.commit!==row.commit_sha)throw Error("Release identity mismatch");
-   const payload=scriptUpdatePayload(release);
-   // Verify the destination belongs to this guild before sending.
-   const channel=await executorDiscord(env,"/channels/"+SCRIPT_UPDATES_CHANNEL,"GET");
-   if(channel.status!==200||channel.data.guild_id!==GUILD_ID)throw Error("Script updates channel unavailable or wrong server");
-   const digest=await sha("script-update:"+row.release_id);
-   const nonce=BigInt("0x"+digest.slice(0,18)).toString();
-   const result=await executorDiscord(env,"/channels/"+SCRIPT_UPDATES_CHANNEL+"/messages","POST",{...payload,nonce,enforce_nonce:true});
-   if(!result.data?.id)throw Error("Script update delivery failed: "+result.status);
-   await env.DB.prepare("UPDATE script_update_announcements SET sent_at=?,message_id=?,last_error=NULL,lease_until=0 WHERE release_id=?").bind(new Date().toISOString(),result.data.id,row.release_id).run();
-   console.log("Script update delivered",row.release_id,result.data.id);
-  }catch(e) {
-   await env.DB.prepare("UPDATE script_update_announcements SET last_error=?,lease_until=? WHERE release_id=? AND sent_at IS NULL").bind(String(e).slice(0,1000),Date.now()+60000,row.release_id).run();
-   console.error("script update delivery",row.release_id,String(e));
-  }
- }
-}
-
-
 const PLATFORM_CHANNEL = "1564527127276290098";
 const PLATFORM_CHOICES = Object.freeze([
  {key:"ios",name:"iOS",emoji:"🍎",color:0xB48AE0},
@@ -2810,10 +2740,40 @@ async function maintainCommunitySetup(env){
  const details={introductions_channel_id:introductions[0].id,join_notices:"discord_native_system_channel_sticker_replies",deleted_club_channel_id:club[0]?.id||null};
  await env.DB.prepare("INSERT INTO community_setup(id,revision,status,details,last_error,updated_at) VALUES(1,?,'ready',?,NULL,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,status='ready',details=excluded.details,last_error=NULL,updated_at=excluded.updated_at").bind(revision,JSON.stringify(details),new Date().toISOString()).run();
 }
+async function cleanupUnwantedReleaseMessage(env){
+ const releaseId="5.89";
+ const commitSha="ac3fd75b08843dec87b7bf33c735d4c1d7cc2e9d";
+ const channelId="1564527153108750366";
+ const messageId="1571830482025447560";
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS script_announcement_cleanup(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL,last_error TEXT,updated_at TEXT NOT NULL)").run();
+ const prior=await env.DB.prepare("SELECT status FROM script_announcement_cleanup WHERE id=1").first();
+ if(prior?.status==="completed")return;
+ try{
+  const row=await env.DB.prepare("SELECT commit_sha,message_id FROM script_update_announcements WHERE release_id=?").bind(releaseId).first();
+  if(!row||row.commit_sha!==commitSha||row.message_id!==messageId)throw Error("Unexpected release announcement record");
+  const channel=await discordApi(env,"/channels/"+channelId);
+  if(channel.status!==200||channel.data.guild_id!==GUILD_ID)throw Error("Features channel unavailable or wrong server");
+  const message=await discordApi(env,"/channels/"+channelId+"/messages/"+messageId);
+  if(message.status===200){
+   const footer=String(message.data.embeds?.[0]?.footer?.text||"");
+   if(message.data.author?.id!==APPLICATION_ID||!footer.includes(releaseId)||!footer.includes(commitSha.slice(0,7)))throw Error("Release message identity did not match");
+   const removed=await discordApi(env,"/channels/"+channelId+"/messages/"+messageId,"DELETE");
+   if(removed.status!==200&&removed.status!==204)throw Error("Release message deletion failed: "+removed.status);
+  }else if(message.status!==404)throw Error("Release message lookup failed: "+message.status);
+  const verified=await discordApi(env,"/channels/"+channelId+"/messages/"+messageId);
+  if(verified.status!==404)throw Error("Release message deletion was not confirmed");
+  const stamp=new Date().toISOString();
+  await env.DB.prepare("INSERT INTO script_announcement_cleanup(id,status,last_error,updated_at) VALUES(1,'completed',NULL,?) ON CONFLICT(id) DO UPDATE SET status='completed',last_error=NULL,updated_at=excluded.updated_at").bind(stamp).run();
+  await env.DB.prepare("UPDATE script_update_announcements SET last_error=?,lease_until=0 WHERE release_id=? AND commit_sha=?").bind("Removed at user request; individual release posts disabled.",releaseId,commitSha).run();
+ }catch(e){
+  await env.DB.prepare("INSERT INTO script_announcement_cleanup(id,status,last_error,updated_at) VALUES(1,'error',?,?) ON CONFLICT(id) DO UPDATE SET status='error',last_error=excluded.last_error,updated_at=excluded.updated_at").bind(String(e).slice(0,1000),new Date().toISOString()).run();
+  throw e;
+ }
+}
 async function maintainFeatureChannel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS feature_channel_maintenance(id INTEGER PRIMARY KEY CHECK(id=1),snapshot TEXT,status TEXT NOT NULL,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
  const state=await env.DB.prepare("SELECT snapshot,status,details FROM feature_channel_maintenance WHERE id=1").first();
- const revision="features-current-2026-11-13-v2";
+ const revision="features-current-2026-11-16-v3";
  if(state?.status==="completed"&&JSON.parse(state.details||"{}").revision===revision)return;
  if(!state?.snapshot)throw Error("Feature channel snapshot unavailable");
  try{
@@ -2821,26 +2781,18 @@ async function maintainFeatureChannel(env){
   const featureId="1564527153108750366";
   const messageId="1566059206811848775";
   const expected=snapshot.messages.find(m=>m.id===messageId);
-  if(!expected||snapshot.features.id!==featureId||snapshot.changelog.id!==SCRIPT_UPDATES_CHANNEL)throw Error("Unexpected channel snapshot");
+  if(!expected||snapshot.features.id!==featureId)throw Error("Unexpected features snapshot");
   const channel=await discordApi(env,"/channels/"+featureId);
   if(channel.status!==200||channel.data.guild_id!==GUILD_ID)throw Error("Features channel unavailable or wrong server");
   const message=await discordApi(env,"/channels/"+featureId+"/messages/"+messageId);
-  const content="💜 SYNDICATE HUB — STORAGE HUNTERS\n\n**AUCTION & FARMING**\n• Automated auction runs with garage and tier priorities, retries, affordability checks, and inventory-full stops\n• Auto Bid, Pause Auction, Instant Auction Entry, and Lost & Found collection\n• Military Base auction area and expanded garage selections\n• Auto Plant, Water, Harvest, and selected one-click activities\n\n**SHOP & POTIONS**\n• Auto Wash, Auto Repair, Daily Rewards, Museum gifts, and Shop Offers with a minimum discount setting\n• Separate Auto Buy and Auto Drink lists; drink stock, prices, restock timer, and one-tap Luck/Rush actions\n\n**QUICK SELL & GRADING**\n• Independent Quick Sell and Grading filters with Sell Selected or Keep Selected\n• Filter by rarity, mutations, event mutations, and consumables\n• Protects seeds, cleaning sprays, fishing rods, crates, safes, consumables, worn accessories, and favorites\n• Batch selling, manual sale-rate control, auto-unload options, and filter diagnostics\n\n**PLOT & ACTIVITIES**\n• Garden automation and potion placement; move selected potions to your truck\n• Plot Studio tools for saving and loading builds\n• Auto Basketball, Fishing, Obby, King of the Hill, and Hay Collector\n\n**MENU & ACCESS**\n• Draggable, resizable menu with collapsible sidebar, minimize button, and mobile-friendly controls\n• Touch, controller, mouse, and keyboard support; adjustable colors, transparency, animated sky, and pixel stars\n• Main Automation and Preset 2.0 quick setups\n• Free 24-hour and Premium lifetime key access";
+  const content="💜 SYNDICATE HUB — STORAGE HUNTERS\n\n**AUCTION & FARMING**\n• Automated auction runs with garage and tier priorities, retries, affordability checks, and inventory-full stops\n• Auto Bid, Pause Auction, Instant Auction Entry, and Lost & Found collection\n• Military Base auction area and expanded garage selections\n• Auto Plant, Water, Harvest, and selected one-click activities\n\n**SHOP & POTIONS**\n• Auto Wash, Auto Repair, Daily Rewards, Museum gifts, and Shop Offers with a minimum discount setting\n• Separate Auto Buy and Auto Drink lists; drink stock, prices, restock timer, and one-tap Luck/Rush actions\n\n**QUICK SELL & GRADING**\n• Independent Quick Sell and Grading filters with Sell Selected or Keep Selected\n• Filter by rarity, mutations, event mutations, and consumables\n• Protects seeds, cleaning sprays, fishing rods, crates, safes, consumables, worn accessories, and favorites\n• Batch selling, manual sale-rate control, auto-unload options, and filter diagnostics\n\n**PLOT & ACTIVITIES**\n• Garden automation and potion placement; move selected potions to your truck\n• Plot Studio tools for saving and loading builds\n• Auto Basketball, Fishing, Obby, King of the Hill, and Hay Collector\n• Carnival x1/x5 rolls teleport beside the Monkey, retry while the booth is busy, and restore your starting spot when stopped or inventory is full\n• Quest Auto Continue teleports beside the NPC before accepting and restores your starting spot when stopped\n\n**MENU & ACCESS**\n• Draggable, resizable menu with collapsible sidebar, minimize button, and mobile-friendly controls\n• Touch, controller, mouse, and keyboard support; adjustable colors, transparency, animated sky, and pixel stars\n• Main Automation and Preset 2.0 quick setups\n• Free 24-hour and Premium lifetime key access";
   if(message.status!==200||message.data.author?.id!==APPLICATION_ID)throw Error("Features message unavailable or wrong author");
   const changed=await discordApi(env,"/channels/"+featureId+"/messages/"+messageId,"PATCH",{content,allowed_mentions:{parse:[]}});
   if(changed.status!==200||changed.data.content!==content)throw Error("Feature list update was not confirmed");
   const channelName="📋・features";
   const renamed=await discordApi(env,"/channels/"+featureId,"PATCH",{name:channelName});
   if(renamed.status!==200||renamed.data.name!==channelName)throw Error("Features channel rename was not confirmed");
-  const changelog=await discordApi(env,"/channels/"+SCRIPT_UPDATES_CHANNEL);
-  if(changelog.status===200){
-   if(changelog.data.guild_id!==GUILD_ID||changelog.data.id!==snapshot.changelog.id||changelog.data.name!==snapshot.changelog.name)throw Error("Changelog identity changed");
-   const removed=await discordApi(env,"/channels/"+SCRIPT_UPDATES_CHANNEL,"DELETE");
-   if(removed.status!==200&&removed.status!==204)throw Error("Changelog deletion failed: "+removed.status);
-  }else if(changelog.status!==404)throw Error("Changelog lookup failed: "+changelog.status);
-  const verified=await discordApi(env,"/channels/"+SCRIPT_UPDATES_CHANNEL);
-  if(verified.status!==404)throw Error("Changelog deletion was not confirmed");
-  const details={revision,feature_channel:featureId,channel_name:channelName,message_id:messageId,content_length:content.length,changelog_channel:SCRIPT_UPDATES_CHANNEL,changelog_deleted:true};
+  const details={revision,feature_channel:featureId,channel_name:channelName,message_id:messageId,content_length:content.length,release_posts:"disabled"};
   await env.DB.prepare("UPDATE feature_channel_maintenance SET status='completed',details=?,last_error=NULL,updated_at=? WHERE id=1").bind(JSON.stringify(details),new Date().toISOString()).run();
  }catch(e){
   await env.DB.prepare("UPDATE feature_channel_maintenance SET status='error',last_error=?,updated_at=? WHERE id=1").bind(String(e).slice(0,1200),new Date().toISOString()).run();
@@ -3116,7 +3068,8 @@ export default {
   if(env.MEMBER_JOIN_GATEWAY)ctx.waitUntil(env.MEMBER_JOIN_GATEWAY.getByName("member-join-listener").fetch("https://internal/start",{method:"POST"}).catch(e=>console.error("member gateway start",String(e))));
   ctx.waitUntil(removeObsoleteGetKeyDescription(env).catch(e=>console.error("bot description update",String(e))));
   ctx.waitUntil(maintainFeatureChannel(env).catch(e=>console.error("features maintenance",String(e))));
-  ctx.waitUntil(sendScriptUpdates(env).catch(e=>console.error("script update delivery",String(e))));
+  // Script release details belong in the single maintained Features message.
+  ctx.waitUntil(cleanupUnwantedReleaseMessage(env).catch(e=>console.error("release message cleanup",String(e))));
   ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium channel setup",String(e))));
   ctx.waitUntil(ensureBetaHubAccess(env).catch(e=>console.error("beta hub access",String(e))));
   ctx.waitUntil(ensurePlatformPanel(env).catch(e=>console.error("platform panel",String(e))));
