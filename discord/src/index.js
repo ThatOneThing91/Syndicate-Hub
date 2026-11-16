@@ -1042,8 +1042,7 @@ function makeCelebrationEmbed(scope,description,fromLabel){
   title:birthday?"🎂 Happy Birthday! 🎂":"🎉 Welcome to the Crew! 🎉",
   description,
   fields:birthday?[
-   {name:"🎁 Make a wish",value:"May your next trip around the sun bring great memories and good surprises.",inline:false},
-   {name:"🎈 Join the celebration",value:"Tap **Celebrate with them** below to add your own birthday wish.",inline:false}
+   {name:"🎁 Make a wish",value:"May your next trip around the sun bring great memories and good surprises.",inline:false}
   ]:[],
   footer:{text:birthday?"Wishing you an amazing year ahead • Shadow Syndicate":"Glad you're here • Shadow Syndicate"},
   timestamp:new Date().toISOString()
@@ -1052,12 +1051,14 @@ function makeCelebrationEmbed(scope,description,fromLabel){
 async function sendCelebrationMessage(env,channelId,payload,stickerId){
  const body={...payload};
  if(stickerId)body.sticker_ids=[String(stickerId)];
- let result=await discordApi(env,"/channels/"+channelId+"/messages","POST",body);
+ const result=await discordApi(env,"/channels/"+channelId+"/messages","POST",body);
  if(stickerId&&result.status>=400){
+  console.error("celebration sticker rejected",JSON.stringify({status:result.status,error:result.data,stickerId,channelId}));
   delete body.sticker_ids;
-  result=await discordApi(env,"/channels/"+channelId+"/messages","POST",body);
+  const fallback=await discordApi(env,"/channels/"+channelId+"/messages","POST",body);
+  return {...fallback,stickerRejected:true,stickerError:result.data};
  }
- return result;
+ return {...result,stickerRejected:false};
 }
 async function postCelebrationReply(i,env,{scope,targetId,actorId}){
  if(!env.DB)return reply("Celebrations are temporarily unavailable.");
@@ -1077,7 +1078,7 @@ async function postCelebrationReply(i,env,{scope,targetId,actorId}){
   if(scope==="birthday")payload.embeds=[makeCelebrationEmbed(scope,description,actorLabel)];
   const posted=await sendCelebrationMessage(env,i.channel_id,payload,sticker);
   if(posted.status!==200||!posted.data?.id)throw Error("Discord rejected the celebration post ("+posted.status+").");
-  return reply("Celebration posted!");
+  return reply(posted.stickerRejected?"Your message posted, but Discord rejected the sticker. Check the bot's sticker permissions and the server's available stickers.":"Celebration posted with a sticker!");
  }catch(e){
   await env.DB.prepare("DELETE FROM celebration_reply_claims WHERE source_message_id=? AND actor_id=?").bind(sourceId,actorId).run().catch(()=>{});
   console.error("celebration reply",String(e));
