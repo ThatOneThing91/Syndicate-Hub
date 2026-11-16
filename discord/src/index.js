@@ -1360,13 +1360,33 @@ async function sendExecutionLogs(env){
   await env.DB.prepare("UPDATE discord_activity_cursor SET last_row=? WHERE id=1").bind(e.id).run();
  }
 }
-async function listKeys(env) {
+async function listKeys(env,page=0) {
  try {
-  const r=await env.DB.prepare("SELECT user_id,key_prefix,created_at,expires_at FROM member_keys WHERE revoked=0 AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at DESC LIMIT 15").bind(new Date().toISOString()).all();
+  const pageSize=6,now=new Date().toISOString();
+  const count=await env.DB.prepare("SELECT COUNT(*) AS total FROM member_keys WHERE revoked=0 AND (expires_at IS NULL OR expires_at>?)").bind(now).first();
+  const total=Number(count?.total||0);
+  if(!total)return reply("No active keys.");
+  const pages=Math.max(1,Math.ceil(total/pageSize));
+  page=Math.max(0,Math.min(pages-1,Math.floor(Number(page)||0)));
+  const r=await env.DB.prepare("SELECT m.key_hash,m.user_id,m.key_prefix,m.created_at,m.expires_at,v.cipher,v.iv FROM member_keys m LEFT JOIN discord_key_vault v ON v.key_hash=m.key_hash WHERE m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) ORDER BY m.created_at DESC LIMIT ? OFFSET ?").bind(now,pageSize,page*pageSize).all();
   const rows=await userLabels(r.results||[],"user_id");
-  if(!rows.length)return reply("No active keys.");
-  const lines=rows.map(x=>"• **"+x.username+"** • Roblox ID `"+x.user_id+"` • Key prefix `"+String(x.key_prefix||"Unknown")+"…` • "+(x.expires_at?keyRemaining(x.expires_at)+" • Expires <t:"+Math.floor(Date.parse(x.expires_at)/1000)+":R>":"Lifetime access"));
-  return reply("🔑 **Active Syndicate Hub keys**\n"+lines.join("\n")+"\n\nFull key values stay private to each member; they can retrieve their own key with **Get Key**.");
+  const lines=[];
+  for(const x of rows){
+   let secret="Key unavailable — retrieve it from the member's Get Key button.";
+   if(x.cipher&&x.iv&&env.KEY_ISSUER?.hashKey){
+    try{
+     const plain=new TextDecoder().decode(await crypto.subtle.decrypt({name:"AES-GCM",iv:unb64(x.iv)},await cipherKey(env),unb64(x.cipher)));
+     if(await env.KEY_ISSUER.hashKey(plain)===x.key_hash)secret="Key: `"+plain+"`";
+     else throw Error("key hash mismatch");
+    }catch(e){console.error("admin key decrypt",String(e));}
+   }
+   lines.push("• **"+x.username+"** • Roblox ID `"+x.user_id+"`\n  "+secret+" • "+(x.expires_at?keyRemaining(x.expires_at)+" • Expires <t:"+Math.floor(Date.parse(x.expires_at)/1000)+":R>":"Lifetime access"));
+  }
+  const components=pages>1?[{type:1,components:[
+   ...(page>0?[{type:2,style:2,label:"Previous",custom_id:"mg_keys_page_"+(page-1)}]:[]),
+   ...(page<pages-1?[{type:2,style:2,label:"Next",custom_id:"mg_keys_page_"+(page+1)}]:[])
+  ]}]:[];
+  return new Response(JSON.stringify({type:4,data:{content:"🔑 **Active Syndicate Hub keys** • Page "+(page+1)+"/"+pages+"\n"+lines.join("\n")+"\n\nOnly administrators can see this private list. Members can retrieve their own key with **Get Key**.",flags:64,components,allowed_mentions:{parse:[]}}}),{headers:{"content-type":"application/json"}});
  }catch(e){
   console.error("active key list",String(e));
   return reply("I couldn't load the active-key list. No keys were changed; try again shortly.");
@@ -1716,7 +1736,8 @@ async function managementAction(i,env){
  const id=i.data.custom_id;
  if(id==="mg_online")return onlineUsers(env);
  if(id==="mg_logs")return recentExecutions(env);
- if(id==="mg_keys")return listKeys(env);
+ if(id==="mg_keys")return listKeys(env,0);
+ if(id.startsWith("mg_keys_page_"))return listKeys(env,Number(id.slice(13))||0);
  if(id==="mg_refresh"){await managementRefresh(env);return reply("Dashboard refreshed.");}
  if(id==="mg_revoke")return revokeChoices(env);
  if(id.startsWith("mg_page_"))return revokeChoices(env,Math.max(0,Math.min(100,Number(id.slice(8))||0)));
