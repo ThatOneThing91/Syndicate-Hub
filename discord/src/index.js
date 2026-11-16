@@ -656,6 +656,48 @@ async function cacheWindowsExecutorPages(env){
  statements.push(env.DB.prepare("DELETE FROM executor_windows_pages WHERE page>=?").bind(count));
  await env.DB.batch(statements);
 }
+async function interactionBounded(promise,ms=650){
+ return await Promise.race([Promise.resolve(promise),new Promise(resolve=>setTimeout(()=>resolve(null),ms))]);
+}
+async function deferredComponentWork(i,env,ctx,work,updateOriginal=false){
+ const acknowledgement=updateOriginal?{type:6}:{type:5,data:{flags:64}};
+ ctx.waitUntil((async()=>{
+  let result;
+  try{result=await work()}catch(e){console.error("deferred component work",String(e));result=reply("Something went wrong. Please try again.")}
+  let payload;
+  try{payload=result instanceof Response?await result.json():result}catch(e){console.error("deferred component response parse",String(e));payload=null}
+  const data=payload?.data||{content:"Could not load the requested information."};
+  const followup=updateOriginal&&payload?.type!==7;
+  const url=followup
+   ?"https://discord.com/api/v10/webhooks/"+APPLICATION_ID+"/"+i.token+"?wait=true"
+   :"https://discord.com/api/v10/webhooks/"+APPLICATION_ID+"/"+i.token+"/messages/@original";
+  const body={
+   ...(typeof data.content==="string"?{content:data.content}:{}),
+   ...(Array.isArray(data.embeds)?{embeds:data.embeds}:{}),
+   components:Array.isArray(data.components)?data.components:[],
+   allowed_mentions:data.allowed_mentions||{parse:[]}
+  };
+  if(followup)body.flags=64;
+  for(let attempt=0;attempt<3;attempt++){
+   try{
+    const r=await fetch(url,{method:followup?"POST":"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(6000)});
+    if(r.ok)return;
+    const detail=(await r.text()).slice(0,250);
+    if((r.status===429||r.status>=500)&&attempt<2){
+     let waitMs=250*(2**attempt);
+     if(r.status===429){try{waitMs=Math.min(3000,Math.max(250,Math.ceil(Number(JSON.parse(detail).retry_after||0)*1000)||waitMs))}catch{}}
+     await new Promise(resolve=>setTimeout(resolve,waitMs));
+     continue;
+    }
+    console.error("deferred component response",r.status,detail);return;
+   }catch(e){
+    if(attempt<2){await new Promise(resolve=>setTimeout(resolve,250*(2**attempt)));continue}
+    console.error("deferred component response network",String(e));
+   }
+  }
+ })());
+ return discordResponse(acknowledgement);
+}
 async function executorWindowsInteraction(i,env,page){
  let body;
  try{
@@ -672,7 +714,7 @@ async function executorWindowsInteraction(i,env,page){
 function executorPlatformInteraction(i,env,ctx){
  const match=/^syndicate_executor_(?:nav_)?(windows|android|ios|mac)_([0-9]{1,3})$/.exec(i.data?.custom_id||"");
  if(!match)return reply("Choose a platform from the executor menu.");
- if(match[1]==="windows")return executorWindowsInteraction(i,env,Number(match[2]));
+ if(match[1]==="windows")return deferredComponentWork(i,env,ctx,()=>executorWindowsInteraction(i,env,Number(match[2])),Boolean(i.message?.flags&64));
  ctx.waitUntil((async()=>{
   let body;
   try{body=await executorPlatformPayload(env,match[1],Number(match[2]));}
@@ -891,8 +933,9 @@ function birthdayEphemeral(content,components=[]){
 async function birthdayRegisterButton(i,env){
  const userId=String(i.member?.user?.id||i.user?.id||"");
  if(!userId)return reply("I couldn't identify your Discord account.");
- await ensureBirthdayTable(env);
- const saved=await env.DB.prepare("SELECT birth_month,birth_day FROM community_birthdays WHERE user_id=?").bind(userId).first();
+ let saved=null;
+ try{saved=await interactionBounded((async()=>{await ensureBirthdayTable(env);return env.DB.prepare("SELECT birth_month,birth_day FROM community_birthdays WHERE user_id=?").bind(userId).first()})())}
+ catch(e){console.error("birthday register lookup",String(e))}
  if(!saved)return birthdaySetModal(null);
  return birthdayEphemeral("Your saved birthday is **"+birthdayDateLabel(saved.birth_month,saved.birth_day)+"**.",[{type:1,components:[{type:2,style:1,label:"Change Birthday",custom_id:"syndicate_birthday_change"}]}]);
 }
@@ -931,8 +974,9 @@ async function birthdayRemoveButton(i,env){
 async function birthdayChangeButton(i,env){
  const userId=String(i.member?.user?.id||i.user?.id||"");
  if(!userId)return reply("I couldn't identify your Discord account.");
- await ensureBirthdayTable(env);
- const saved=await env.DB.prepare("SELECT birth_month,birth_day FROM community_birthdays WHERE user_id=?").bind(userId).first();
+ let saved=null;
+ try{saved=await interactionBounded((async()=>{await ensureBirthdayTable(env);return env.DB.prepare("SELECT birth_month,birth_day FROM community_birthdays WHERE user_id=?").bind(userId).first()})())}
+ catch(e){console.error("birthday change lookup",String(e))}
  return birthdaySetModal(saved||null);
 }
 async function birthdayModalSubmit(i,env){
@@ -965,7 +1009,7 @@ async function clubEventModal(i,env,eventType="acid"){
  const kind=eventType==="bunker"||eventType==="dual"?eventType:"acid";
  const userId=i.member?.user?.id||i.user?.id;
  let savedUsername="";
- if(userId&&env.DB){try{const saved=await env.DB.prepare("SELECT roblox_username FROM club_event_host_profiles WHERE discord_user_id=?").bind(userId).first();if(/^[A-Za-z0-9_]{3,20}$/.test(String(saved?.roblox_username||"")))savedUsername=String(saved.roblox_username)}catch(error){console.error("Saved event username lookup",String(error))}}
+ if(userId&&env.DB){try{const saved=await interactionBounded(env.DB.prepare("SELECT roblox_username FROM club_event_host_profiles WHERE discord_user_id=?").bind(userId).first());if(/^[A-Za-z0-9_]{3,20}$/.test(String(saved?.roblox_username||"")))savedUsername=String(saved.roblox_username)}catch(error){console.error("Saved event username lookup",String(error))}}
  const field=(id,label,placeholder,max=120,defaultValue)=>({type:1,components:[{type:4,custom_id:id,label,style:1,required:true,placeholder,min_length:1,max_length:max,...(defaultValue!==undefined?{value:defaultValue}:{})}]});
  return discordResponse({type:9,data:{custom_id:"club_event_create_modal:"+kind,title:kind==="bunker"?"Create Military Bunker Event":kind==="dual"?"Create Dual Event":"Create Acid Rain Event",components:[
   field("event_username","Roblox username (not display name)","RobloxUsername",20,savedUsername||undefined),
@@ -1196,6 +1240,7 @@ async function viewKey(i,env){
  if(!row)return hasPremiumRole(i)?modal(i):freeModal();
  
  if(!row.cipher)return reply("🔑 You have an active key for Roblox ID `"+row.user_id+"` (prefix `"+row.key_prefix+"`).\n**Time remaining:** "+keyRemaining(row.expires_at)+"\nThis key predates secure retrieval; your existing key remains unchanged. Please use your original copy or contact an administrator.");
+ if(!env.KEY_ISSUER?.hashKey)return reply("The key verification service is unavailable right now. Your active key is unchanged.");
  try{const plain=new TextDecoder().decode(await crypto.subtle.decrypt({name:"AES-GCM",iv:unb64(row.iv)},await cipherKey(env),unb64(row.cipher)));if(await env.KEY_ISSUER.hashKey(plain)!==row.key_hash)throw Error("hash mismatch");return reply("🔑 **Your Existing Syndicate Hub Key**\nRoblox ID: `"+row.user_id+"`\n**Time remaining:** "+keyRemaining(row.expires_at)+(row.expires_at?"\n**Expires:** <t:"+Math.floor(Date.parse(row.expires_at)/1000)+":F>":"")+"\n**Copy:**\n```text\n"+plain+"\n```\n**Mobile — long press:** `"+plain+"`\nKeep it private.");}catch(e){console.error("key vault",e);return reply("Your key is active, but retrieval failed. It has not been changed.");}
 }
 
@@ -1208,8 +1253,12 @@ async function getkey(i,env,overrideId,ctx) {
  try{account=await resolveRobloxAccount(input)}catch(e){console.error("Roblox lookup",e);return reply("❌ Roblox username lookup is currently unavailable. Enter your **numeric Roblox User ID** instead (for example, `172474842`). Numeric IDs do not require a Roblox API lookup.")}
  if(!account)return reply("❌ Roblox account not found. Enter the exact **username** (not display name) or your numeric Roblox User ID.");
  const robloxId=account.id;
- const active=await env.DB.prepare("SELECT key_prefix FROM member_keys WHERE user_id=? AND revoked=0 AND (expires_at IS NULL OR expires_at>?) LIMIT 1").bind(robloxId,new Date().toISOString()).first();
- if(active)return reply("❌ An active key already exists for Roblox ID `"+robloxId+"`. Contact an administrator to revoke it before requesting another.");
+ const active=await env.DB.prepare("SELECT key_hash,key_prefix FROM member_keys WHERE user_id=? AND revoked=0 AND (expires_at IS NULL OR expires_at>?) LIMIT 1").bind(robloxId,new Date().toISOString()).first();
+ if(active){
+  const owner=await env.DB.prepare("SELECT 1 AS owned FROM discord_key_issuance WHERE key_hash=? AND discord_user_id=? AND guild_id=? LIMIT 1").bind(active.key_hash,discordId,GUILD_ID).first();
+  if(owner)return viewKey(i,env);
+  return reply("❌ An active key already exists for Roblox ID `"+robloxId+"`. Contact an administrator to revoke it before requesting another.");
+ }
  const existing=await env.DB.prepare("SELECT 1 FROM discord_key_issuance d JOIN member_keys m ON d.key_hash=m.key_hash WHERE d.discord_user_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(discordId,new Date().toISOString()).first();
  if(existing)return reply("❌ Your Discord account already has an active Syndicate Hub key.");
  const bytes=crypto.getRandomValues(new Uint8Array(16));
@@ -2104,8 +2153,11 @@ async function freeAccessKey(i,env,input,ctx){
  try{account=await resolveRobloxAccount(String(input||""))}catch(e){console.error("Free Roblox lookup",e);return reply("Roblox lookup unavailable. Enter your numeric Roblox User ID instead.")}
  if(!account)return reply("Roblox account not found. Use username (not display name) or numeric ID.");
  const rid=account.id,now=new Date().toISOString();
- const owner=await env.DB.prepare("SELECT d.discord_user_id FROM member_keys m LEFT JOIN discord_key_issuance d ON d.key_hash=m.key_hash WHERE m.user_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(rid,now).first();
- if(owner)return reply(owner.discord_user_id===did?"You already have an active key. Use Get Key to retrieve it.":"An active key already exists for that Roblox account.");
+ const owner=await env.DB.prepare("SELECT d.discord_user_id,d.guild_id FROM member_keys m LEFT JOIN discord_key_issuance d ON d.key_hash=m.key_hash WHERE m.user_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(rid,now).first();
+ if(owner){
+  if(owner.discord_user_id===did&&owner.guild_id===GUILD_ID)return viewKey(i,env);
+  return reply(owner.discord_user_id===did?"You already have an active key. Use Get Key to retrieve it.":"An active key already exists for that Roblox account.");
+ }
  const active=await env.DB.prepare("SELECT m.user_id FROM discord_key_issuance d JOIN member_keys m ON m.key_hash=d.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(did,GUILD_ID,now).first();
  if(active)return reply("You already have an active key for Roblox ID "+active.user_id+". Use Get Key.");
  const bytes=crypto.getRandomValues(new Uint8Array(16));
@@ -3090,7 +3142,7 @@ export default {
   if(i.type===3&&birthdayId==="syndicate_birthday_remove")return delayedReply(i,env,ctx,()=>birthdayRemoveButton(i,env));
   if(i.type===5&&birthdayId==="syndicate_birthday_modal")return delayedReply(i,env,ctx,()=>birthdayModalSubmit(i,env));
   if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
-  if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
+  if(!env.DB)return reply("The bot database is temporarily unavailable.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
    if(i.type===3&&i.data?.custom_id?.startsWith("welcome_wave:"))return delayedReply(i,env,ctx,()=>welcomeWaveInteraction(i,env));
@@ -3106,17 +3158,17 @@ export default {
    if(i.type===3&&i.data?.custom_id?.startsWith("mg_"))return discordResponse(await deferredManagement(i,env,ctx));
    if(i.type===5&&i.data?.custom_id==="mg_revoke_modal")return discordResponse(await managementModal(i));
    if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket")return delayedReply(i,env,ctx,()=>createPremiumTicket(i,env));
-   if(i.type===3&&i.data?.custom_id==="syndicate_premium_payment_select")return selectPremiumPayment(i,env);
+   if(i.type===3&&i.data?.custom_id==="syndicate_premium_payment_select")return deferredComponentWork(i,env,ctx,()=>selectPremiumPayment(i,env),true);
    if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket_close")return discordResponse(confirmPremiumTicketClose());
    if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket_cancel_close")return reply("Your ticket is still open.");
    if(i.type===3&&i.data?.custom_id==="syndicate_premium_ticket_confirm_close")return delayedReply(i,env,ctx,()=>archivePremiumTicket(i,env));
-   if(i.type===3&&i.data?.custom_id==="syndicate_free_generate"){const did=i.member?.user?.id;if(!did)return reply("Discord member unavailable.");const active=await env.DB.prepare("SELECT 1 FROM discord_key_issuance d JOIN member_keys m ON m.key_hash=d.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(did,GUILD_ID,new Date().toISOString()).first();return active?delayedReply(i,env,ctx,()=>viewKey(i,env)):freeModal();}
+   if(i.type===3&&i.data?.custom_id==="syndicate_free_generate"){const did=i.member?.user?.id;if(!did)return reply("Discord member unavailable.");const active=await interactionBounded(env.DB.prepare("SELECT 1 FROM discord_key_issuance d JOIN member_keys m ON m.key_hash=d.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(did,GUILD_ID,new Date().toISOString()).first());return active?delayedReply(i,env,ctx,()=>viewKey(i,env)):freeModal();}
    if(i.type===3&&i.data?.custom_id==="syndicate_free_view")return delayedReply(i,env,ctx,()=>viewKey(i,env));
    if(i.type===5&&i.data?.custom_id==="syndicate_free_modal"){const id=i.data.components?.flatMap(x=>x.components||[]).find(x=>x.custom_id==="roblox_id")?.value;return delayedReply(i,env,ctx,()=>freeAccessKey(i,env,id,ctx));}
    if(i.type===3&&i.data?.custom_id==="syndicate_generate_key"){
     const did=i.member?.user?.id;
     if(!did)return reply("Discord member information unavailable.");
-    const active=await env.DB.prepare("SELECT 1 FROM discord_key_issuance d JOIN member_keys m ON m.key_hash=d.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(did,GUILD_ID,new Date().toISOString()).first();
+    const active=await interactionBounded(env.DB.prepare("SELECT 1 FROM discord_key_issuance d JOIN member_keys m ON m.key_hash=d.key_hash WHERE d.discord_user_id=? AND d.guild_id=? AND m.revoked=0 AND (m.expires_at IS NULL OR m.expires_at>?) LIMIT 1").bind(did,GUILD_ID,new Date().toISOString()).first());
     if(!active)return modal(i);
     return delayedReply(i,env,ctx,()=>viewKey(i,env));
    }
