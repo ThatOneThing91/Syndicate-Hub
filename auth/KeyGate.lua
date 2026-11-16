@@ -10,7 +10,7 @@ local env=getgenv and getgenv() or _G
 local userId=tostring(player.UserId)
 local cacheName="__SyndicateHubMemberKeys"
 local cacheFile="SyndicateHub_Key_"..userId..".json"
-local endpoint="https://syndicate-auth.loganmatthewsmall.workers.dev/verify"
+local endpoint="https://syndicate-auth.syndicate-hub.workers.dev/verify"
 local invite="https://discord.gg/ng3d3zY5W9"
 if type(env[cacheName])~="table" then env[cacheName]={} end
 local memory=env[cacheName]
