@@ -1,6 +1,6 @@
 # Syndicate Hub member keys
 
-Worker: https://syndicate-auth.loganmatthewsmall.workers.dev
+Worker: https://syndicate-auth.syndicate-hub.workers.dev
 
 The root StorageHunters script now presents a member-key window before starting the hub. It posts the key and the player's claimed Roblox UserId to `/verify`. Only HTTP 200 with JSON `{"valid":true}` opens the hub. Server errors, timeouts, invalid responses, expired keys, and revoked keys do not grant access. Closing the window cancels that launch. Re-executing replaces an older pending key window.
 
