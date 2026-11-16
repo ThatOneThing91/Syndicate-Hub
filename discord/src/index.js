@@ -2962,31 +2962,23 @@ async function refreshRobloxUpdates(env) {
 }
 
 
-async function ensureSuggestionsChannel(env){
- if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
- await env.DB.prepare("CREATE TABLE IF NOT EXISTS suggestions_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT,message_id TEXT,status TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
- const saved=await env.DB.prepare("SELECT channel_id,message_id,status FROM suggestions_channel_setup WHERE id=1").first();
- if(saved?.status==="posted")return;
- const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
- if(channels.status!==200||!Array.isArray(channels.data))throw Error("Could not list server channels: "+channels.status);
- const normalize=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
- const category=channels.data.find(c=>c.type===4&&normalize(c.name)==="club-headquarters");
- if(!category){await memberJoinDiag(env,"suggestions_setup","Club Headquarters category not found");return;}
- let channel=channels.data.find(c=>c.parent_id===category.id&&[0,5].includes(c.type)&&normalize(c.name)==="suggestions");
- if(!channel){
-  const created=await discordApi(env,"/guilds/"+GUILD_ID+"/channels","POST",{name:"💡・suggestions",type:0,parent_id:category.id,permission_overwrites:category.permission_overwrites||[]});
-  if(![200,201].includes(created.status)||!created.data?.id)throw Error("Could not create suggestions channel: "+created.status);
-  channel=created.data;
- }
- const history=await discordApi(env,"/channels/"+channel.id+"/messages?limit=50");
- const prior=history.status===200&&Array.isArray(history.data)?history.data.find(m=>m.author?.id===APPLICATION_ID&&Array.isArray(m.embeds)&&m.embeds.some(e=>e.title==="💡 Suggestions & Event Times")):null;
- if(prior){
-  await env.DB.prepare("INSERT OR REPLACE INTO suggestions_channel_setup(id,channel_id,message_id,status,updated_at) VALUES(1,?,?,?,?)").bind(channel.id,prior.id,"posted",new Date().toISOString()).run();
-  return;
- }
- const posted=await discordApi(env,"/channels/"+channel.id+"/messages","POST",{embeds:[{title:"💡 Suggestions & Event Times",description:"Have an idea for an event time, a Bunker or Acid event, or the server in general? Drop it here! All suggestions are welcome. We’ll review them and do our best to make requests happen. Thanks for helping us make the server better.",color:0x7655D8,footer:{text:"Shadow Syndicate • Community Suggestions"}}]});
- if(![200,201].includes(posted.status)||!posted.data?.id)throw Error("Could not post suggestions embed: "+posted.status);
- await env.DB.prepare("INSERT OR REPLACE INTO suggestions_channel_setup(id,channel_id,message_id,status,updated_at) VALUES(1,?,?,?,?)").bind(channel.id,posted.data.id,"posted",new Date().toISOString()).run();
+async function ensureSuggestionsChannel(e){
+ if(!e.DB||!e.DISCORD_BOT_TOKEN)return;
+ await e.DB.prepare("CREATE TABLE IF NOT EXISTS suggestions_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT,message_id TEXT,status TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ if((await e.DB.prepare("SELECT message_id FROM suggestions_channel_setup WHERE id=1").first())?.message_id)return;
+ const norm=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+ const r=await discordApi(e,"/guilds/"+GUILD_ID+"/channels");
+ if(r.status!==200||!Array.isArray(r.data))throw Error("Could not list channels: "+r.status);
+ const cat=r.data.find(c=>c.type===4&&norm(c.name)==="club-headquarters");
+ if(!cat)throw Error("Club Headquarters category not found");
+ let ch=r.data.find(c=>c.type===0&&c.parent_id===cat.id&&norm(c.name)==="suggestions");
+ if(!ch){const n=await discordApi(e,"/guilds/"+GUILD_ID+"/channels","POST",{name:"💡・suggestions",type:0,parent_id:cat.id,permission_overwrites:cat.permission_overwrites||[]});if(![200,201].includes(n.status)||!n.data?.id)throw Error("Channel create failed: "+n.status);ch=n.data;}
+ const h=await discordApi(e,"/channels/"+ch.id+"/messages?limit=50");
+ const old=h.status===200&&Array.isArray(h.data)?h.data.find(m=>m.author?.id===APPLICATION_ID&&m.embeds?.some(x=>x.title==="💡 Suggestions & Event Times")):null;
+ if(old){await e.DB.prepare("INSERT OR REPLACE INTO suggestions_channel_setup(id,channel_id,message_id,status,updated_at) VALUES(1,?,?,?,?)").bind(ch.id,old.id,"posted",new Date().toISOString()).run();return;}
+ const m=await discordApi(e,"/channels/"+ch.id+"/messages","POST",{embeds:[{title:"💡 Suggestions & Event Times",description:"Have an idea for an event time, a Bunker or Acid event, or the server in general? Drop it here! All suggestions are welcome. We’ll review them and do our best to make requests happen. Thanks for helping us make the server better.",color:0x7655D8,footer:{text:"Shadow Syndicate • Community Suggestions"}}]});
+ if(![200,201].includes(m.status)||!m.data?.id)throw Error("Embed post failed: "+m.status);
+ await e.DB.prepare("INSERT OR REPLACE INTO suggestions_channel_setup(id,channel_id,message_id,status,updated_at) VALUES(1,?,?,?,?)").bind(ch.id,m.data.id,"posted",new Date().toISOString()).run();
 }
 export default {
  async scheduled(event,env,ctx){
