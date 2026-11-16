@@ -2668,10 +2668,18 @@ async function ensureBetaHubAccess(env) {
   const category=channels.find(c=>c.id===BETA_HUB_CATEGORY_ID);
   if(!category||category.type!==4||!category.name.toLowerCase().includes("syndicate"))throw Error("Syndicate Hub category could not be verified.");
   const affected=channels.filter(c=>c.id===BETA_HUB_CATEGORY_ID||c.parent_id===BETA_HUB_CATEGORY_ID);
-  const invite=(await platformDiscord(env,"/invites/"+BETA_INVITE_CODE+"?with_counts=true")).data;
-  if(invite.guild?.id!==GUILD_ID)throw Error("The supplied invite is for another server.");
-  const inviteRoles=invite.roles||[];
-  const grantsBeta=inviteRoles.some(r=>r.id===VIP_ROLE_ID)||(invite.role_ids||[]).includes(VIP_ROLE_ID);
+  let inviteRoles=[],grantsBeta=false,inviteStatus="unavailable",inviteError=null;
+  try {
+   const invite=(await platformDiscord(env,"/invites/"+BETA_INVITE_CODE+"?with_counts=true")).data;
+   if(invite?.guild?.id===GUILD_ID){
+    inviteRoles=invite.roles||[];
+    grantsBeta=inviteRoles.some(r=>r.id===VIP_ROLE_ID)||(invite.role_ids||[]).includes(VIP_ROLE_ID);
+    inviteStatus="verified";
+   }else inviteStatus="missing_or_expired";
+  }catch(e){
+   inviteError=String(e).slice(0,180);
+   console.warn("VIP hub invite check",inviteError);
+  }
   await env.DB.prepare("UPDATE beta_hub_access SET backup=COALESCE(backup,?),updated_at=? WHERE id=1").bind(JSON.stringify(affected),new Date().toISOString()).run();
   const modified=[];
   for(const channel of affected) {
@@ -2683,7 +2691,7 @@ async function ensureBetaHubAccess(env) {
    if(!(BigInt(everyone?.deny||"0")&1024n)||!(BigInt(betaOverwrite?.allow||"0")&1024n))throw Error("Could not confirm channel visibility for "+channel.id);
    modified.push({id:channel.id,name:channel.name});
   }
-  const details={invite:BETA_INVITE_CODE,invite_roles:inviteRoles.map(r=>({id:r.id,name:r.name})),grants_beta:grantsBeta,beta_role_id:beta.id,channels:modified};
+  const details={invite:BETA_INVITE_CODE,invite_status:inviteStatus,invite_error:inviteError,invite_roles:inviteRoles.map(r=>({id:r.id,name:r.name})),grants_beta:grantsBeta,beta_role_id:beta.id,channels:modified};
   await env.DB.prepare("UPDATE beta_hub_access SET revision=?,status='ready',details=?,last_error=NULL,lease_until=0,updated_at=? WHERE id=1").bind(revision,JSON.stringify(details),new Date().toISOString()).run();
  }catch(e){
   await env.DB.prepare("UPDATE beta_hub_access SET status='error',last_error=?,lease_until=?,updated_at=? WHERE id=1").bind(String(e).slice(0,1500),Date.now()+60000,new Date().toISOString()).run();
