@@ -3021,6 +3021,7 @@ export default {
   if(env.MEMBER_JOIN_GATEWAY)ctx.waitUntil(env.MEMBER_JOIN_GATEWAY.getByName("member-join-listener").fetch("https://internal/start",{method:"POST"}).catch(e=>console.error("member gateway start",String(e))));
   ctx.waitUntil(removeObsoleteGetKeyDescription(env).catch(e=>console.error("bot description update",String(e))));
   ctx.waitUntil(maintainFeatureChannel(env).catch(e=>console.error("features maintenance",String(e))));
+  ctx.waitUntil(sendScriptUpdates(env).catch(e=>console.error("script update delivery",String(e))));
   ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium channel setup",String(e))));
   ctx.waitUntil(ensureBetaHubAccess(env).catch(e=>console.error("beta hub access",String(e))));
   ctx.waitUntil(ensurePlatformPanel(env).catch(e=>console.error("platform panel",String(e))));
