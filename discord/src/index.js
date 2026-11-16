@@ -1624,10 +1624,24 @@ async function delayedReply(i,env,ctx,work,ephemeral=true){
    allowed_mentions:data.allowed_mentions||{parse:[]}
   };
   const url="https://discord.com/api/v10/webhooks/"+APPLICATION_ID+"/"+i.token+"/messages/@original";
-  try{
-   const r=await fetch(url,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-   if(!r.ok)console.error("delayed response",r.status,(await r.text()).slice(0,250));
-  }catch(e){console.error("delayed response network",e)}
+  for(let attempt=0;attempt<3;attempt++){
+   try{
+    const r=await fetch(url,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(6000)});
+    if(r.ok)return;
+    const detail=(await r.text()).slice(0,250);
+    if((r.status===429||r.status>=500)&&attempt<2){
+     let waitMs=250*(2**attempt);
+     if(r.status===429){try{waitMs=Math.min(3000,Math.max(250,Math.ceil(Number(JSON.parse(detail).retry_after||0)*1000)||waitMs))}catch{}}
+     await new Promise(resolve=>setTimeout(resolve,waitMs));
+     continue;
+    }
+    console.error("delayed response",r.status,detail);
+    return;
+   }catch(e){
+    if(attempt<2){await new Promise(resolve=>setTimeout(resolve,250*(2**attempt)));continue}
+    console.error("delayed response network",e);
+   }
+  }
  })());
  return discordResponse({type:5,data:ephemeral?{flags:64}:{}});
 }
@@ -2135,7 +2149,7 @@ async function postFreePanel(env){
 
 
 
-const SCRIPT_UPDATES_CHANNEL = "1564527146922410136";
+const SCRIPT_UPDATES_CHANNEL = "1564527153108750366";
 function scriptUpdatePayload(release) {
  if (!release || !/^[a-zA-Z0-9._-]{1,100}$/.test(release.id) ||
      typeof release.title !== "string" || !release.title.trim() || release.title.length > 180 ||
@@ -2177,6 +2191,13 @@ async function sendScriptUpdates(env) {
  for(const row of pending.results||[]) {
   const claim=await env.DB.prepare("UPDATE script_update_announcements SET lease_until=? WHERE release_id=? AND sent_at IS NULL AND lease_until<=?").bind(Date.now()+180000,row.release_id,Date.now()).run();
   if(!claim.meta?.changes)continue;
+  const ageMs=Date.now()-Date.parse(row.created_at||"");
+  if(Number.isFinite(ageMs)&&ageMs>72*60*60*1000){
+   const skippedAt=new Date().toISOString();
+   await env.DB.prepare("UPDATE script_update_announcements SET sent_at=?,last_error=?,lease_until=0 WHERE release_id=? AND sent_at IS NULL").bind(skippedAt,"Skipped stale update after 72 hours; legacy changelog destination was removed.",row.release_id).run();
+   console.warn("Skipped stale script update",row.release_id);
+   continue;
+  }
   try {
    const release=JSON.parse(row.release_json);
    if(release.id!==row.release_id||release.commit!==row.commit_sha)throw Error("Release identity mismatch");
@@ -3059,15 +3080,19 @@ export default {
    return delayedReply(i,env,ctx,()=>createClubEvent(i,env));
   }
   const birthdayId=String(i.data?.custom_id||"");
-  if(i.type===3&&birthdayId==="syndicate_birthday_register")return birthdayRegisterButton(i,env);
-  if(i.type===3&&birthdayId==="syndicate_birthday_change")return birthdayChangeButton(i,env);
-  if(i.type===3&&birthdayId==="syndicate_birthday_remove")return birthdayRemoveButton(i,env);
-  if(i.type===5&&birthdayId==="syndicate_birthday_modal")return birthdayModalSubmit(i,env);
+  if(i.type===3&&birthdayId==="syndicate_birthday_register"){
+   try{return await birthdayRegisterButton(i,env)}catch(e){console.error("birthday register button",e);return reply("Birthday service is temporarily unavailable. Please try again.")}
+  }
+  if(i.type===3&&birthdayId==="syndicate_birthday_change"){
+   try{return await birthdayChangeButton(i,env)}catch(e){console.error("birthday change button",e);return reply("Birthday service is temporarily unavailable. Please try again.")}
+  }
+  if(i.type===3&&birthdayId==="syndicate_birthday_remove")return delayedReply(i,env,ctx,()=>birthdayRemoveButton(i,env));
+  if(i.type===5&&birthdayId==="syndicate_birthday_modal")return delayedReply(i,env,ctx,()=>birthdayModalSubmit(i,env));
   if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
   if(!env.DB||!env.KEY_ISSUER)return reply("Authentication service is not configured.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
-   if(i.type===3&&i.data?.custom_id?.startsWith("welcome_wave:"))return welcomeWaveInteraction(i,env);
+   if(i.type===3&&i.data?.custom_id?.startsWith("welcome_wave:"))return delayedReply(i,env,ctx,()=>welcomeWaveInteraction(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_end:")){
     const eventId=String(i.data.custom_id.slice("club_event_end:".length));
     if(!/^[A-Za-z0-9_-]{1,60}$/.test(eventId))return reply("Invalid event.");
@@ -3095,7 +3120,7 @@ export default {
     return delayedReply(i,env,ctx,()=>viewKey(i,env));
    }
    if(i.type===3&&i.data?.custom_id==="syndicate_revoke_own_key")return confirmOwnRevoke();
-   if(i.type===3&&i.data?.custom_id==="syndicate_confirm_self_revoke")return await revokeOwnKey(i,env,ctx);
+   if(i.type===3&&i.data?.custom_id==="syndicate_confirm_self_revoke")return delayedReply(i,env,ctx,()=>revokeOwnKey(i,env,ctx));
    if(i.type===3&&i.data?.custom_id==="syndicate_cancel_self_revoke")return reply("Cancelled. Your key is still active.");
    if(i.type===3&&i.data?.custom_id==="syndicate_get_script")return reply("📜 **Syndicate Hub — Get Script**\n\n**Desktop — copy from code block:**\n```lua\nloadstring(game:HttpGet(\"https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/StorageHunters\"))()\n```\n**📱 Mobile — press and hold to copy this separate line:**\n`loadstring(game:HttpGet(\"https://raw.githubusercontent.com/ThatOneThing91/Syndicate-Hub/main/StorageHunters\"))()`\n\nBoth options run the same script. An active member key is required.");
    if(i.type===5&&i.data?.custom_id==="syndicate_key_modal"){
