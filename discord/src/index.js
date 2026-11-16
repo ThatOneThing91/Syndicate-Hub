@@ -1742,7 +1742,7 @@ async function decryptRobloxRefreshToken(env,cipher,iv){
  return new TextDecoder().decode(plain);
 }
 function robloxOAuthConfig(env){
- return {clientId:String(env.ROBLOX_CLIENT_ID||""),clientSecret:String(env.ROBLOX_CLIENT_SECRET||""),redirectUri:"https://syndicate-discord.loganmatthewsmall.workers.dev/roblox/oauth/callback"};
+ return {clientId:String(env.ROBLOX_CLIENT_ID||""),clientSecret:String(env.ROBLOX_CLIENT_SECRET||""),redirectUri:"https://syndicate-discord.syndicate-hub.workers.dev/roblox/oauth/callback"};
 }
 function linkRobloxResponse(content,url){
  const data={content,flags:64,allowed_mentions:{parse:[]},components:url?[{type:1,components:[{type:2,style:5,label:"Connect Roblox",url}]}]:[]};
