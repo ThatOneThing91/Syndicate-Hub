@@ -1032,6 +1032,23 @@ async function nextCelebrationSticker(env,scope){
  const ids=stickers.map(item=>String(item.id));
  return nextCelebrationItem(env,"sticker:"+scope,ids);
 }
+function makeCelebrationEmbed(scope,description,fromLabel){
+ const birthday=scope==="birthday";
+ return {
+  color:birthday?0xF6BD60:0x8B5CF6,
+  author:{name:birthday?"A Birthday Wish from "+fromLabel:"A Welcome from "+fromLabel},
+  title:birthday?"🎂 Happy Birthday! 🎂":"🎉 Welcome to the Crew! 🎉",
+  description,
+  fields:birthday?[
+   {name:"🎁 Make a wish",value:"May your next trip around the sun bring great memories and good surprises.",inline:false},
+   {name:"🎈 Join the celebration",value:"Tap **Celebrate with them** below to add your own birthday wish.",inline:false}
+  ]:[
+   {name:"🤝 Say hello",value:"Drop a wave and help make our newest member feel at home.",inline:false}
+  ],
+  footer:{text:birthday?"Wishing you an amazing year ahead • Shadow Syndicate":"Glad you're here • Shadow Syndicate"},
+  timestamp:new Date().toISOString()
+ };
+}
 async function sendCelebrationMessage(env,channelId,payload,stickerId){
  const body={...payload};
  if(stickerId)body.sticker_ids=[String(stickerId)];
@@ -1052,11 +1069,11 @@ async function postCelebrationReply(i,env,{scope,targetId,actorId}){
  try{
   const templates=scope==="birthday"?CELEBRATION_BIRTHDAY_PROMPTS:CELEBRATION_WELCOME_PROMPTS;
   const template=await nextCelebrationItem(env,"prompts:"+scope,templates);
-  const actor=scope==="birthday"?"The Syndicate crew":"<@"+actorId+">";
-  const target="<@"+targetId+">";
-  const content=template.replaceAll("{actor}",actor).replaceAll("{target}",target);
+  const actorLabel=String(i.member?.user?.global_name||i.member?.user?.username||i.user?.global_name||i.user?.username||"A friend");
+  const description=template.replaceAll("{actor}",actorLabel).replaceAll("{target}","you");
+  const content=scope==="birthday"?"🎂 Happy birthday, <@"+targetId+">! 🎉":"👋 <@"+targetId+">";
   const sticker=await nextCelebrationSticker(env,scope);
-  const posted=await sendCelebrationMessage(env,i.channel_id,{content,allowed_mentions:{parse:[],users:[actorId,targetId]}},sticker);
+  const posted=await sendCelebrationMessage(env,i.channel_id,{content,embeds:[makeCelebrationEmbed(scope,description,actorLabel)],allowed_mentions:{parse:[],users:[targetId]}},sticker);
   if(posted.status!==200||!posted.data?.id)throw Error("Discord rejected the celebration post ("+posted.status+").");
   return reply("Celebration posted!");
  }catch(e){
@@ -1114,9 +1131,10 @@ async function sendBirthdayAnnouncements(env){
    if(already)continue;
    try{
     const template=await nextCelebrationItem(env,"prompts:birthday",CELEBRATION_BIRTHDAY_PROMPTS);
-    const content=template.replaceAll("{actor}","The Syndicate crew").replaceAll("{target}","<@"+userId+">");
+    const description=template.replaceAll("{actor}","The Syndicate crew").replaceAll("{target}","you");
+    const content="🎂 Happy birthday, <@"+userId+">! 🎉";
     const sticker=await nextCelebrationSticker(env,"birthday");
-    const body={content,allowed_mentions:{parse:[],users:[userId]},components:[{type:1,components:[{type:2,style:2,label:"Celebrate with them",custom_id:"birthday_celebrate:"+userId+":"+local.year}]}],nonce:String(local.year)+userId,enforce_nonce:true};
+    const body={content,embeds:[makeCelebrationEmbed("birthday",description,"The Syndicate crew")],allowed_mentions:{parse:[],users:[userId]},components:[{type:1,components:[{type:2,style:2,label:"Celebrate with them",custom_id:"birthday_celebrate:"+userId+":"+local.year}]}],nonce:String(local.year)+userId,enforce_nonce:true};
     const posted=await sendCelebrationMessage(env,channelId,body,sticker);
     if(posted.status!==200||!posted.data?.id)throw Error("Discord rejected birthday post ("+posted.status+").");
     await env.DB.prepare("INSERT OR IGNORE INTO community_birthday_sends(year,user_id,channel_id,message_id,sent_at) VALUES(?,?,?,?,?)").bind(local.year,userId,channelId,String(posted.data.id),new Date().toISOString()).run();
