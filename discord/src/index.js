@@ -1001,6 +1001,7 @@ async function ensureCelebrationTables(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_birthday_sends(year INTEGER NOT NULL,user_id TEXT NOT NULL,channel_id TEXT NOT NULL,message_id TEXT NOT NULL,sent_at TEXT NOT NULL,PRIMARY KEY(year,user_id))").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS birthday_scheduler_lock(id INTEGER PRIMARY KEY CHECK(id=1),lease_until INTEGER NOT NULL)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_birthday_embed_upgrades(message_id TEXT PRIMARY KEY,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_birthday_reply_scans(announcement_id TEXT PRIMARY KEY,scanned_at TEXT NOT NULL)").run();
 }
 function shuffleCelebration(items){
  const copy=[...items];
@@ -1117,7 +1118,7 @@ async function upgradeBirthdayAnnouncementEmbeds(env){
  await ensureBirthdayTable(env);
  await ensureCelebrationTables(env);
  const local=birthdayLocalNow();
- const pending=await env.DB.prepare("SELECT s.user_id,s.channel_id,s.message_id FROM community_birthday_sends s JOIN community_birthdays b ON b.user_id=s.user_id LEFT JOIN community_birthday_embed_upgrades u ON u.message_id=s.message_id WHERE s.year=? AND b.birth_month=? AND b.birth_day=? AND u.message_id IS NULL").bind(local.year,local.month,local.day).all();
+ const pending=await env.DB.prepare("SELECT s.user_id,s.channel_id,s.message_id FROM community_birthday_sends s JOIN community_birthdays b ON b.user_id=s.user_id WHERE s.year=? AND b.birth_month=? AND b.birth_day=?").bind(local.year,local.month,local.day).all();
  for(const row of pending?.results||[]){
   const userId=String(row.user_id||""),channelId=String(row.channel_id||""),messageId=String(row.message_id||"");
   if(!/^\d{17,20}$/.test(userId)||!/^\d{17,20}$/.test(channelId)||!/^\d{17,20}$/.test(messageId))continue;
@@ -1125,7 +1126,7 @@ async function upgradeBirthdayAnnouncementEmbeds(env){
    const path="/channels/"+channelId+"/messages/"+messageId;
    const current=await discordApi(env,path);
    if(current.status!==200||!current.data?.id)continue;
-   let message=current.data;
+   const message=current.data;
    if(!Array.isArray(message.embeds)||message.embeds.length===0){
     const template=await nextCelebrationItem(env,"prompts:birthday",CELEBRATION_BIRTHDAY_PROMPTS);
     const description=template.replaceAll("{actor}","The Syndicate crew").replaceAll("{target}","you");
@@ -1138,9 +1139,12 @@ async function upgradeBirthdayAnnouncementEmbeds(env){
     if(patched.status!==200||!patched.data?.id)continue;
    }
    await env.DB.prepare("INSERT OR IGNORE INTO community_birthday_embed_upgrades(message_id,updated_at) VALUES(?,?)").bind(messageId,new Date().toISOString()).run();
+   const scanned=await env.DB.prepare("SELECT announcement_id FROM community_birthday_reply_scans WHERE announcement_id=?").bind(messageId).first();
+   if(scanned)continue;
    const recent=await discordApi(env,"/channels/"+channelId+"/messages?limit=100&after="+messageId);
-   for(const replyMessage of recent.status===200&&Array.isArray(recent.data)?recent.data:[]){
-    if(String(replyMessage.author?.id||"")!==APPLICATION_ID||String(replyMessage.id)===messageId)continue;
+   if(recent.status!==200||!Array.isArray(recent.data))continue;
+   for(const replyMessage of recent.data){
+    if(String(replyMessage.author?.id||"")!==String(message.author?.id||"")||String(replyMessage.id)===messageId)continue;
     const oldContent=String(replyMessage.content||"");
     if(!(oldContent.includes("<@"+userId+">")||oldContent.includes("<@!"+userId+">"))||!/birthday|cake|wish|sun|balloon|celebrat|candles/i.test(oldContent))continue;
     if(Array.isArray(replyMessage.embeds)&&replyMessage.embeds.length)continue;
@@ -1151,9 +1155,11 @@ async function upgradeBirthdayAnnouncementEmbeds(env){
      components:Array.isArray(replyMessage.components)?replyMessage.components:[],
      allowed_mentions:{parse:[],users:[userId]}
     });
-    if(patchedReply.status===200&&patchedReply.data?.id)await env.DB.prepare("INSERT OR IGNORE INTO community_birthday_embed_upgrades(message_id,updated_at) VALUES(?,?)").bind(String(replyMessage.id),new Date().toISOString()).run();
+    if(patchedReply.status!==200||!patchedReply.data?.id)throw Error("Could not upgrade birthday reply message.");
+    await env.DB.prepare("INSERT OR IGNORE INTO community_birthday_embed_upgrades(message_id,updated_at) VALUES(?,?)").bind(String(replyMessage.id),new Date().toISOString()).run();
    }
-   console.log("Birthday embed upgraded",userId,channelId,messageId);
+   await env.DB.prepare("INSERT OR IGNORE INTO community_birthday_reply_scans(announcement_id,scanned_at) VALUES(?,?)").bind(messageId,new Date().toISOString()).run();
+   console.log("Birthday embeds checked",userId,channelId,messageId);
   }catch(e){console.error("birthday embed upgrade",userId,String(e))}
  }
 }
