@@ -1269,7 +1269,8 @@ async function getkey(i,env,overrideId,ctx) {
  const bytes=crypto.getRandomValues(new Uint8Array(16));
  const hex=[...bytes].map(x=>x.toString(16).padStart(2,"0").toUpperCase()).join("");
  const key="SYND-"+hex.match(/.{8}/g).join("-");
- const digest=await env.KEY_ISSUER.hashKey(key);
+ let digest;
+ try{digest=await env.KEY_ISSUER.hashKey(key)}catch(e){console.error("key issuer hash",String(e));return reply("The key service is unavailable, so no key was created. Please try again shortly.")}
  const now=new Date().toISOString();
  const secured=await encryptKey(env,key);
  try {
@@ -1360,9 +1361,16 @@ async function sendExecutionLogs(env){
  }
 }
 async function listKeys(env) {
- const r=await env.DB.prepare("SELECT user_id,created_at,expires_at FROM member_keys WHERE revoked=0 AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at DESC LIMIT 15").bind(new Date().toISOString()).all();
- const rows=await userLabels(r.results||[],"user_id");
- return reply(rows.length?"🔑 **Active Syndicate Hub members**\n"+rows.map(x=>"• **"+x.username+"** • Roblox ID `"+x.user_id+"` • "+(x.expires_at?keyRemaining(x.expires_at)+" • Expires <t:"+Math.floor(Date.parse(x.expires_at)/1000)+":R>":"Lifetime access")).join("\n"):"No active keys.");
+ try {
+  const r=await env.DB.prepare("SELECT user_id,key_prefix,created_at,expires_at FROM member_keys WHERE revoked=0 AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at DESC LIMIT 15").bind(new Date().toISOString()).all();
+  const rows=await userLabels(r.results||[],"user_id");
+  if(!rows.length)return reply("No active keys.");
+  const lines=rows.map(x=>"• **"+x.username+"** • Roblox ID `"+x.user_id+"` • Key prefix `"+String(x.key_prefix||"Unknown")+"…` • "+(x.expires_at?keyRemaining(x.expires_at)+" • Expires <t:"+Math.floor(Date.parse(x.expires_at)/1000)+":R>":"Lifetime access"));
+  return reply("🔑 **Active Syndicate Hub keys**\n"+lines.join("\n")+"\n\nFull key values stay private to each member; they can retrieve their own key with **Get Key**.");
+ }catch(e){
+  console.error("active key list",String(e));
+  return reply("I couldn't load the active-key list. No keys were changed; try again shortly.");
+ }
 }
 async function revoke(i,env) {
  const uid=String(i.data?.options?.find(o=>o.name==="roblox_id")?.value||"");
@@ -2168,7 +2176,8 @@ async function freeAccessKey(i,env,input,ctx){
  const bytes=crypto.getRandomValues(new Uint8Array(16));
  const hex=[...bytes].map(x=>x.toString(16).padStart(2,"0").toUpperCase()).join("");
  const key="SYND-"+hex.match(/.{8}/g).join("-");
- const digest=await env.KEY_ISSUER.hashKey(key);
+ let digest;
+ try{digest=await env.KEY_ISSUER.hashKey(key)}catch(e){console.error("key issuer hash",String(e));return reply("The key service is unavailable, so no key was created. Please try again shortly.")}
  const expires=new Date(Date.now()+86400000).toISOString();
  const secured=await encryptKey(env,key);
  try{await env.DB.batch([
