@@ -953,7 +953,7 @@ async function birthdayLookupCommand(i,env){
  return birthdayEphemeral(name+"'s saved birthday is **"+birthdayDateLabel(saved.birth_month,saved.birth_day)+"**.");
 }
 async function welcomeWaveInteraction(i,env){
- const match=/^welcome_wave:(\\d{17,20})$/.exec(String(i.data?.custom_id||""));
+ const match=/^welcome_wave:(\d{17,20})$/.exec(String(i.data?.custom_id||""));
  if(!match)return reply("That welcome button is no longer valid.");
  const joinedUserId=match[1],welcomerId=String(i.member?.user?.id||i.user?.id||"");
  if(!welcomerId)return reply("I couldn't identify your Discord account.");
@@ -1000,6 +1000,7 @@ async function ensureCelebrationTables(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS celebration_reply_claims(source_message_id TEXT NOT NULL,actor_id TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(source_message_id,actor_id))").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_birthday_sends(year INTEGER NOT NULL,user_id TEXT NOT NULL,channel_id TEXT NOT NULL,message_id TEXT NOT NULL,sent_at TEXT NOT NULL,PRIMARY KEY(year,user_id))").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS birthday_scheduler_lock(id INTEGER PRIMARY KEY CHECK(id=1),lease_until INTEGER NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_birthday_embed_upgrades(message_id TEXT PRIMARY KEY,updated_at TEXT NOT NULL)").run();
 }
 function shuffleCelebration(items){
  const copy=[...items];
@@ -1110,6 +1111,51 @@ async function acquireBirthdaySchedulerLock(env,nowMs){
  const until=nowMs+10*60*1000;
  const row=await env.DB.prepare("INSERT INTO birthday_scheduler_lock(id,lease_until) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET lease_until=excluded.lease_until WHERE birthday_scheduler_lock.lease_until<? RETURNING id").bind(until,nowMs).first();
  return row?until:null;
+}
+async function upgradeBirthdayAnnouncementEmbeds(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await ensureBirthdayTable(env);
+ await ensureCelebrationTables(env);
+ const local=birthdayLocalNow();
+ const pending=await env.DB.prepare("SELECT s.user_id,s.channel_id,s.message_id FROM community_birthday_sends s JOIN community_birthdays b ON b.user_id=s.user_id LEFT JOIN community_birthday_embed_upgrades u ON u.message_id=s.message_id WHERE s.year=? AND b.birth_month=? AND b.birth_day=? AND u.message_id IS NULL").bind(local.year,local.month,local.day).all();
+ for(const row of pending?.results||[]){
+  const userId=String(row.user_id||""),channelId=String(row.channel_id||""),messageId=String(row.message_id||"");
+  if(!/^\d{17,20}$/.test(userId)||!/^\d{17,20}$/.test(channelId)||!/^\d{17,20}$/.test(messageId))continue;
+  try{
+   const path="/channels/"+channelId+"/messages/"+messageId;
+   const current=await discordApi(env,path);
+   if(current.status!==200||!current.data?.id)continue;
+   let message=current.data;
+   if(!Array.isArray(message.embeds)||message.embeds.length===0){
+    const template=await nextCelebrationItem(env,"prompts:birthday",CELEBRATION_BIRTHDAY_PROMPTS);
+    const description=template.replaceAll("{actor}","The Syndicate crew").replaceAll("{target}","you");
+    const patched=await discordApi(env,path,"PATCH",{
+     content:"🎂 Happy birthday, <@"+userId+">! 🎉",
+     embeds:[makeCelebrationEmbed("birthday",description,"The Syndicate crew")],
+     components:Array.isArray(message.components)?message.components:[],
+     allowed_mentions:{parse:[],users:[userId]}
+    });
+    if(patched.status!==200||!patched.data?.id)continue;
+   }
+   await env.DB.prepare("INSERT OR IGNORE INTO community_birthday_embed_upgrades(message_id,updated_at) VALUES(?,?)").bind(messageId,new Date().toISOString()).run();
+   const recent=await discordApi(env,"/channels/"+channelId+"/messages?limit=100&after="+messageId);
+   for(const replyMessage of recent.status===200&&Array.isArray(recent.data)?recent.data:[]){
+    if(String(replyMessage.author?.id||"")!==APPLICATION_ID||String(replyMessage.id)===messageId)continue;
+    const oldContent=String(replyMessage.content||"");
+    if(!(oldContent.includes("<@"+userId+">")||oldContent.includes("<@!"+userId+">"))||!/birthday|cake|wish|sun|balloon|celebrat|candles/i.test(oldContent))continue;
+    if(Array.isArray(replyMessage.embeds)&&replyMessage.embeds.length)continue;
+    const description=oldContent.replaceAll("<@!"+userId+">","you").replaceAll("<@"+userId+">","you").replace(/—\s*The Syndicate crew/gi,"").trim();
+    const patchedReply=await discordApi(env,"/channels/"+channelId+"/messages/"+replyMessage.id,"PATCH",{
+     content:"🎂 Happy birthday, <@"+userId+">! 🎉",
+     embeds:[makeCelebrationEmbed("birthday",description||"The Syndicate crew wishes you a very happy birthday!","The Syndicate crew")],
+     components:Array.isArray(replyMessage.components)?replyMessage.components:[],
+     allowed_mentions:{parse:[],users:[userId]}
+    });
+    if(patchedReply.status===200&&patchedReply.data?.id)await env.DB.prepare("INSERT OR IGNORE INTO community_birthday_embed_upgrades(message_id,updated_at) VALUES(?,?)").bind(String(replyMessage.id),new Date().toISOString()).run();
+   }
+   console.log("Birthday embed upgraded",userId,channelId,messageId);
+  }catch(e){console.error("birthday embed upgrade",userId,String(e))}
+ }
 }
 async function sendBirthdayAnnouncements(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
@@ -3203,7 +3249,7 @@ async function ensureSuggestionsChannel(e){
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
-  ctx.waitUntil(sendBirthdayAnnouncements(env).catch(e=>console.error("birthday scheduler",String(e))));
+  ctx.waitUntil((async()=>{await sendBirthdayAnnouncements(env);await upgradeBirthdayAnnouncementEmbeds(env)})().catch(e=>console.error("birthday scheduler",String(e))));
   ctx.waitUntil(ensureSuggestionsChannel(env).catch(e=>console.error("suggestions channel setup",String(e))));
   ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
   ctx.waitUntil(ensureClubNightPollPreview(env).catch(e=>console.error("club night poll preview",String(e))));
