@@ -1141,10 +1141,10 @@ async function upgradeBirthdayAnnouncementEmbeds(env){
    await env.DB.prepare("INSERT OR IGNORE INTO community_birthday_embed_upgrades(message_id,updated_at) VALUES(?,?)").bind(messageId,new Date().toISOString()).run();
    const scanned=await env.DB.prepare("SELECT announcement_id FROM community_birthday_reply_scans WHERE announcement_id=?").bind(messageId).first();
    if(scanned)continue;
-   const recent=await discordApi(env,"/channels/"+channelId+"/messages?limit=100&after="+messageId);
+   const recent=await discordApi(env,"/channels/"+channelId+"/messages?limit=100");
    if(recent.status!==200||!Array.isArray(recent.data))continue;
    for(const replyMessage of recent.data){
-    if(String(replyMessage.author?.id||"")!==String(message.author?.id||"")||String(replyMessage.id)===messageId)continue;
+    if(replyMessage.author?.bot!==true||String(replyMessage.id)===messageId||BigInt(String(replyMessage.id||"0"))<=BigInt(messageId))continue;
     const oldContent=String(replyMessage.content||"");
     if(!(oldContent.includes("<@"+userId+">")||oldContent.includes("<@!"+userId+">"))||!/birthday|cake|wish|sun|balloon|celebrat|candles/i.test(oldContent))continue;
     if(Array.isArray(replyMessage.embeds)&&replyMessage.embeds.length)continue;
