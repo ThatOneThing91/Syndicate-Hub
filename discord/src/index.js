@@ -113,7 +113,7 @@ async function handleMemberJoin(env,state,member){
  const avatar=user.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+(String(user.avatar).startsWith("a_")?".gif":".png")+"?size=256":null;
  const guildIcon=guild.status===200&&guild.data?.icon?"https://cdn.discordapp.com/icons/"+GUILD_ID+"/"+guild.data.icon+(String(guild.data.icon).startsWith("a_")?".gif":".png")+"?size=64":null;
  const memberNumber=Number.isFinite(totalRaw)&&totalRaw>0?totalRaw.toLocaleString("en-US"):"new";
- const payload={allowed_mentions:{parse:[],users:[String(user.id)]},content:"👋 Welcome <@"+user.id+">!",embeds:[{author:{name:guildName,...(guildIcon?{icon_url:guildIcon}:{})},title:"Welcome!",description:"<@"+user.id+"> joined "+guildName+"!\nYou're member **#"+memberNumber+"**.",color:0x7c3aed,...(avatar?{thumbnail:{url:avatar}}:{}),fields,footer:{text:"Member count updates automatically."},timestamp:new Date().toISOString()}],components:[{type:1,components:[{type:2,style:1,label:"👋 Wave & celebrate!",custom_id:"welcome_wave:"+user.id}]}]};
+ const payload={allowed_mentions:{parse:[],users:[String(user.id)]},content:"👋 Welcome <@"+user.id+">!",embeds:[{author:{name:guildName,...(guildIcon?{icon_url:guildIcon}:{})},title:"Welcome!",description:"<@"+user.id+"> joined "+guildName+"!\nYou're member **#"+memberNumber+"**.",color:0x7c3aed,...(avatar?{thumbnail:{url:avatar}}:{}),fields,footer:{text:"Member count updates automatically."},timestamp:new Date().toISOString()}],components:[{type:1,components:[{type:2,style:1,label:"🎟️ Send a welcome sticker",custom_id:"welcome_wave:"+user.id}]}]};
  const sent=await discordApi(env,"/channels/"+intro.id+"/messages","POST",payload);
  if(sent.status!==200||!sent.data?.id){
   await env.DB.prepare("UPDATE member_join_welcomes SET role_assigned=?,welcome_sent=0,welcome_lease_until=0,updated_at=? WHERE user_id=? AND joined_at=?").bind(roleDone?1:0,new Date().toISOString(),user.id,joinedAt).run();
@@ -1030,7 +1030,7 @@ async function currentCelebrationStickers(env){
 }
 async function nextCelebrationSticker(env,scope){
  const stickers=await currentCelebrationStickers(env);
- if(!stickers.length)return null;
+ if(!stickers.length){console.warn("no available guild stickers for celebration",scope);return null;}
  const ids=stickers.map(item=>String(item.id));
  return nextCelebrationItem(env,"sticker:"+scope,ids);
 }
@@ -1078,7 +1078,7 @@ async function postCelebrationReply(i,env,{scope,targetId,actorId}){
   if(scope==="birthday")payload.embeds=[makeCelebrationEmbed(scope,description,actorLabel)];
   const posted=await sendCelebrationMessage(env,i.channel_id,payload,sticker);
   if(posted.status!==200||!posted.data?.id)throw Error("Discord rejected the celebration post ("+posted.status+").");
-  return reply(posted.stickerRejected?"Your message posted, but Discord rejected the sticker. Check the bot's sticker permissions and the server's available stickers.":"Celebration posted with a sticker!");
+  return reply(posted.stickerRejected?"Your message posted, but Discord rejected the sticker. Check the bot's sticker permissions and the server's available stickers.":!sticker?"Your message posted, but this server has no available stickers for the bot to send yet.":"Celebration posted with a sticker!");
  }catch(e){
   await env.DB.prepare("DELETE FROM celebration_reply_claims WHERE source_message_id=? AND actor_id=?").bind(sourceId,actorId).run().catch(()=>{});
   console.error("celebration reply",String(e));
@@ -1187,7 +1187,7 @@ async function sendBirthdayAnnouncements(env){
     const description=template.replaceAll("{actor}","The Syndicate crew").replaceAll("{target}","you");
     const content="🎂 Happy birthday, <@"+userId+">! 🎉";
     const sticker=await nextCelebrationSticker(env,"birthday");
-    const body={content,embeds:[makeCelebrationEmbed("birthday",description,"The Syndicate crew")],allowed_mentions:{parse:[],users:[userId]},components:[{type:1,components:[{type:2,style:2,label:"Celebrate with them",custom_id:"birthday_celebrate:"+userId+":"+local.year}]}],nonce:String(local.year)+userId,enforce_nonce:true};
+    const body={content,embeds:[makeCelebrationEmbed("birthday",description,"The Syndicate crew")],allowed_mentions:{parse:[],users:[userId]},components:[{type:1,components:[{type:2,style:2,label:"Send a birthday wish",custom_id:"birthday_celebrate:"+userId+":"+local.year}]}],nonce:String(local.year)+userId,enforce_nonce:true};
     const posted=await sendCelebrationMessage(env,channelId,body,sticker);
     if(posted.status!==200||!posted.data?.id)throw Error("Discord rejected birthday post ("+posted.status+").");
     await env.DB.prepare("INSERT OR IGNORE INTO community_birthday_sends(year,user_id,channel_id,message_id,sent_at) VALUES(?,?,?,?,?)").bind(local.year,userId,channelId,String(posted.data.id),new Date().toISOString()).run();
