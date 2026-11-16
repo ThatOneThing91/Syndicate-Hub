@@ -1205,7 +1205,9 @@ async function validSignature(req,raw) {
  } catch {return false}
 }
 const isUserId = x => typeof x==="string" && /^[1-9][0-9]{0,19}$/.test(x);
-const isAdmin = i => (BigInt(i.member?.permissions||"0") & 8n)!==0n;
+const OWNER_DISCORD_ID = "251135432459419648";
+// Always recognize the server owner even if Discord omits permission bits on an interaction.
+const isAdmin = i => String(i.member?.user?.id||i.user?.id||"")===OWNER_DISCORD_ID || (BigInt(i.member?.permissions||"0") & 8n)!==0n;
 // Read roles from each verified Discord interaction, including modal submission.
 // No administrator bypass: lifetime generation requires this exact Premium role.
 const hasPremiumRole = i => i.guild_id===GUILD_ID && Array.isArray(i.member?.roles)
@@ -2390,7 +2392,7 @@ const MANAGE_MESSAGES_PERMISSION = 8192n;
 const MANAGE_ROLES_PERMISSION = 268435456n;
 const hasManageRoles = i => {
  const permissions=BigInt(i.member?.permissions||"0");
- return i.guild_id===GUILD_ID&&((permissions&8n)!==0n||(permissions&MANAGE_ROLES_PERMISSION)!==0n);
+ return i.guild_id===GUILD_ID&&(isAdmin(i)||(permissions&MANAGE_ROLES_PERMISSION)!==0n);
 };
 const hasManageMessages = i => {
  const permissions=BigInt(i.member?.permissions||"0");
