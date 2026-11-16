@@ -657,7 +657,11 @@ async function cacheWindowsExecutorPages(env){
  await env.DB.batch(statements);
 }
 async function interactionBounded(promise,ms=650){
- return await Promise.race([Promise.resolve(promise),new Promise(resolve=>setTimeout(()=>resolve(null),ms))]);
+ let timer;
+ const timeout=new Promise(resolve=>{timer=setTimeout(()=>resolve(null),ms)});
+ const value=await Promise.race([Promise.resolve(promise),timeout]);
+ clearTimeout(timer);
+ return value;
 }
 async function deferredComponentWork(i,env,ctx,work,updateOriginal=false){
  const acknowledgement=updateOriginal?{type:6}:{type:5,data:{flags:64}};
