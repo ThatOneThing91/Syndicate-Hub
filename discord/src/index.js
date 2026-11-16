@@ -953,17 +953,12 @@ async function birthdayLookupCommand(i,env){
  return birthdayEphemeral(name+"'s saved birthday is **"+birthdayDateLabel(saved.birth_month,saved.birth_day)+"**.");
 }
 async function welcomeWaveInteraction(i,env){
- const match=/^welcome_wave:(\d{17,20})$/.exec(String(i.data?.custom_id||""));
+ const match=/^welcome_wave:(\\d{17,20})$/.exec(String(i.data?.custom_id||""));
  if(!match)return reply("That welcome button is no longer valid.");
  const joinedUserId=match[1],welcomerId=String(i.member?.user?.id||i.user?.id||"");
  if(!welcomerId)return reply("I couldn't identify your Discord account.");
  if(String(i.channel_id)!=="1564527128253436005")return reply("That welcome button only works in introductions.");
- const posted=await discordApi(env,"/channels/"+i.channel_id+"/messages","POST",{
-  content:"🎉 **MAKE SOME NOISE!** <@"+welcomerId+"> welcomes <@"+joinedUserId+"> to the crew! 🥳",
-  allowed_mentions:{parse:[],users:[welcomerId,joinedUserId]}
- });
- if(posted.status!==200||!posted.data?.id)return reply("I couldn't post the celebration. Please try again.");
- return reply("Welcome celebration posted!");
+ return postCelebrationReply(i,env,{scope:"welcome",targetId:joinedUserId,actorId:welcomerId});
 }
 async function birthdayRemoveButton(i,env){
  const userId=String(i.member?.user?.id||i.user?.id||"");
@@ -994,6 +989,145 @@ async function birthdayModalSubmit(i,env){
  await env.DB.prepare("INSERT INTO community_birthdays(user_id,birth_month,birth_day,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET birth_month=excluded.birth_month,birth_day=excluded.birth_day,updated_at=excluded.updated_at").bind(userId,month,day,new Date().toISOString()).run();
  return reply("Your birthday is saved as **"+birthdayDateLabel(month,day)+"**.");
 }
+
+
+const CELEBRATION_TIME_ZONE="America/New_York";
+const CELEBRATION_WELCOME_PROMPTS=["🎉 {actor} is rolling out the confetti for {target}—welcome to the crew! 🥳","👋 {actor} brought the big wave: {target}, we're glad you're here! 🌟","🎊 The welcome committee has arrived! {actor} cheers for {target}! 🙌","✨ New friend alert! {actor} is saving a spot in the crew for {target}! 💜","🥳 {actor} says the party is better now that {target} is here! 🎈","🚀 {actor} is launching a big welcome for {target}! Make yourself at home! 🌙","🎈 Confetti in the chat! {actor} gives {target} the warmest welcome! 🎉","🪩 The dance floor is open: {actor} welcomes {target} to the crew! 💃","🌟 A fresh face and a fresh reason to celebrate—welcome, {target}! —{actor} 🎊","💜 {actor} is sending {target} a whole storm of good vibes. Welcome aboard! ✨","🎤 Mic check! {actor} has one message for {target}: welcome to the family! 🎶","🧁 A sweet welcome for {target}, served with extra sprinkles by {actor}! 🍬","🐺 The pack grows stronger! {actor} welcomes {target} to Shadow Syndicate! 🌙","🎆 Lights up, music on—{actor} is celebrating {target}'s arrival! 🎵","🛸 {actor} has beamed {target} straight into the coolest corner of the server! 👾","🌈 Good people, good times, and now {target}! {actor} says welcome! 💫","🏆 First-class welcome incoming: {actor} is cheering for {target}! 🎉","🎇 The welcome fireworks are all for {target}, courtesy of {actor}! ✨","🧭 {actor} points {target} toward good chats and great company. Welcome! 🗺️","☀️ The server just got brighter—{actor} welcomes {target} with a sunny wave! 🌻","🎮 Player joined! {actor} says {target} has unlocked the welcome party! 🕹️","💌 A little note from {actor}: {target}, we're happy you found us! 💜","🎺 Cue the fanfare! {actor} gives {target} a triumphant welcome! 🥁","🦋 A new connection takes flight—welcome to the crew, {target}! —{actor} 🌷","🧨 Big entrance energy! {actor} is making some noise for {target}! 🎊","🍰 Welcome cake is on the table! {actor} saved the first slice for {target}! 🎂","🌌 From the stars to our server, {actor} welcomes {target} to the Syndicate! ✨","🤝 {actor} is offering {target} a handshake, a high five, and a warm welcome! 🙌","🎨 A new color joins the canvas—{actor} welcomes {target} to the community! 🖌️","🔔 Ding ding! {actor} announces that {target} has officially joined the fun! 🎉","🧸 Cozy seat, friendly faces, warm welcome: {actor} is glad you're here, {target}! 🫶","🎹 The welcome soundtrack starts now—{actor} is cheering for {target}! 🎶","🏮 Lanterns glowing and chat sparkling—{actor} welcomes {target}! ✨","🍿 The show is better with {target} in the audience. Welcome, from {actor}! 🎟️","🛡️ {actor} welcomes {target} to the crew. Your next adventure starts here! ⚔️","🎐 A little breeze, a big hello—{actor} is waving to {target}! 🌬️","🪄 A new friend appears! {actor} welcomes {target} with a little server magic! ✨","📣 Everybody say hello! {actor} is celebrating our newest member, {target}! 🎉","🌺 Fresh blooms and friendly hellos—{actor} welcomes {target} to the garden! 🌼","🧭 Adventure buddies acquired: {actor} welcomes {target} to the journey! 🥾"];
+const CELEBRATION_BIRTHDAY_PROMPTS=["🎂 {actor} is sending {target} a whole parade of birthday wishes! 🥳","🎉 Make room for the cake! {actor} is celebrating {target} today! 🎈","🌟 Today gets an extra sparkle because it's {target}'s birthday! —{actor} ✨","🥳 {actor} hopes {target}'s birthday is packed with laughs, treats, and good surprises! 🎁","🎁 A birthday bundle of good vibes is headed to {target}, from {actor}! 💜","🍰 The sweetest day deserves the sweetest wishes—happy birthday, {target}! —{actor} 🧁","🎈 {actor} is floating birthday balloons all the way to {target}! 🎉","🌙 One more trip around the sun, one brighter day for {target}! Happy birthday! —{actor} ☀️","🎊 Birthday alert! {actor} is cheering extra loudly for {target}! 📣","🎤 Today's headliner is {target}! {actor} wishes you a show-stopping birthday! 🎶","🪩 The birthday dance floor belongs to {target}! Celebrate big! —{actor} 💃","🚀 {actor} wishes {target} a birthday that launches straight into an amazing year! 🌠","🧁 Sprinkle count: infinite. Birthday wishes: all for {target}! —{actor} 🍬","🐺 The whole pack sends birthday love to {target}! With cheers from {actor}! 🌙","🎆 Birthday fireworks for {target}! {actor} hopes every wish comes true! ✨","💜 {actor} is wrapping {target}'s day in friendship, laughter, and birthday magic! 🎁","🎮 Achievement unlocked: another awesome year for {target}! Happy birthday! —{actor} 🏆","🌈 Here's to bright plans, kind people, and a brilliant birthday for {target}! —{actor} 💫","🎺 Cue the birthday fanfare for {target}! {actor} is celebrating you today! 🥁","☀️ Sending {target} sunshine, smiles, and a very happy birthday! —{actor} 🌻","🧨 Birthday energy: maximum! {actor} hopes {target} has the best day ever! 🎊","🍕 Cake first, wishes second, more cake after that—happy birthday, {target}! —{actor} 🍰","🛸 Birthday wishes beamed to {target} from across the galaxy! —{actor} 👾","🦋 May {target}'s next chapter be colorful, calm, and full of good surprises! Happy birthday! —{actor} 🌷","🏆 Today's award for being legendary goes to {target}! Happy birthday, from {actor}! 🥇","📸 Freeze the moment: it's {target}'s day to shine! Birthday love from {actor}! ✨","🎹 A new birthday song just dropped, starring {target}! —{actor} 🎶","🍓 Sending {target} a basket of sweet birthday wishes! —{actor} 🍒","🪄 One birthday wish, a little magic, and a year of possibilities for {target}! —{actor} ✨","🏮 May {target}'s birthday glow long after the candles go out! —{actor} 🌟","🤝 Another year of you is worth celebrating. Happy birthday, {target}! —{actor} 💜","🧸 Sending cozy hugs and giant birthday cheer to {target}! —{actor} 🫶","🎨 This day is your masterpiece, {target}! Happy birthday, with love from {actor}! 🖌️","🔔 Ding ding! It's {target}'s birthday—time for cake and celebration! —{actor} 🎂","🧭 Here's to {target}'s next great adventure around the sun! Happy birthday! —{actor} 🗺️","🌺 Hope {target}'s birthday blooms into a wonderful year! —{actor} 🌼","🎟️ Front row seats to the birthday celebration: reserved for {target}! —{actor} 🍿","⚔️ New year, new quests, same legendary {target}. Happy birthday! —{actor} 🛡️","🎐 May the breeze carry birthday wishes and good luck to {target}! —{actor} 🌬️","🎈 {actor} is raising a toast (and a balloon) to {target}! Happy birthday! 🥤"];
+let celebrationStickerCache=null,celebrationStickerCacheAt=0;
+async function ensureCelebrationTables(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS celebration_rotation(scope TEXT PRIMARY KEY,items_json TEXT NOT NULL,cursor INTEGER NOT NULL,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS celebration_reply_claims(source_message_id TEXT NOT NULL,actor_id TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(source_message_id,actor_id))").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_birthday_sends(year INTEGER NOT NULL,user_id TEXT NOT NULL,channel_id TEXT NOT NULL,message_id TEXT NOT NULL,sent_at TEXT NOT NULL,PRIMARY KEY(year,user_id))").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS birthday_scheduler_lock(id INTEGER PRIMARY KEY CHECK(id=1),lease_until INTEGER NOT NULL)").run();
+}
+function shuffleCelebration(items){
+ const copy=[...items];
+ for(let i=copy.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[copy[i],copy[j]]=[copy[j],copy[i]]}
+ return copy;
+}
+async function nextCelebrationItem(env,scope,items){
+ const now=new Date().toISOString(), deck=JSON.stringify(shuffleCelebration(items));
+ await env.DB.prepare("INSERT OR IGNORE INTO celebration_rotation(scope,items_json,cursor,updated_at) VALUES(?,?, -1, ?)").bind(scope,deck,now).run();
+ const row=await env.DB.prepare("UPDATE celebration_rotation SET cursor=(cursor+1)%?,updated_at=? WHERE scope=? RETURNING items_json,cursor").bind(items.length,now,scope).first();
+ if(!row)return items[Math.floor(Math.random()*items.length)];
+ let active;
+ try{active=JSON.parse(row.items_json)}catch{active=items}
+ if(!Array.isArray(active)||active.length!==items.length)active=shuffleCelebration(items);
+ return active[row.cursor]||items[Math.floor(Math.random()*items.length)];
+}
+async function currentCelebrationStickers(env){
+ if(celebrationStickerCache&&Date.now()-celebrationStickerCacheAt<60000)return celebrationStickerCache;
+ const result=await discordApi(env,"/guilds/"+GUILD_ID+"/stickers");
+ if(result.status!==200||!Array.isArray(result.data)){celebrationStickerCache=[];celebrationStickerCacheAt=Date.now();return []}
+ const all=result.data.filter(item=>item?.id&&item.available!==false);
+ const festive=all.filter(item=>/celebr|birthday|welcome|party|confetti|congrats|congrat|cake|yay|hype|dance|wave|hello|cheer|sparkle/i.test(String(item.name||"")+" "+String(item.tags||"")));
+ celebrationStickerCache=festive.length?festive:all;
+ celebrationStickerCacheAt=Date.now();
+ return celebrationStickerCache;
+}
+async function nextCelebrationSticker(env,scope){
+ const stickers=await currentCelebrationStickers(env);
+ if(!stickers.length)return null;
+ const ids=stickers.map(item=>String(item.id));
+ return nextCelebrationItem(env,"sticker:"+scope,ids);
+}
+async function sendCelebrationMessage(env,channelId,payload,stickerId){
+ const body={...payload};
+ if(stickerId)body.sticker_ids=[String(stickerId)];
+ let result=await discordApi(env,"/channels/"+channelId+"/messages","POST",body);
+ if(stickerId&&result.status>=400){
+  delete body.sticker_ids;
+  result=await discordApi(env,"/channels/"+channelId+"/messages","POST",body);
+ }
+ return result;
+}
+async function postCelebrationReply(i,env,{scope,targetId,actorId}){
+ if(!env.DB)return reply("Celebrations are temporarily unavailable.");
+ await ensureCelebrationTables(env);
+ const sourceId=String(i.message?.id||"");
+ if(!/^\d{17,20}$/.test(sourceId))return reply("That celebration button is no longer valid.");
+ const claim=await env.DB.prepare("INSERT OR IGNORE INTO celebration_reply_claims(source_message_id,actor_id,created_at) VALUES(?,?,?)").bind(sourceId,actorId,new Date().toISOString()).run();
+ if(!(claim?.meta?.changes>0))return reply("You already posted a celebration on this message.");
+ try{
+  const templates=scope==="birthday"?CELEBRATION_BIRTHDAY_PROMPTS:CELEBRATION_WELCOME_PROMPTS;
+  const template=await nextCelebrationItem(env,"prompts:"+scope,templates);
+  const actor=scope==="birthday"?"The Syndicate crew":"<@"+actorId+">";
+  const target="<@"+targetId+">";
+  const content=template.replaceAll("{actor}",actor).replaceAll("{target}",target);
+  const sticker=await nextCelebrationSticker(env,scope);
+  const posted=await sendCelebrationMessage(env,i.channel_id,{content,allowed_mentions:{parse:[],users:[actorId,targetId]}},sticker);
+  if(posted.status!==200||!posted.data?.id)throw Error("Discord rejected the celebration post ("+posted.status+").");
+  return reply("Celebration posted!");
+ }catch(e){
+  await env.DB.prepare("DELETE FROM celebration_reply_claims WHERE source_message_id=? AND actor_id=?").bind(sourceId,actorId).run().catch(()=>{});
+  console.error("celebration reply",String(e));
+  return reply("I couldn't post the celebration. Please try again.");
+ }
+}
+async function birthdayCelebrationInteraction(i,env){
+ const match=/^birthday_celebrate:(\d{17,20}):(\d{4})$/.exec(String(i.data?.custom_id||""));
+ if(!match)return reply("That birthday button is no longer valid.");
+ if(!env.DB)return reply("Celebrations are temporarily unavailable.");
+ await ensureCelebrationTables(env);
+ const userId=match[1],year=Number(match[2]);
+ const sent=await env.DB.prepare("SELECT channel_id,message_id FROM community_birthday_sends WHERE year=? AND user_id=?").bind(year,userId).first();
+ if(!sent||String(sent.channel_id)!==String(i.channel_id)||String(sent.message_id)!==String(i.message?.id))return reply("That birthday celebration button has expired.");
+ const actorId=String(i.member?.user?.id||i.user?.id||"");
+ if(!actorId)return reply("I couldn't identify your Discord account.");
+ return postCelebrationReply(i,env,{scope:"birthday",targetId:userId,actorId});
+}
+function birthdayLocalNow(date=new Date()){
+ const parts=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:CELEBRATION_TIME_ZONE,year:"numeric",month:"numeric",day:"numeric",hour:"numeric",hourCycle:"h23"}).formatToParts(date).map(part=>[part.type,part.value]));
+ return {year:Number(parts.year),month:Number(parts.month),day:Number(parts.day),hour:Number(parts.hour)};
+}
+async function birthdayAnnouncementChannel(env){
+ const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
+ if(channels.status===200&&Array.isArray(channels.data)){
+  const found=joinChannel(channels.data,"birthdays","birthday","birthday-announcements","birthday-celebrations","birthday-wishes","celebrations","general");
+  if(found)return String(found.id);
+ }
+ return "1564527128253436005";
+}
+async function acquireBirthdaySchedulerLock(env,nowMs){
+ const until=nowMs+10*60*1000;
+ const row=await env.DB.prepare("INSERT INTO birthday_scheduler_lock(id,lease_until) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET lease_until=excluded.lease_until WHERE birthday_scheduler_lock.lease_until<? RETURNING id").bind(until,nowMs).first();
+ return row?until:null;
+}
+async function sendBirthdayAnnouncements(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await ensureBirthdayTable(env);
+ await ensureCelebrationTables(env);
+ const local=birthdayLocalNow();
+ if(local.hour<9)return;
+ const lease=await acquireBirthdaySchedulerLock(env,Date.now());
+ if(!lease)return;
+ try{
+  const birthdays=await env.DB.prepare("SELECT user_id FROM community_birthdays WHERE birth_month=? AND birth_day=?").bind(local.month,local.day).all();
+  const rows=birthdays?.results||[];
+  if(!rows.length)return;
+  const channelId=await birthdayAnnouncementChannel(env);
+  for(const row of rows){
+   const userId=String(row.user_id||"");
+   if(!/^\d{17,20}$/.test(userId))continue;
+   const already=await env.DB.prepare("SELECT message_id FROM community_birthday_sends WHERE year=? AND user_id=?").bind(local.year,userId).first();
+   if(already)continue;
+   try{
+    const template=await nextCelebrationItem(env,"prompts:birthday",CELEBRATION_BIRTHDAY_PROMPTS);
+    const content=template.replaceAll("{actor}","The Syndicate crew").replaceAll("{target}","<@"+userId+">");
+    const sticker=await nextCelebrationSticker(env,"birthday");
+    const body={content,allowed_mentions:{parse:[],users:[userId]},components:[{type:1,components:[{type:2,style:2,label:"Celebrate with them",custom_id:"birthday_celebrate:"+userId+":"+local.year}]}],nonce:String(local.year)+userId,enforce_nonce:true};
+    const posted=await sendCelebrationMessage(env,channelId,body,sticker);
+    if(posted.status!==200||!posted.data?.id)throw Error("Discord rejected birthday post ("+posted.status+").");
+    await env.DB.prepare("INSERT OR IGNORE INTO community_birthday_sends(year,user_id,channel_id,message_id,sent_at) VALUES(?,?,?,?,?)").bind(local.year,userId,channelId,String(posted.data.id),new Date().toISOString()).run();
+    console.log("Birthday announcement posted",userId,local.year,channelId);
+   }catch(e){console.error("birthday announcement",userId,String(e))}
+  }
+ }finally{
+  await env.DB.prepare("UPDATE birthday_scheduler_lock SET lease_until=0 WHERE id=1 AND lease_until=?").bind(lease).run().catch(()=>{});
+ }
+}
+
 
 
 const CLUB_EVENTS_CHANNEL="1564527132720234556";
@@ -3051,6 +3185,7 @@ async function ensureSuggestionsChannel(e){
 export default {
  async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
+  ctx.waitUntil(sendBirthdayAnnouncements(env).catch(e=>console.error("birthday scheduler",String(e))));
   ctx.waitUntil(ensureSuggestionsChannel(env).catch(e=>console.error("suggestions channel setup",String(e))));
   ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
   ctx.waitUntil(ensureClubNightPollPreview(env).catch(e=>console.error("club night poll preview",String(e))));
@@ -3141,6 +3276,7 @@ export default {
   if(!env.DB)return reply("The bot database is temporarily unavailable.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
+   if(i.type===3&&i.data?.custom_id?.startsWith("birthday_celebrate:"))return delayedReply(i,env,ctx,()=>birthdayCelebrationInteraction(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("welcome_wave:"))return delayedReply(i,env,ctx,()=>welcomeWaveInteraction(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_end:")){
     const eventId=String(i.data.custom_id.slice("club_event_end:".length));
