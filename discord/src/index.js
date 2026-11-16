@@ -1044,9 +1044,7 @@ function makeCelebrationEmbed(scope,description,fromLabel){
   fields:birthday?[
    {name:"🎁 Make a wish",value:"May your next trip around the sun bring great memories and good surprises.",inline:false},
    {name:"🎈 Join the celebration",value:"Tap **Celebrate with them** below to add your own birthday wish.",inline:false}
-  ]:[
-   {name:"🤝 Say hello",value:"Drop a wave and help make our newest member feel at home.",inline:false}
-  ],
+  ]:[],
   footer:{text:birthday?"Wishing you an amazing year ahead • Shadow Syndicate":"Glad you're here • Shadow Syndicate"},
   timestamp:new Date().toISOString()
  };
@@ -1073,9 +1071,11 @@ async function postCelebrationReply(i,env,{scope,targetId,actorId}){
   const template=await nextCelebrationItem(env,"prompts:"+scope,templates);
   const actorLabel=String(i.member?.user?.global_name||i.member?.user?.username||i.user?.global_name||i.user?.username||"A friend");
   const description=template.replaceAll("{actor}",actorLabel).replaceAll("{target}","you");
-  const content=scope==="birthday"?"🎂 Happy birthday, <@"+targetId+">! 🎉":"👋 <@"+targetId+">";
+  const content=scope==="birthday"?"🎂 Happy birthday, <@"+targetId+">! 🎉":description+" 🎊";
   const sticker=await nextCelebrationSticker(env,scope);
-  const posted=await sendCelebrationMessage(env,i.channel_id,{content,embeds:[makeCelebrationEmbed(scope,description,actorLabel)],allowed_mentions:{parse:[],users:[targetId]}},sticker);
+  const payload={content,allowed_mentions:{parse:[],users:[targetId]}};
+  if(scope==="birthday")payload.embeds=[makeCelebrationEmbed(scope,description,actorLabel)];
+  const posted=await sendCelebrationMessage(env,i.channel_id,payload,sticker);
   if(posted.status!==200||!posted.data?.id)throw Error("Discord rejected the celebration post ("+posted.status+").");
   return reply("Celebration posted!");
  }catch(e){
