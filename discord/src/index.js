@@ -3334,7 +3334,7 @@ async function submitLongIntro(i,env){
   ["🎮 Hobbies & top games",values.intro_interests],
   ["💜 Likes & favorites",values.intro_likes]
  ].filter(([,value])=>String(value||"").trim());
- const extraLabels={"fun fact":"✨ Fun fact","pets":"🐾 Pets","from":"🌎 Where you’re from","region":"🌎 Where you’re from","languages":"🗣️ Languages"};
+ const extraLabels={fun:"✨ Fun fact",pet:"🐾 Pets",from:"🌎 Where you’re from",region:"🌎 Where you’re from",language:"🗣️ Languages"};
  const extras=String(values.intro_extras||"").split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
  for(const line of extras){
   const match=/^(fun\s*fact|pets?|from(?:\s*\([^)]*\))?|region|languages?)\s*:\s*(.+)$/i.exec(line);
