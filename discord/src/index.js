@@ -3273,31 +3273,44 @@ async function ensureCommunityIntroChannels(env){
   if(![200,201].includes(created.status)||!created.data?.id)throw Error("Could not create introductions channel ("+created.status+"): "+JSON.stringify(created.data));
   intro=created.data;
  }
+ let petPhotos=channels.find(channel=>channel.type===0&&String(channel.name||"").toLowerCase()==="pet-pictures");
+ if(!petPhotos){
+  const channelBody={name:"pet-pictures",type:0,topic:"🐾 Pet tax! Share photos of your pets here. Please keep personal information out of photo captions.",...(intro?.parent_id?{parent_id:intro.parent_id}:{})};
+  const created=await discordApi(env,"/guilds/"+GUILD_ID+"/channels","POST",channelBody);
+  if(![200,201].includes(created.status)||!created.data?.id)throw Error("Could not create pet-pictures channel ("+created.status+"): "+JSON.stringify(created.data));
+  petPhotos=created.data;
+ }
  await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('channel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(intro.id),new Date().toISOString()).run();
  const previous=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_id'").first();
+ const panel={embeds:[{color:0x8B5CF6,title:"💜 Introduce Yourself",description:"Share as much or as little as you like. Your intro gets its own purple card, with clear sections for your answers.",fields:[
+  {name:"🪪 Name / nickname",value:"Required. This is what the crew should call you.",inline:false},
+  {name:"💬 Pronouns",value:"Optional.",inline:false},
+  {name:"🎮 Hobbies & top games",value:"Tell us what you enjoy playing or doing.",inline:false},
+  {name:"💜 Likes & favorites",value:"Share music, snacks, colors, or anything you love.",inline:false},
+  {name:"✨ Fun facts, pets & languages",value:"Optional: add lines like “Fun fact: …”, “Pets: …”, “From (country/region): …”, and “Languages: …”. Please keep location broad; no exact address.",inline:false},
+  {name:"🐾 Pet pictures",value:"Post pet photos any time in <#"+petPhotos.id+">!",inline:false},
+  {name:"🔒 Your choice",value:"Only your name/nickname is required. Skip anything you’d rather not share.",inline:false}
+ ],footer:{text:"Shadow Syndicate • Introductions"}}],components:[{type:1,components:[{type:2,style:1,label:"💜 Fill out your intro",custom_id:"long_intro_open"}]}]};
+ let posted;
  if(previous?.value){
   const existing=await discordApi(env,"/channels/"+intro.id+"/messages/"+previous.value);
-  if(existing.status===200)return;
+  if(existing.status===200)posted=await discordApi(env,"/channels/"+intro.id+"/messages/"+previous.value,"PATCH",panel);
  }
- const panel={embeds:[{color:0x8B5CF6,title:"💜 Introduce Yourself",description:"Tell the crew as much or as little as you like. Your answers will be posted here as a purple intro card.",fields:[
-  {name:"🪪 Basics",value:"Name or nickname is required. Pronouns are optional.",inline:false},
-  {name:"🎮 About you",value:"Share hobbies, favorite games, or what you’re into lately.",inline:false},
-  {name:"✨ Your extra detail",value:"Add a fun fact or anything else you’d like people to know.",inline:false},
-  {name:"🔒 Your choice",value:"Only your name/nickname is required. Skip every other prompt you don’t want to answer.",inline:false}
- ],footer:{text:"Shadow Syndicate • Introductions"}}],components:[{type:1,components:[{type:2,style:1,label:"💜 Fill out your intro",custom_id:"long_intro_open"}]}]};
- const posted=await discordApi(env,"/channels/"+intro.id+"/messages","POST",panel);
- if(posted.status!==200||!posted.data?.id)throw Error("Could not post introduction panel ("+posted.status+"): "+JSON.stringify(posted.data));
+ if(!posted||posted.status===404){
+  posted=await discordApi(env,"/channels/"+intro.id+"/messages","POST",panel);
+ }
+ if(posted.status!==200||!posted.data?.id)throw Error("Could not update introduction panel ("+posted.status+"): "+JSON.stringify(posted.data));
  await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('panel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(posted.data.id),new Date().toISOString()).run();
 }
 function longIntroModal(){
  const fields=[
-  ["intro_name","Name or nickname",true,"What should we call you?"],
+  ["intro_name","Name / nickname",true,"What should we call you?"],
   ["intro_pronouns","Pronouns",false,"Optional"],
-  ["intro_interests","Hobbies and favorite games",false,"What do you enjoy?"],
-  ["intro_likes","Likes or current favorites",false,"Music, snacks, games, anything"],
-  ["intro_fact","Fun fact",false,"Something fun about you"]
+  ["intro_interests","Hobbies & top games",false,"What do you enjoy doing or playing?"],
+  ["intro_likes","Likes & favorites",false,"Music, snacks, colors, anything"],
+  ["intro_extras","Fun facts, pets & languages",false,"Optional lines: Fun fact: … | Pets: … | From (region): … | Languages: …"]
  ];
- return new Response(JSON.stringify({type:9,data:{custom_id:"long_intro_submit",title:"Your Introduction",components:fields.map(([id,label,required,placeholder],index)=>({type:1,components:[{type:4,custom_id:id,label,style:index===2||index===3||index===4?2:1,required, min_length:required?1:0,max_length:index===2||index===3||index===4?300:80,placeholder}]}))}}),{headers:{"content-type":"application/json"}});
+ return new Response(JSON.stringify({type:9,data:{custom_id:"long_intro_submit",title:"Your Introduction",components:fields.map(([id,label,required,placeholder],index)=>({type:1,components:[{type:4,custom_id:id,label,style:index>=2?2:1,required,min_length:required?1:0,max_length:index>=2?300:80,placeholder}]}))}}),{headers:{"content-type":"application/json"}});
 }
 async function openLongIntro(i,env){
  if(!env.DB)return reply("The intro form is temporarily unavailable.");
@@ -3318,10 +3331,16 @@ async function submitLongIntro(i,env){
  const sections=[
   ["🪪 Name / nickname",name],
   ["💬 Pronouns",values.intro_pronouns],
-  ["🎮 Hobbies and favorite games",values.intro_interests],
-  ["💜 Likes and favorites",values.intro_likes],
-  ["✨ Fun fact",values.intro_fact]
+  ["🎮 Hobbies & top games",values.intro_interests],
+  ["💜 Likes & favorites",values.intro_likes]
  ].filter(([,value])=>String(value||"").trim());
+ const extraLabels={"fun fact":"✨ Fun fact","pets":"🐾 Pets","from":"🌎 Where you’re from","region":"🌎 Where you’re from","languages":"🗣️ Languages"};
+ const extras=String(values.intro_extras||"").split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+ for(const line of extras){
+  const match=/^(fun\s*fact|pets?|from(?:\s*\([^)]*\))?|region|languages?)\s*:\s*(.+)$/i.exec(line);
+  if(match){const key=match[1].toLowerCase().split(/[\s(]/)[0].replace(/s$/,"");sections.push([extraLabels[key]||"✨ Fun fact",match[2].slice(0,300)]);}
+  else sections.push(["✨ Extra details",line.slice(0,300)]);
+ }
  const cleanName=name.replace(/[*_~`|]/g,"");
  const introDescription="Welcome, **"+cleanName+"**! Here’s a little about them:\n\n"+sections.map(([label,value])=>"### "+label+"\n"+String(value).slice(0,300)).join("\n\n");
  const payload={content:"<@"+user.id+"> shared an introduction 💜",embeds:[{color:0x8B5CF6,author:{name:"A new face in the Syndicate"},description:introDescription,...(user.avatar?{thumbnail:{url:"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+".png?size=128"}}:{}),footer:{text:"Shadow Syndicate • Say hi and make them feel welcome"},timestamp:new Date().toISOString()}],allowed_mentions:{parse:[],users:[String(user.id)]}};
