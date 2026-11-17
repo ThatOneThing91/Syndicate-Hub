@@ -3253,7 +3253,6 @@ async function ensureSuggestionsChannel(e){
  if(![200,201].includes(m.status)||!m.data?.id)throw Error("Embed post failed: "+m.status);
  await e.DB.prepare("INSERT OR REPLACE INTO suggestions_channel_setup(id,channel_id,message_id,status,updated_at) VALUES(1,?,?,?,?)").bind(ch.id,m.data.id,"posted",new Date().toISOString()).run();
 }
-export default {
  const INTRO_WELCOME_CHANNEL_ID="1564527128253436005";
 async function ensureCommunityIntroChannels(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
@@ -3329,6 +3328,8 @@ async function submitLongIntro(i,env){
  return reply("Your intro is up in #introductions 💜");
 }
 
+
+export default {
 async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
   ctx.waitUntil((async()=>{await sendBirthdayAnnouncements(env);await upgradeBirthdayAnnouncementEmbeds(env)})().catch(e=>console.error("birthday scheduler",String(e))));
