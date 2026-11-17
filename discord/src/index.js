@@ -3315,14 +3315,16 @@ async function submitLongIntro(i,env){
  const values=Object.fromEntries((i.data.components||[]).flatMap(row=>row.components||[]).map(component=>[component.custom_id,String(component.value||"").trim()]));
  const name=values.intro_name?.slice(0,80);
  if(!name)return reply("Add a name or nickname before submitting.");
- const fields=[
+ const sections=[
   ["🪪 Name / nickname",name],
   ["💬 Pronouns",values.intro_pronouns],
   ["🎮 Hobbies and favorite games",values.intro_interests],
   ["💜 Likes and favorites",values.intro_likes],
   ["✨ Fun fact",values.intro_fact]
- ].filter(([,value])=>String(value||"").trim()).map(([name,value])=>({name,value:String(value).slice(0,300),inline:false}));
- const payload={content:"<@"+user.id+"> shared an introduction 💜",embeds:[{color:0x8B5CF6,author:{name:"A new face in the Syndicate"},description:"Welcome, **"+name.replace(/[*_~`|]/g,"")+"**! Here’s a little about them:",fields,...(user.avatar?{thumbnail:{url:"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+".png?size=128"}}:{}),footer:{text:"Shadow Syndicate • Say hi and make them feel welcome"},timestamp:new Date().toISOString()}],allowed_mentions:{parse:[],users:[String(user.id)]}};
+ ].filter(([,value])=>String(value||"").trim());
+ const cleanName=name.replace(/[*_~`|]/g,"");
+ const introDescription="Welcome, **"+cleanName+"**! Here’s a little about them:\n\n"+sections.map(([label,value])=>"### "+label+"\n"+String(value).slice(0,300)).join("\n\n");
+ const payload={content:"<@"+user.id+"> shared an introduction 💜",embeds:[{color:0x8B5CF6,author:{name:"A new face in the Syndicate"},description:introDescription,...(user.avatar?{thumbnail:{url:"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+".png?size=128"}}:{}),footer:{text:"Shadow Syndicate • Say hi and make them feel welcome"},timestamp:new Date().toISOString()}],allowed_mentions:{parse:[],users:[String(user.id)]}};
  const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",payload);
  if(posted.status!==200||!posted.data?.id)throw Error("Could not post introduction ("+posted.status+"): "+JSON.stringify(posted.data));
  return reply("Your intro is up in #introductions 💜");
