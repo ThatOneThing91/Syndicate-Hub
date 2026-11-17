@@ -15,7 +15,7 @@ async function refreshWelcomeMemberStats(env){
   const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
   const normalize=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
   const intro=channels.status===200&&Array.isArray(channels.data)
-   ?channels.data.find(c=>[0,5].includes(c.type)&&normalize(c.name)==="introductions"):null;
+   ?channels.data.find(c=>[0,5].includes(c.type)&&(String(c.id)==="1564527128253436005"||normalize(c.name)==="introductions")):null;
   if(!intro)return;
   const history=await discordApi(env,"/channels/"+intro.id+"/messages?limit=100");
   if(history.status!==200||!Array.isArray(history.data))return;
@@ -957,7 +957,7 @@ async function welcomeWaveInteraction(i,env){
  if(!match)return reply("That welcome button is no longer valid.");
  const joinedUserId=match[1],welcomerId=String(i.member?.user?.id||i.user?.id||"");
  if(!welcomerId)return reply("I couldn't identify your Discord account.");
- if(String(i.channel_id)!=="1564527128253436005")return reply("That welcome button only works in introductions.");
+ if(String(i.channel_id)!==INTRO_WELCOME_CHANNEL_ID)return reply("That welcome button only works in #welcome.");
  return postCelebrationReply(i,env,{scope:"welcome",targetId:joinedUserId,actorId:welcomerId});
 }
 async function birthdayRemoveButton(i,env){
@@ -3254,10 +3254,86 @@ async function ensureSuggestionsChannel(e){
  await e.DB.prepare("INSERT OR REPLACE INTO suggestions_channel_setup(id,channel_id,message_id,status,updated_at) VALUES(1,?,?,?,?)").bind(ch.id,m.data.id,"posted",new Date().toISOString()).run();
 }
 export default {
- async scheduled(event,env,ctx){
+ const INTRO_WELCOME_CHANNEL_ID="1564527128253436005";
+async function ensureCommunityIntroChannels(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_intro_setup(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ const channelsResult=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
+ if(channelsResult.status!==200||!Array.isArray(channelsResult.data))throw Error("Could not read guild channels ("+channelsResult.status+").");
+ const channels=channelsResult.data;
+ const welcome=channels.find(channel=>String(channel.id)===INTRO_WELCOME_CHANNEL_ID);
+ if(welcome&&welcome.name!=="welcome"){
+  const renamed=await discordApi(env,"/channels/"+welcome.id,"PATCH",{name:"welcome",topic:"Server welcomes and member updates. Use #introductions to share a longer intro."});
+  if(renamed.status!==200)throw Error("Could not rename welcome channel ("+renamed.status+"): "+JSON.stringify(renamed.data));
+  welcome.name="welcome";
+ }
+ let intro=channels.find(channel=>channel.type===0&&channel.name==="introductions");
+ if(!intro){
+  const channelBody={name:"introductions",type:0,topic:"Share a little about yourself with the crew. Every prompt is optional except your name or nickname.",...(welcome?.parent_id?{parent_id:welcome.parent_id}:{})};
+  const created=await discordApi(env,"/guilds/"+GUILD_ID+"/channels","POST",channelBody);
+  if(![200,201].includes(created.status)||!created.data?.id)throw Error("Could not create introductions channel ("+created.status+"): "+JSON.stringify(created.data));
+  intro=created.data;
+ }
+ await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('channel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(intro.id),new Date().toISOString()).run();
+ const previous=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_id'").first();
+ if(previous?.value){
+  const existing=await discordApi(env,"/channels/"+intro.id+"/messages/"+previous.value);
+  if(existing.status===200)return;
+ }
+ const panel={embeds:[{color:0x8B5CF6,title:"💜 Introduce Yourself",description:"Tell the crew as much or as little as you like. Your answers will be posted here as a purple intro card.",fields:[
+  {name:"🪪 Basics",value:"Name or nickname is required. Pronouns are optional.",inline:false},
+  {name:"🎮 About you",value:"Share hobbies, favorite games, or what you’re into lately.",inline:false},
+  {name:"✨ Your extra detail",value:"Add a fun fact or anything else you’d like people to know.",inline:false},
+  {name:"🔒 Your choice",value:"Only your name/nickname is required. Skip every other prompt you don’t want to answer.",inline:false}
+ ],footer:{text:"Shadow Syndicate • Introductions"}}],components:[{type:1,components:[{type:2,style:1,label:"💜 Fill out your intro",custom_id:"long_intro_open"}]}]};
+ const posted=await discordApi(env,"/channels/"+intro.id+"/messages","POST",panel);
+ if(posted.status!==200||!posted.data?.id)throw Error("Could not post introduction panel ("+posted.status+"): "+JSON.stringify(posted.data));
+ await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('panel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(posted.data.id),new Date().toISOString()).run();
+}
+function longIntroModal(){
+ const fields=[
+  ["intro_name","Name or nickname",true,"What should we call you?"],
+  ["intro_pronouns","Pronouns",false,"Optional"],
+  ["intro_interests","Hobbies and favorite games",false,"What do you enjoy?"],
+  ["intro_likes","Likes or current favorites",false,"Music, snacks, games, anything"],
+  ["intro_fact","Fun fact",false,"Something fun about you"]
+ ];
+ return new Response(JSON.stringify({type:9,data:{custom_id:"long_intro_submit",title:"Your Introduction",components:fields.map(([id,label,required,placeholder],index)=>({type:1,components:[{type:4,custom_id:id,label,style:index===2||index===3||index===4?2:1,required, min_length:required?1:0,max_length:index===2||index===3||index===4?300:80,placeholder}]}))}}),{headers:{"content-type":"application/json"}});
+}
+async function openLongIntro(i,env){
+ if(!env.DB)return reply("The intro form is temporarily unavailable.");
+ const saved=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='channel_id'").first();
+ if(!saved||String(i.channel_id)!==String(saved.value))return reply("Please use the introduction form in #introductions.");
+ return longIntroModal();
+}
+async function submitLongIntro(i,env){
+ if(!env.DB)return reply("The intro form is temporarily unavailable.");
+ const saved=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='channel_id'").first();
+ const channelId=String(saved?.value||"");
+ if(!channelId||String(i.channel_id)!==channelId)return reply("Please submit the form from #introductions.");
+ const user=i.member?.user||i.user;
+ if(!user?.id)return reply("I couldn't identify your Discord account.");
+ const values=Object.fromEntries((i.data.components||[]).flatMap(row=>row.components||[]).map(component=>[component.custom_id,String(component.value||"").trim()]));
+ const name=values.intro_name?.slice(0,80);
+ if(!name)return reply("Add a name or nickname before submitting.");
+ const fields=[
+  ["🪪 Name / nickname",name],
+  ["💬 Pronouns",values.intro_pronouns],
+  ["🎮 Hobbies and favorite games",values.intro_interests],
+  ["💜 Likes and favorites",values.intro_likes],
+  ["✨ Fun fact",values.intro_fact]
+ ].filter(([,value])=>String(value||"").trim()).map(([name,value])=>({name,value:String(value).slice(0,300),inline:false}));
+ const payload={content:"<@"+user.id+"> shared an introduction 💜",embeds:[{color:0x8B5CF6,author:{name:"A new face in the Syndicate"},description:"Welcome, **"+name.replace(/[*_~`|]/g,"")+"**! Here’s a little about them:",fields,...(user.avatar?{thumbnail:{url:"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+".png?size=128"}}:{}),footer:{text:"Shadow Syndicate • Say hi and make them feel welcome"},timestamp:new Date().toISOString()}],allowed_mentions:{parse:[],users:[String(user.id)]}};
+ const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",payload);
+ if(posted.status!==200||!posted.data?.id)throw Error("Could not post introduction ("+posted.status+"): "+JSON.stringify(posted.data));
+ return reply("Your intro is up in #introductions 💜");
+}
+
+async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
   ctx.waitUntil((async()=>{await sendBirthdayAnnouncements(env);await upgradeBirthdayAnnouncementEmbeds(env)})().catch(e=>console.error("birthday scheduler",String(e))));
   ctx.waitUntil(ensureSuggestionsChannel(env).catch(e=>console.error("suggestions channel setup",String(e))));
+  ctx.waitUntil(ensureCommunityIntroChannels(env).catch(e=>console.error("introductions setup",String(e))));
   ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
   ctx.waitUntil(ensureClubNightPollPreview(env).catch(e=>console.error("club night poll preview",String(e))));
   ctx.waitUntil(applyShadowRoleIcons(env).catch(e=>console.error("role icon setup",String(e))));
@@ -3349,6 +3425,8 @@ export default {
   try {
    if(i.type===3&&i.data?.custom_id?.startsWith("birthday_celebrate:"))return delayedReply(i,env,ctx,()=>birthdayCelebrationInteraction(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("welcome_wave:"))return delayedReply(i,env,ctx,()=>welcomeWaveInteraction(i,env));
+   if(i.type===3&&i.data?.custom_id==="long_intro_open")return openLongIntro(i,env);
+   if(i.type===5&&i.data?.custom_id==="long_intro_submit")return delayedReply(i,env,ctx,()=>submitLongIntro(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_end:")){
     const eventId=String(i.data.custom_id.slice("club_event_end:".length));
     if(!/^[A-Za-z0-9_-]{1,60}$/.test(eventId))return reply("Invalid event.");
