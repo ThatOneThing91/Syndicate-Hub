@@ -3261,21 +3261,32 @@ async function ensureCommunityIntroChannels(env){
  if(channelsResult.status!==200||!Array.isArray(channelsResult.data))throw Error("Could not read guild channels ("+channelsResult.status+").");
  const channels=channelsResult.data;
  const welcome=channels.find(channel=>String(channel.id)===INTRO_WELCOME_CHANNEL_ID);
- if(welcome&&welcome.name!=="welcome"){
-  const renamed=await discordApi(env,"/channels/"+welcome.id,"PATCH",{name:"welcome",topic:"Server welcomes and member updates. Use #introductions to share a longer intro."});
+ if(welcome&&welcome.name!=="👋・welcome"){
+  const renamed=await discordApi(env,"/channels/"+welcome.id,"PATCH",{name:"👋・welcome",topic:"Server welcomes and member updates. Use 💜・introductions to share a longer intro."});
   if(renamed.status!==200)throw Error("Could not rename welcome channel ("+renamed.status+"): "+JSON.stringify(renamed.data));
-  welcome.name="welcome";
+  welcome.name="👋・welcome";
  }
- let intro=channels.find(channel=>channel.type===0&&channel.name==="introductions");
+ const normalizeIntroChannel=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+ let intro=channels.find(channel=>channel.type===0&&normalizeIntroChannel(channel.name)==="introductions");
+ if(intro&&intro.name!=="💜・introductions"){
+  const renamed=await discordApi(env,"/channels/"+intro.id,"PATCH",{name:"💜・introductions",topic:"Share a little about yourself with the crew. Every prompt is optional except your name or nickname."});
+  if(renamed.status!==200)throw Error("Could not style introductions channel ("+renamed.status+"): "+JSON.stringify(renamed.data));
+  intro.name="💜・introductions";
+ }
  if(!intro){
-  const channelBody={name:"introductions",type:0,topic:"Share a little about yourself with the crew. Every prompt is optional except your name or nickname.",...(welcome?.parent_id?{parent_id:welcome.parent_id}:{})};
+  const channelBody={name:"💜・introductions",type:0,topic:"Share a little about yourself with the crew. Every prompt is optional except your name or nickname.",...(welcome?.parent_id?{parent_id:welcome.parent_id}:{})};
   const created=await discordApi(env,"/guilds/"+GUILD_ID+"/channels","POST",channelBody);
   if(![200,201].includes(created.status)||!created.data?.id)throw Error("Could not create introductions channel ("+created.status+"): "+JSON.stringify(created.data));
   intro=created.data;
  }
- let petPhotos=channels.find(channel=>channel.type===0&&String(channel.name||"").toLowerCase()==="pet-pictures");
+ let petPhotos=channels.find(channel=>channel.type===0&&normalizeIntroChannel(channel.name)==="pet-pictures");
+ if(petPhotos&&petPhotos.name!=="🐾・pet-pictures"){
+  const renamed=await discordApi(env,"/channels/"+petPhotos.id,"PATCH",{name:"🐾・pet-pictures",topic:"🐾 Pet tax! Share photos of your pets here. Please keep personal information out of photo captions."});
+  if(renamed.status!==200)throw Error("Could not style pet-pictures channel ("+renamed.status+"): "+JSON.stringify(renamed.data));
+  petPhotos.name="🐾・pet-pictures";
+ }
  if(!petPhotos){
-  const channelBody={name:"pet-pictures",type:0,topic:"🐾 Pet tax! Share photos of your pets here. Please keep personal information out of photo captions.",...(intro?.parent_id?{parent_id:intro.parent_id}:{})};
+  const channelBody={name:"🐾・pet-pictures",type:0,topic:"🐾 Pet tax! Share photos of your pets here. Please keep personal information out of photo captions.",...(intro?.parent_id?{parent_id:intro.parent_id}:{})};
   const created=await discordApi(env,"/guilds/"+GUILD_ID+"/channels","POST",channelBody);
   if(![200,201].includes(created.status)||!created.data?.id)throw Error("Could not create pet-pictures channel ("+created.status+"): "+JSON.stringify(created.data));
   petPhotos=created.data;
