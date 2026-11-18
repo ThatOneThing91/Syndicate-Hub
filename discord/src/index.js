@@ -3492,7 +3492,7 @@ function introPhotoModal(){
  return discordResponse({type:9,data:{custom_id:"intro_pet_submit",title:"🐾 Share Your Pet Photos",components:[
   {type:18,label:"Pet names (optional)",component:{type:4,custom_id:"pet_names",style:1,required:false,max_length:140,placeholder:"Who are we looking at?"}},
   {type:18,label:"Your message / photo caption",description:"Give your pictures a personal touch.",component:{type:4,custom_id:"pet_caption",style:2,required:false,max_length:650,placeholder:"Tell us about your pets or a funny story."}},
-  {type:18,label:"Upload pet photos",description:"Choose 1–10 pictures; all selected pictures will be posted.",
+  {type:18,label:"Upload pet photos",description:"1–10 pictures, up to 45 MB total. All photos post in one gallery.",
    component:{type:19,custom_id:"pet_files",min_values:1,max_values:10,file_types:["image"],required:true}}
  ]}});
 }
@@ -3584,60 +3584,98 @@ async function introPetSubmit(i,env){
  if(!/^\d{15,22}$/.test(channel))return reply("Pet Pictures isn't configured yet.");
  const values=introValues(i),ids=Array.isArray(values.pet_files)?values.pet_files:[];
  const resolved=i.data?.resolved?.attachments||{};
- if(ids.length<1||ids.length>10)return reply("Please select 1–10 pet pictures.");
+ if(ids.length<1||ids.length>10||new Set(ids).size!==ids.length)return reply("Please choose between 1 and 10 different pet pictures.");
  const attachments=ids.map(id=>resolved[id]);
- if(attachments.some(a=>!a))return reply("Discord didn't provide all of the selected photos. Try uploading again.");
- // Validate Discord's temporary upload URLs rather than fetching arbitrary user-controlled URLs.
+ if(attachments.some(a=>!a))return reply("Discord didn't provide every selected photo. Please try the upload again.");
+ const allowedExt=new Set(["jpg","jpeg","png","gif","webp","heic","heif","avif"]);
+ const mimeForExt={jpg:"image/jpeg",jpeg:"image/jpeg",png:"image/png",gif:"image/gif",webp:"image/webp",heic:"image/heic",heif:"image/heif",avif:"image/avif"};
+ let bytesExpected=0;
+ const checked=[];
  for(const photo of attachments){
-  let uri;try{uri=new URL(String(photo.url||""))}catch{return reply("An uploaded picture had an invalid URL.");}
+  let uri;try{uri=new URL(String(photo.url||""))}catch{return reply("One of the photos had an invalid upload URL.");}
+  const ext=String(photo.filename||"").split(".").pop().toLowerCase();
+  const type=String(photo.content_type||mimeForExt[ext]||"").toLowerCase();
+  const size=Number(photo.size||0);
   if(uri.protocol!=="https:"||!["cdn.discordapp.com","media.discordapp.net"].includes(uri.hostname)||
-    !String(photo.content_type||"").startsWith("image/")||Number(photo.size||0)>20*1024*1024)
-   return reply("Only pictures up to 20 MB each can be submitted.");
+    !allowedExt.has(ext)||!type.startsWith("image/")||!Number.isFinite(size)||size<=0||size>20*1024*1024)
+   return reply("Please select JPG, PNG, GIF, WebP, HEIC or AVIF pictures, each under 20 MB.");
+  bytesExpected+=size;
+  checked.push({url:String(photo.url),type,ext,size});
  }
- const names=introEscape(values.pet_names,140);
- const caption=introEscape(values.pet_caption,600);
- const total=attachments.length;
- let completed=0,firstId="";
- // Reupload into the pet channel; ephemeral modal attachment URLs must not be posted directly.
- for(let offset=0;offset<total;offset+=3){
-  const chunk=attachments.slice(offset,offset+3),form=new FormData(),listed=[];
-  for(let j=0;j<chunk.length;j++){
-   const photo=chunk[j];
-   let downloaded;
-   try{downloaded=await fetch(String(photo.url),{redirect:"error",signal:AbortSignal.timeout(20000)});}
-   catch(e){console.error("pet download",String(e));return reply("Posted "+completed+"/"+total+" photos. Another photo could not be downloaded. Please retry only the remaining ones.");}
-   if(!downloaded.ok)return reply("Posted "+completed+"/"+total+" photos. Discord couldn't retrieve the next photo.");
-   const bytes=await downloaded.arrayBuffer();
-   if(bytes.byteLength>20*1024*1024)return reply("A picture exceeded the 20 MB limit.");
-   const extension=String(photo.filename||"").split(".").pop().toLowerCase();
-   const ext=/^(jpe?g|png|gif|webp|heic|avif)$/.test(extension)?extension:"jpg";
-   const filename="pet-"+(offset+j+1)+"."+ext;
-   form.append("files["+j+"]",new Blob([bytes],{type:photo.content_type}),filename);
-   listed.push({id:j,filename});
-  }
-  const first=offset===0;
-  const payload={
-   content:"🐾 Pet photos from <@"+user.id+">"+(first?"!":" • more pictures"),
-   ...(first?{embeds:[{title:"🐾 Pet Spotlight",color:0xAC72D8,
-    description:(names?"**Meet "+names+"**\n\n":"")+(caption||"A little pet happiness for the crew!"),
-    footer:{text:"Shadow Syndicate • Pet Pictures"},timestamp:new Date().toISOString()}]}:{}),
-   attachments:listed,allowed_mentions:{parse:[],users:[String(user.id)]}
-  };
-  form.append("payload_json",JSON.stringify(payload));
-  let status,result;
-  try{
-   const response=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{
-    method:"POST",headers:{Authorization:"Bot "+env.DISCORD_BOT_TOKEN},body:form,signal:AbortSignal.timeout(25000)});
-   status=response.status;result=await response.json().catch(()=>null);
-  }catch(e){console.error("pet upload",String(e));return reply("Posted "+completed+"/"+total+" photos. The next batch failed; please retry the remaining pictures.");}
-  if(![200,201].includes(status)||!result?.id){
-   console.error("pet upload failed",status,JSON.stringify(result).slice(0,250));
-   return reply("Posted "+completed+"/"+total+" photos. Discord rejected the next batch.");
-  }
-  if(!firstId)firstId=String(result.id);
-  completed+=chunk.length;
+ // One Discord gallery keeps the caption and every picture together. Limit total
+ // request size to stay beneath Cloudflare Worker memory/runtime limits.
+ if(bytesExpected>45*1024*1024)return reply("Your pictures total more than 45 MB. Please share them in two smaller uploads so none get lost.");
+ const names=introEscape(values.pet_names,140),caption=introEscape(values.pet_caption,600);
+ let loaded;
+ try{
+  loaded=await Promise.all(checked.map(async(photo,index)=>{
+   const response=await fetch(photo.url,{redirect:"error",signal:AbortSignal.timeout(12000)});
+   if(!response.ok)throw Error("Photo "+(index+1)+" unavailable: HTTP "+response.status);
+   const body=await response.arrayBuffer();
+   if(body.byteLength>20*1024*1024||!body.byteLength)throw Error("Photo "+(index+1)+" invalid size");
+   return {body,type:photo.type,filename:"pet-photo-"+(index+1)+"."+photo.ext};
+  }));
+ }catch(e){
+  console.error("pet gallery downloads",String(e));
+  return reply("Discord couldn't retrieve every photo. Nothing was posted; please try the upload again.");
  }
- return reply("🐾 **All "+completed+" pet pictures were posted!**\nhttps://discord.com/channels/"+GUILD_ID+"/"+channel+"/"+firstId+"\nYour message and Discord tag are included.");
+ const form=new FormData(),fileRecords=[];
+ for(let index=0;index<loaded.length;index++){
+  const file=loaded[index];
+  form.append("files["+index+"]",new Blob([file.body],{type:file.type}),file.filename);
+  fileRecords.push({id:index,filename:file.filename});
+ }
+ const payload={
+  content:"🐾 Pet photos from <@"+user.id+">!",
+  embeds:[{title:"🐾 Meet the Pets",color:0xAC72D8,
+   description:(names?"**Meet "+names+"**\n\n":"")+(caption||"A little pet happiness for the crew!"),
+   footer:{text:"Shadow Syndicate • Pet Pictures • "+loaded.length+" photo"+(loaded.length===1?"":"s")},
+   timestamp:new Date().toISOString()}],
+  attachments:fileRecords,allowed_mentions:{parse:[],users:[String(user.id)]}
+ };
+ form.append("payload_json",JSON.stringify(payload));
+ try{
+  const response=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{
+   method:"POST",headers:{Authorization:"Bot "+env.DISCORD_BOT_TOKEN},body:form,
+   signal:AbortSignal.timeout(15000)});
+  const result=await response.json().catch(()=>null);
+  if(![200,201].includes(response.status)||!result?.id){
+   console.error("pet gallery rejected",response.status,JSON.stringify(result).slice(0,350));
+   return reply("Discord couldn't post the photo gallery ("+response.status+"). Nothing was confirmed as posted. Please try again.");
+  }
+  return reply("🐾 **All "+loaded.length+" photos were posted together!**\nhttps://discord.com/channels/"+GUILD_ID+"/"+channel+"/"+result.id+"\nYour caption and Discord tag are included.");
+ }catch(e){
+  console.error("pet gallery post",String(e));
+  return reply("Discord did not confirm the photo gallery. Please check #pet-pictures before retrying to avoid duplicate pictures.");
+ }
+}
+async function introStudioDiagnostics(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_intro_diagnostics(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL,details TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ const existing=await env.DB.prepare("SELECT updated_at FROM community_intro_diagnostics WHERE id=1").first();
+ if(existing&&Date.now()-Date.parse(existing.updated_at)<10*60*1000)return;
+ const read=async(key)=>(await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key=?").bind(key).first())?.value;
+ const panelId=await read("panel_id"),panelChannel=await read("panel_channel_id"),introChannel=await read("channel_id"),petChannel=await read("pet_channel_id");
+ const checks={};
+ const snowflake=s=>/^\d{15,22}$/.test(String(s||""));
+ if(snowflake(panelId)&&snowflake(panelChannel)){
+  const response=await discordApi(env,"/channels/"+panelChannel+"/messages/"+panelId);
+  checks.panel=response.status===200&&response.data?.author?.id===APPLICATION_ID&&
+    response.data?.components?.some(row=>row.components?.some(button=>button.custom_id==="intro_studio_open"))&&
+    response.data?.components?.some(row=>row.components?.some(button=>button.custom_id==="intro_pet_open"))? "ok":"HTTP "+response.status+" / incorrect panel";
+ }else checks.panel="not configured";
+ for(const [key,id] of [["introductions",introChannel],["pet_pictures",petChannel]]){
+  if(!snowflake(id)){checks[key]="not configured";continue;}
+  const r=await discordApi(env,"/channels/"+id);
+  checks[key]=r.status===200&&String(r.data?.guild_id)===String(GUILD_ID)?"ok":"HTTP "+r.status;
+ }
+ const introModalValid=INTRO_ORDER.every(key=>INTRO_SECTIONS[key].fields.length===5);
+ const petComponent=introPhotoModal().data?.components?.find(c=>c.component?.type===19)?.component;
+ checks.forms=introModalValid&&petComponent?.max_values===10&&petComponent?.file_types?.includes("image")?"ok":"invalid form configuration";
+ const status=Object.values(checks).every(x=>x==="ok")?"ready":"error";
+ await env.DB.prepare("INSERT INTO community_intro_diagnostics(id,status,details,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,details=excluded.details,updated_at=excluded.updated_at")
+  .bind(status,JSON.stringify(checks),new Date().toISOString()).run();
+ if(status!=="ready")console.error("intro studio diagnostics",JSON.stringify(checks));
 }
 
 
@@ -3647,6 +3685,7 @@ async scheduled(event,env,ctx){
   ctx.waitUntil((async()=>{await sendBirthdayAnnouncements(env);await upgradeBirthdayAnnouncementEmbeds(env)})().catch(e=>console.error("birthday scheduler",String(e))));
   ctx.waitUntil(ensureSuggestionsChannel(env).catch(e=>console.error("suggestions channel setup",String(e))));
   ctx.waitUntil(ensureCommunityIntroChannels(env).catch(e=>console.error("introductions setup",String(e))));
+  ctx.waitUntil(introStudioDiagnostics(env).catch(e=>console.error("introductions diagnostics",String(e))));
   ctx.waitUntil(memberJoinDiag(env,"scheduled","Cron handler ran").catch(()=>{}));
   ctx.waitUntil(ensureClubNightPollPreview(env).catch(e=>console.error("club night poll preview",String(e))));
   ctx.waitUntil(applyShadowRoleIcons(env).catch(e=>console.error("role icon setup",String(e))));
