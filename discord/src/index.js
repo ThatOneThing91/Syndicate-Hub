@@ -3292,26 +3292,52 @@ async function ensureCommunityIntroChannels(env){
   petPhotos=created.data;
  }
  await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('channel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(intro.id),new Date().toISOString()).run();
- const previous=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_id'").first();
- const panel={embeds:[{color:0x8B5CF6,title:"💜 Introduce Yourself",description:"Share as much or as little as you like. Your intro gets its own purple card, with clear sections for your answers.",fields:[
-  {name:"🪪 Name / nickname",value:"Required. This is what the crew should call you.",inline:false},
-  {name:"💬 Pronouns",value:"Optional.",inline:false},
-  {name:"🎮 Hobbies & top games",value:"Tell us what you enjoy playing or doing.",inline:false},
-  {name:"💜 Likes & favorites",value:"Share music, snacks, colors, or anything you love.",inline:false},
-  {name:"✨ Fun facts, pets & languages",value:"Optional: add lines like “Fun fact: …”, “Pets: …”, “From (country/region): …”, and “Languages: …”. Please keep location broad; no exact address.",inline:false},
-  {name:"🐾 Pet pictures",value:"Post pet photos any time in <#"+petPhotos.id+">!",inline:false},
-  {name:"🔒 Your choice",value:"Only your name/nickname is required. Skip anything you’d rather not share.",inline:false}
- ],footer:{text:"Shadow Syndicate • Introductions"}}],components:[{type:1,components:[{type:2,style:1,label:"💜 Fill out your intro",custom_id:"long_intro_open"}]}]};
- let posted;
- if(previous?.value){
-  const existing=await discordApi(env,"/channels/"+intro.id+"/messages/"+previous.value);
-  if(existing.status===200)posted=await discordApi(env,"/channels/"+intro.id+"/messages/"+previous.value,"PATCH",panel);
+
+ const rolesChannel=channels.find(c=>c.type===0&&(String(c.id)==="1564527127276290098"||normalizeIntroChannel(c.name)==="reaction-roles"));
+ if(!rolesChannel)throw Error("Reaction Roles not found; keeping the previous panel unchanged.");
+ const put=async(key,value)=>env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(key,String(value),new Date().toISOString()).run();
+ const oldPanel=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_id'").first();
+ const oldLocation=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_channel_id'").first();
+ const revision=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_revision'").first();
+ const currentRevision="intro-studio-20261118-v2";
+ await put("pet_channel_id",petPhotos.id);
+ const panel={embeds:[{
+  color:0x8555D9,author:{name:"SHADOW SYNDICATE • COMMUNITY"},
+  title:"💜 Your Story Starts Here",
+  description:"Everyone has a story, and this is where yours begins.\n\nBuild your own member spotlight, section by section. Talk about your favorite games, music, hobbies, personality, pets, and whatever else makes you **you**.\n\n**Save as you go. Preview before publishing. Edit whenever you want.**",
+  fields:[
+   {name:"🪪 About You",value:"Name, pronouns, a personal bio, broad location and languages.",inline:false},
+   {name:"🎮 Interests & Games",value:"Games, hobbies, music, movies, books and creative interests.",inline:false},
+   {name:"💖 Your Favorites",value:"Food, colors, fandoms, comforts and current obsessions.",inline:false},
+   {name:"✨ The Fun Stuff",value:"Fun facts, pets, talents, conversation starters and anything else.",inline:false},
+   {name:"🐾 Pet Gallery",value:"Upload up to ten pet pictures with a personal message. Your photos and tag go to <#"+petPhotos.id+">.",inline:false}
+  ],
+  footer:{text:"Only a name or nickname is required • Everything else is your choice"}
+ }],components:[{type:1,components:[
+  {type:2,style:1,label:"💜 Build My Introduction",custom_id:"intro_studio_open"},
+  {type:2,style:2,label:"🐾 Share Pet Photos",custom_id:"intro_pet_open"}
+ ]}],allowed_mentions:{parse:[]}};
+ let posted=null;
+ if(oldPanel?.value&&String(oldLocation?.value||"")===String(rolesChannel.id)){
+  const found=await discordApi(env,"/channels/"+rolesChannel.id+"/messages/"+oldPanel.value);
+  if(found.status===200&&found.data?.author?.id===APPLICATION_ID){
+   posted=revision?.value===currentRevision?{status:200,data:{id:oldPanel.value}}:
+    await discordApi(env,"/channels/"+rolesChannel.id+"/messages/"+oldPanel.value,"PATCH",panel);
+  }
  }
- if(!posted||posted.status===404){
-  posted=await discordApi(env,"/channels/"+intro.id+"/messages","POST",panel);
+ if(!posted||posted.status!==200||!posted.data?.id)posted=await discordApi(env,"/channels/"+rolesChannel.id+"/messages","POST",panel);
+ if(![200,201].includes(posted.status)||!posted.data?.id)throw Error("Introduction panel post HTTP "+posted.status);
+ await put("panel_channel_id",rolesChannel.id);
+ await put("panel_id",posted.data.id);
+ await put("panel_revision",currentRevision);
+ if(oldPanel?.value&&String(oldLocation?.value||intro.id)!==String(rolesChannel.id)){
+  const legacy=await discordApi(env,"/channels/"+intro.id+"/messages/"+oldPanel.value);
+  if(legacy.status===200&&legacy.data?.author?.id===APPLICATION_ID&&legacy.data.components?.some(row=>row.components?.some(b=>b.custom_id==="long_intro_open"))){
+   const removed=await discordApi(env,"/channels/"+intro.id+"/messages/"+oldPanel.value,"DELETE");
+   if(![200,204,404].includes(removed.status))console.error("Old introduction panel removal HTTP",removed.status);
+  }
  }
- if(posted.status!==200||!posted.data?.id)throw Error("Could not update introduction panel ("+posted.status+"): "+JSON.stringify(posted.data));
- await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('panel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(posted.data.id),new Date().toISOString()).run();
+
 }
 function longIntroModal(){
  const fields=[
