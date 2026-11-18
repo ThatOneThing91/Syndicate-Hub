@@ -3670,7 +3670,8 @@ async function introStudioDiagnostics(env){
   checks[key]=r.status===200&&String(r.data?.guild_id)===String(GUILD_ID)?"ok":"HTTP "+r.status;
  }
  const introModalValid=INTRO_ORDER.every(key=>INTRO_SECTIONS[key].fields.length===5);
- const petComponent=introPhotoModal().data?.components?.find(c=>c.component?.type===19)?.component;
+ const petPayload=await introPhotoModal().json();
+ const petComponent=petPayload.data?.components?.find(c=>c.component?.type===19)?.component;
  checks.forms=introModalValid&&petComponent?.max_values===10&&petComponent?.file_types?.includes("image")?"ok":"invalid form configuration";
  const status=Object.values(checks).every(x=>x==="ok")?"ready":"error";
  await env.DB.prepare("INSERT INTO community_intro_diagnostics(id,status,details,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,details=excluded.details,updated_at=excluded.updated_at")
