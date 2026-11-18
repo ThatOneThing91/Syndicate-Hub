@@ -3673,6 +3673,13 @@ async function introStudioDiagnostics(env){
  const petPayload=await introPhotoModal().json();
  const petComponent=petPayload.data?.components?.find(c=>c.component?.type===19)?.component;
  checks.forms=introModalValid&&petComponent?.max_values===10&&petComponent?.file_types?.includes("image")?"ok":"invalid form configuration";
+ const appResponse=await discordApi(env,"/applications/@me");
+ const liveApplication=appResponse.status===200?appResponse.data:null;
+ const endpointUrl=String(liveApplication?.interactions_endpoint_url||"");
+ const expectedHost="syndicate-discord.syndicate-hub.workers.dev";
+ checks.interaction_endpoint=appResponse.status===200
+   ?(endpointUrl.includes(expectedHost)&&endpointUrl.endsWith("/discord/interactions")?"ok":"configured to "+(endpointUrl||"(none)"))
+   :"Discord application lookup HTTP "+appResponse.status;
  const status=Object.values(checks).every(x=>x==="ok")?"ready":"error";
  await env.DB.prepare("INSERT INTO community_intro_diagnostics(id,status,details,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,details=excluded.details,updated_at=excluded.updated_at")
   .bind(status,JSON.stringify(checks),new Date().toISOString()).run();
