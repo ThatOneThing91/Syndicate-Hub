@@ -3652,8 +3652,8 @@ async function introPetSubmit(i,env){
 async function introStudioDiagnostics(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_intro_diagnostics(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL,details TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
- const existing=await env.DB.prepare("SELECT updated_at FROM community_intro_diagnostics WHERE id=1").first();
- if(existing&&Date.now()-Date.parse(existing.updated_at)<10*60*1000)return;
+ const existing=await env.DB.prepare("SELECT status,updated_at FROM community_intro_diagnostics WHERE id=1").first();
+ if(existing?.status==="ready"&&Date.now()-Date.parse(existing.updated_at)<10*60*1000)return;
  const read=async(key)=>(await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key=?").bind(key).first())?.value;
  const panelId=await read("panel_id"),panelChannel=await read("panel_channel_id"),introChannel=await read("channel_id"),petChannel=await read("pet_channel_id");
  const checks={};
