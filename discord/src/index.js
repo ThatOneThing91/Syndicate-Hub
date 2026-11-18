@@ -3292,26 +3292,52 @@ async function ensureCommunityIntroChannels(env){
   petPhotos=created.data;
  }
  await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('channel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(intro.id),new Date().toISOString()).run();
- const previous=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_id'").first();
- const panel={embeds:[{color:0x8B5CF6,title:"💜 Introduce Yourself",description:"Share as much or as little as you like. Your intro gets its own purple card, with clear sections for your answers.",fields:[
-  {name:"🪪 Name / nickname",value:"Required. This is what the crew should call you.",inline:false},
-  {name:"💬 Pronouns",value:"Optional.",inline:false},
-  {name:"🎮 Hobbies & top games",value:"Tell us what you enjoy playing or doing.",inline:false},
-  {name:"💜 Likes & favorites",value:"Share music, snacks, colors, or anything you love.",inline:false},
-  {name:"✨ Fun facts, pets & languages",value:"Optional: add lines like “Fun fact: …”, “Pets: …”, “From (country/region): …”, and “Languages: …”. Please keep location broad; no exact address.",inline:false},
-  {name:"🐾 Pet pictures",value:"Post pet photos any time in <#"+petPhotos.id+">!",inline:false},
-  {name:"🔒 Your choice",value:"Only your name/nickname is required. Skip anything you’d rather not share.",inline:false}
- ],footer:{text:"Shadow Syndicate • Introductions"}}],components:[{type:1,components:[{type:2,style:1,label:"💜 Fill out your intro",custom_id:"long_intro_open"}]}]};
- let posted;
- if(previous?.value){
-  const existing=await discordApi(env,"/channels/"+intro.id+"/messages/"+previous.value);
-  if(existing.status===200)posted=await discordApi(env,"/channels/"+intro.id+"/messages/"+previous.value,"PATCH",panel);
+
+ const rolesChannel=channels.find(c=>c.type===0&&(String(c.id)==="1564527127276290098"||normalizeIntroChannel(c.name)==="reaction-roles"));
+ if(!rolesChannel)throw Error("Reaction Roles not found; keeping the previous panel unchanged.");
+ const put=async(key,value)=>env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(key,String(value),new Date().toISOString()).run();
+ const oldPanel=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_id'").first();
+ const oldLocation=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_channel_id'").first();
+ const revision=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_revision'").first();
+ const currentRevision="intro-studio-20261118-v2";
+ await put("pet_channel_id",petPhotos.id);
+ const panel={embeds:[{
+  color:0x8555D9,author:{name:"SHADOW SYNDICATE • COMMUNITY"},
+  title:"💜 Your Story Starts Here",
+  description:"Everyone has a story, and this is where yours begins.\n\nBuild your own member spotlight, section by section. Talk about your favorite games, music, hobbies, personality, pets, and whatever else makes you **you**.\n\n**Save as you go. Preview before publishing. Edit whenever you want.**",
+  fields:[
+   {name:"🪪 About You",value:"Name, pronouns, a personal bio, broad location and languages.",inline:false},
+   {name:"🎮 Interests & Games",value:"Games, hobbies, music, movies, books and creative interests.",inline:false},
+   {name:"💖 Your Favorites",value:"Food, colors, fandoms, comforts and current obsessions.",inline:false},
+   {name:"✨ The Fun Stuff",value:"Fun facts, pets, talents, conversation starters and anything else.",inline:false},
+   {name:"🐾 Pet Gallery",value:"Upload up to ten pet pictures with a personal message. Your photos and tag go to <#"+petPhotos.id+">.",inline:false}
+  ],
+  footer:{text:"Only a name or nickname is required • Everything else is your choice"}
+ }],components:[{type:1,components:[
+  {type:2,style:1,label:"💜 Build My Introduction",custom_id:"intro_studio_open"},
+  {type:2,style:2,label:"🐾 Share Pet Photos",custom_id:"intro_pet_open"}
+ ]}],allowed_mentions:{parse:[]}};
+ let posted=null;
+ if(oldPanel?.value&&String(oldLocation?.value||"")===String(rolesChannel.id)){
+  const found=await discordApi(env,"/channels/"+rolesChannel.id+"/messages/"+oldPanel.value);
+  if(found.status===200&&found.data?.author?.id===APPLICATION_ID){
+   posted=revision?.value===currentRevision?{status:200,data:{id:oldPanel.value}}:
+    await discordApi(env,"/channels/"+rolesChannel.id+"/messages/"+oldPanel.value,"PATCH",panel);
+  }
  }
- if(!posted||posted.status===404){
-  posted=await discordApi(env,"/channels/"+intro.id+"/messages","POST",panel);
+ if(!posted||posted.status!==200||!posted.data?.id)posted=await discordApi(env,"/channels/"+rolesChannel.id+"/messages","POST",panel);
+ if(![200,201].includes(posted.status)||!posted.data?.id)throw Error("Introduction panel post HTTP "+posted.status);
+ await put("panel_channel_id",rolesChannel.id);
+ await put("panel_id",posted.data.id);
+ await put("panel_revision",currentRevision);
+ if(oldPanel?.value&&String(oldLocation?.value||intro.id)!==String(rolesChannel.id)){
+  const legacy=await discordApi(env,"/channels/"+intro.id+"/messages/"+oldPanel.value);
+  if(legacy.status===200&&legacy.data?.author?.id===APPLICATION_ID&&legacy.data.components?.some(row=>row.components?.some(b=>b.custom_id==="long_intro_open"))){
+   const removed=await discordApi(env,"/channels/"+intro.id+"/messages/"+oldPanel.value,"DELETE");
+   if(![200,204,404].includes(removed.status))console.error("Old introduction panel removal HTTP",removed.status);
+  }
  }
- if(posted.status!==200||!posted.data?.id)throw Error("Could not update introduction panel ("+posted.status+"): "+JSON.stringify(posted.data));
- await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('panel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(posted.data.id),new Date().toISOString()).run();
+
 }
 function longIntroModal(){
  const fields=[
@@ -3358,6 +3384,260 @@ async function submitLongIntro(i,env){
  const posted=await discordApi(env,"/channels/"+channelId+"/messages","POST",payload);
  if(posted.status!==200||!posted.data?.id)throw Error("Could not post introduction ("+posted.status+"): "+JSON.stringify(posted.data));
  return reply("Your intro is up in #introductions 💜");
+}
+
+
+
+// Introduction Studio — independent questions, private drafts and editable profiles.
+const INTRO_SECTIONS={
+ about:{title:"🪪 About Me",fields:[
+  ["name","Name or nickname","What should we call you?",true,80,1],
+  ["pronouns","Pronouns","Optional — only if you want to share.",false,80,1],
+  ["bio","Describe yourself","Tell everyone a little about yourself.",false,650,2],
+  ["region","Where you're from (broadly)","Country, state or region, not an address.",false,140,1],
+  ["languages","Languages you speak","Which languages do you know?",false,160,1]]},
+ interests:{title:"🎮 Interests & Games",fields:[
+  ["games","Favorite games","Roblox, other games, genres, anything!",false,320,2],
+  ["hobbies","Hobbies & pastimes","What do you love doing?",false,320,2],
+  ["music","Music & artists","Songs, artists, genres and playlists.",false,320,2],
+  ["watching","Movies, shows & books","Your favorites or recent discoveries.",false,320,2],
+  ["creative","Your creative side","Art, writing, building, sports, projects...",false,320,2]]},
+ favorites:{title:"💖 Favorites",fields:[
+  ["food","Favorite food & snacks","Something you could eat any day.",false,250,2],
+  ["colors","Colors & aesthetics","Your colors, styles or vibes.",false,250,2],
+  ["characters","Characters & fandoms","Favorite characters and communities.",false,250,2],
+  ["comfort","Little things you love","What makes your day better?",false,250,2],
+  ["current","Currently obsessed with","What are you enjoying lately?",false,250,2]]},
+ extras:{title:"✨ Fun Facts & Pets",fields:[
+  ["funfact","A fun fact about you","Something unexpected or memorable.",false,320,2],
+  ["pets","Your pets","Names, types and personalities.",false,320,2],
+  ["talent","Talents & quirks","Hidden talents or funny habits.",false,320,2],
+  ["askme","Ask me about...","A great conversation starter.",false,320,2],
+  ["anything","Anything else?","Make this introduction your own!",false,450,2]]}
+};
+const INTRO_ORDER=["about","interests","favorites","extras"];
+const INTRO_LABELS={
+ name:"🪪 Name / nickname",pronouns:"💬 Pronouns",bio:"📝 A little about me",region:"🌎 From",
+ languages:"🗣️ Languages",games:"🎮 Favorite games",hobbies:"🧩 Hobbies",music:"🎧 Music",
+ watching:"🎬 Movies, shows & books",creative:"🎨 Creative interests",
+ food:"🍿 Food & snacks",colors:"🎨 Colors & aesthetic",characters:"🌟 Characters & fandoms",
+ comfort:"🌷 Things I love",current:"⚡ Current obsession",funfact:"✨ Fun fact",
+ pets:"🐾 My pets",talent:"🌈 Talents & quirks",askme:"💬 Ask me about",anything:"💌 One more thing"
+};
+async function introTable(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_intro_drafts(user_id TEXT PRIMARY KEY,data TEXT NOT NULL DEFAULT '{}',post_id TEXT,post_hash TEXT,publish_lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
+}
+function introUser(i){return i.member?.user||i.user;}
+async function introDraft(env,userId){
+ await introTable(env);
+ const row=await env.DB.prepare("SELECT * FROM community_intro_drafts WHERE user_id=?").bind(userId).first();
+ let data={};try{data=JSON.parse(row?.data||"{}")}catch{}
+ return {row,data:data&&typeof data==="object"&&!Array.isArray(data)?data:{}};
+}
+function introButtons(){
+ return [
+  {type:1,components:[
+   {type:2,style:2,label:"🪪 About Me",custom_id:"intro_edit:about"},
+   {type:2,style:2,label:"🎮 Interests",custom_id:"intro_edit:interests"},
+   {type:2,style:2,label:"💖 Favorites",custom_id:"intro_edit:favorites"},
+   {type:2,style:2,label:"✨ Fun & Pets",custom_id:"intro_edit:extras"}]},
+  {type:1,components:[
+   {type:2,style:2,label:"👀 Preview",custom_id:"intro_preview"},
+   {type:2,style:3,label:"✅ Publish / Update",custom_id:"intro_publish"},
+   {type:2,style:4,label:"🗑 Reset Draft",custom_id:"intro_reset"},
+   {type:2,style:2,label:"🐾 Pet Photos",custom_id:"intro_pet_open"}]}
+ ];
+}
+function introReply(content,embeds=[]){
+ return discordResponse({type:4,data:{content,embeds,components:introButtons(),flags:64,allowed_mentions:{parse:[]}}});
+}
+function introEscape(value,max=230){
+ return String(value||"").trim().slice(0,max).replace(/@/g,"＠").replace(/([\\*_~\x60|>])/g,"\\$1");
+}
+function introEmbeds(user,data,preview=false){
+ const name=introEscape(data.name||"New Member",65);
+ const avatar=user?.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+".png?size=256":"https://cdn.discordapp.com/embed/avatars/0.png";
+ const layouts=[
+  {key:"about",title:"💜 Meet "+name,color:0x8955DD,description:"There's more to everyone than a username. Here's their story."},
+  {key:"interests",title:"🎮 Games, Hobbies & Creativity",color:0x7157C7,description:"A look at the worlds and activities they enjoy."},
+  {key:"favorites",title:"💖 A Few Favorite Things",color:0xB36AD0,description:"The little things that make them smile."},
+  {key:"extras",title:"✨ Beyond the Username",color:0x9066CF,description:"Fun facts, pets and conversation starters."}
+ ];
+ const output=[];
+ for(const layout of layouts){
+  const fields=INTRO_SECTIONS[layout.key].fields.filter(([id])=>String(data[id]||"").trim())
+   .map(([id])=>({name:INTRO_LABELS[id],value:introEscape(data[id],id==="bio"?390:195)||"—",inline:false}));
+  if(layout.key!=="about"&&!fields.length)continue;
+  output.push({title:layout.title,description:layout.description,color:layout.color,fields,
+   ...(layout.key==="about"?{
+     author:{name:preview?"INTRODUCTION PREVIEW":"SHADOW SYNDICATE  •  MEMBER INTRODUCTION",icon_url:avatar},
+     thumbnail:{url:avatar},
+     footer:{text:"💜 Say hello, find common interests and make a new friend!"},
+     timestamp:new Date().toISOString()
+    }:{})});
+ }
+ return output;
+}
+async function introModal(i,env,section){
+ const spec=INTRO_SECTIONS[section];if(!spec)return reply("This section is unavailable.");
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your account.");
+ const {data}=await introDraft(env,user.id);
+ const components=spec.fields.map(([id,label,required,placeholder,max,style])=>({
+  type:18,label,component:{type:4,custom_id:id,style,required,max_length:max,
+   min_length:required?1:0,placeholder,...(data[id]?{value:String(data[id]).slice(0,max)}:{})}
+ }));
+ return discordResponse({type:9,data:{custom_id:"intro_save:"+section,title:spec.title.slice(0,45),components}});
+}
+function introPhotoModal(){
+ return discordResponse({type:9,data:{custom_id:"intro_pet_submit",title:"🐾 Share Your Pet Photos",components:[
+  {type:18,label:"Pet names (optional)",component:{type:4,custom_id:"pet_names",style:1,required:false,max_length:140,placeholder:"Who are we looking at?"}},
+  {type:18,label:"Your message / photo caption",description:"Give your pictures a personal touch.",component:{type:4,custom_id:"pet_caption",style:2,required:false,max_length:650,placeholder:"Tell us about your pets or a funny story."}},
+  {type:18,label:"Upload pet photos",description:"Choose 1–10 pictures; all selected pictures will be posted.",
+   component:{type:19,custom_id:"pet_files",min_values:1,max_values:10,file_types:["image"],required:true}}
+ ]}});
+}
+function introValues(i){
+ const result={};
+ for(const item of i.data?.components||[]){
+  for(const child of [item.component,...(item.components||[])].filter(Boolean)){
+   if(child.custom_id&&typeof child.value==="string")result[child.custom_id]=child.value.trim();
+   else if(child.custom_id&&Array.isArray(child.values))result[child.custom_id]=child.values;
+  }
+ }
+ return result;
+}
+async function introHome(i,env){
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your Discord account.");
+ const {data,row}=await introDraft(env,user.id);
+ const progress=INTRO_ORDER.map(section=>{
+  const spec=INTRO_SECTIONS[section];
+  const count=spec.fields.filter(([id])=>String(data[id]||"").trim()).length;
+  return (count?"✅":"▫️")+" **"+spec.title+"** — "+count+" / "+spec.fields.length+" prompts";
+ }).join("\n");
+ return introReply("Welcome to your private introduction studio. Complete whichever sections you'd like, preview, and publish when you're ready.",[
+  {title:"💜 Your Introduction Studio",color:0x8955DD,
+   description:progress+"\n\n**Your answers save automatically between sections.** Everything except your name or nickname is optional.",
+   footer:{text:row?.post_id?"Already introduced? Publishing will edit your existing post.":"Preview your profile before sharing it with the server."}}
+ ]);
+}
+async function introSave(i,env,section){
+ const user=introUser(i),spec=INTRO_SECTIONS[section];
+ if(!user?.id||!spec)return reply("That section could not be saved.");
+ const vals=introValues(i),{data}=await introDraft(env,user.id);
+ for(const [id] of spec.fields)if(Object.prototype.hasOwnProperty.call(vals,id))data[id]=String(vals[id]||"").trim();
+ if(section==="about"&&!String(data.name||"").trim())return introReply("Add a name or nickname in the **About Me** section first.");
+ await env.DB.prepare("INSERT INTO community_intro_drafts(user_id,data,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at")
+  .bind(user.id,JSON.stringify(data),new Date().toISOString()).run();
+ return introReply("✅ **"+spec.title+"** saved! Continue with another section, or preview your profile.");
+}
+async function introPreview(i,env){
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your Discord account.");
+ const {data}=await introDraft(env,user.id);
+ if(!String(data.name||"").trim())return introReply("Start in **🪪 About Me** and add your name or nickname.");
+ return introReply("👀 **Only you can see this preview.** Edit any section or publish when you like the result.",introEmbeds(user,data,true));
+}
+async function introReset(i,env){
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your Discord account.");
+ await introTable(env);
+ await env.DB.prepare("UPDATE community_intro_drafts SET data='{}',updated_at=? WHERE user_id=?").bind(new Date().toISOString(),user.id).run();
+ return introReply("🗑 Your draft is cleared. Any introduction you've already published will stay in the channel.");
+}
+
+
+
+async function introPublish(i,env){
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your Discord account.");
+ const {row,data}=await introDraft(env,user.id);
+ if(!String(data.name||"").trim())return introReply("Please add a name or nickname in **🪪 About Me** first.");
+ const saved=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='channel_id'").first();
+ const channel=String(saved?.value||"");
+ if(!/^\d{15,22}$/.test(channel))return introReply("Introductions aren't configured yet. Please try again.");
+ const hash=JSON.stringify(data);
+ if(row?.post_id&&row.post_hash===hash)return introReply("💜 Your introduction is already published and up to date! Feel free to edit any section.");
+ // Prevent accidental duplicate posts from quick double-taps.
+ const lease=await env.DB.prepare("UPDATE community_intro_drafts SET publish_lease_until=? WHERE user_id=? AND publish_lease_until<?")
+  .bind(Date.now()+75000,user.id,Date.now()).run();
+ if(Number(lease.meta?.changes||0)!==1)return introReply("Your introduction is being published already. Check the channel in a moment.");
+ try{
+  const payload={content:"💜 <@"+user.id+"> shared their introduction!",
+   embeds:introEmbeds(user,data),allowed_mentions:{parse:[],users:[String(user.id)]}};
+  let sent=null;
+  if(row?.post_id){
+   sent=await discordApi(env,"/channels/"+channel+"/messages/"+row.post_id,"PATCH",payload);
+   if(sent.status===404)sent=null;
+  }
+  if(!sent)sent=await discordApi(env,"/channels/"+channel+"/messages","POST",payload);
+  if(![200,201].includes(sent.status)||!sent.data?.id)throw Error("Introduction post HTTP "+sent.status+" "+JSON.stringify(sent.data).slice(0,200));
+  await env.DB.prepare("UPDATE community_intro_drafts SET post_id=?,post_hash=?,publish_lease_until=0,updated_at=? WHERE user_id=?")
+   .bind(String(sent.data.id),hash,new Date().toISOString(),user.id).run();
+  return introReply("✅ **Introduction "+(row?.post_id&&row.post_id===sent.data.id?"updated":"published")+"!**\nhttps://discord.com/channels/"+GUILD_ID+"/"+channel+"/"+sent.data.id+"\n\nYou can update it without creating duplicates.");
+ }catch(e){
+  console.error("intro publish error",String(e));
+  await env.DB.prepare("UPDATE community_intro_drafts SET publish_lease_until=0 WHERE user_id=?").bind(user.id).run();
+  return introReply("Couldn't publish just now. Your draft is still saved — please try again.");
+ }
+}
+async function introPetSubmit(i,env){
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your Discord account.");
+ const saved=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='pet_channel_id'").first();
+ const channel=String(saved?.value||"");
+ if(!/^\d{15,22}$/.test(channel))return reply("Pet Pictures isn't configured yet.");
+ const values=introValues(i),ids=Array.isArray(values.pet_files)?values.pet_files:[];
+ const resolved=i.data?.resolved?.attachments||{};
+ if(ids.length<1||ids.length>10)return reply("Please select 1–10 pet pictures.");
+ const attachments=ids.map(id=>resolved[id]);
+ if(attachments.some(a=>!a))return reply("Discord didn't provide all of the selected photos. Try uploading again.");
+ // Validate Discord's temporary upload URLs rather than fetching arbitrary user-controlled URLs.
+ for(const photo of attachments){
+  let uri;try{uri=new URL(String(photo.url||""))}catch{return reply("An uploaded picture had an invalid URL.");}
+  if(uri.protocol!=="https:"||!["cdn.discordapp.com","media.discordapp.net"].includes(uri.hostname)||
+    !String(photo.content_type||"").startsWith("image/")||Number(photo.size||0)>20*1024*1024)
+   return reply("Only pictures up to 20 MB each can be submitted.");
+ }
+ const names=introEscape(values.pet_names,140);
+ const caption=introEscape(values.pet_caption,600);
+ const total=attachments.length;
+ let completed=0,firstId="";
+ // Reupload into the pet channel; ephemeral modal attachment URLs must not be posted directly.
+ for(let offset=0;offset<total;offset+=3){
+  const chunk=attachments.slice(offset,offset+3),form=new FormData(),listed=[];
+  for(let j=0;j<chunk.length;j++){
+   const photo=chunk[j];
+   let downloaded;
+   try{downloaded=await fetch(String(photo.url),{redirect:"error",signal:AbortSignal.timeout(20000)});}
+   catch(e){console.error("pet download",String(e));return reply("Posted "+completed+"/"+total+" photos. Another photo could not be downloaded. Please retry only the remaining ones.");}
+   if(!downloaded.ok)return reply("Posted "+completed+"/"+total+" photos. Discord couldn't retrieve the next photo.");
+   const bytes=await downloaded.arrayBuffer();
+   if(bytes.byteLength>20*1024*1024)return reply("A picture exceeded the 20 MB limit.");
+   const extension=String(photo.filename||"").split(".").pop().toLowerCase();
+   const ext=/^(jpe?g|png|gif|webp|heic|avif)$/.test(extension)?extension:"jpg";
+   const filename="pet-"+(offset+j+1)+"."+ext;
+   form.append("files["+j+"]",new Blob([bytes],{type:photo.content_type}),filename);
+   listed.push({id:j,filename});
+  }
+  const first=offset===0;
+  const payload={
+   content:"🐾 Pet photos from <@"+user.id+">"+(first?"!":" • more pictures"),
+   ...(first?{embeds:[{title:"🐾 Pet Spotlight",color:0xAC72D8,
+    description:(names?"**Meet "+names+"**\n\n":"")+(caption||"A little pet happiness for the crew!"),
+    footer:{text:"Shadow Syndicate • Pet Pictures"},timestamp:new Date().toISOString()}]}:{}),
+   attachments:listed,allowed_mentions:{parse:[],users:[String(user.id)]}
+  };
+  form.append("payload_json",JSON.stringify(payload));
+  let status,result;
+  try{
+   const response=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{
+    method:"POST",headers:{Authorization:"Bot "+env.DISCORD_BOT_TOKEN},body:form,signal:AbortSignal.timeout(25000)});
+   status=response.status;result=await response.json().catch(()=>null);
+  }catch(e){console.error("pet upload",String(e));return reply("Posted "+completed+"/"+total+" photos. The next batch failed; please retry the remaining pictures.");}
+  if(![200,201].includes(status)||!result?.id){
+   console.error("pet upload failed",status,JSON.stringify(result).slice(0,250));
+   return reply("Posted "+completed+"/"+total+" photos. Discord rejected the next batch.");
+  }
+  if(!firstId)firstId=String(result.id);
+  completed+=chunk.length;
+ }
+ return reply("🐾 **All "+completed+" pet pictures were posted!**\nhttps://discord.com/channels/"+GUILD_ID+"/"+channel+"/"+firstId+"\nYour message and Discord tag are included.");
 }
 
 
@@ -3458,7 +3738,14 @@ async scheduled(event,env,ctx){
   try {
    if(i.type===3&&i.data?.custom_id?.startsWith("birthday_celebrate:"))return delayedReply(i,env,ctx,()=>birthdayCelebrationInteraction(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("welcome_wave:"))return delayedReply(i,env,ctx,()=>welcomeWaveInteraction(i,env));
-   if(i.type===3&&i.data?.custom_id==="long_intro_open")return openLongIntro(i,env);
+   if(i.type===3&&["long_intro_open","intro_studio_open"].includes(i.data?.custom_id))return delayedReply(i,env,ctx,()=>introHome(i,env));
+   if(i.type===3&&i.data?.custom_id?.startsWith("intro_edit:"))return await introModal(i,env,i.data.custom_id.slice(11));
+   if(i.type===3&&i.data?.custom_id==="intro_pet_open")return introPhotoModal();
+   if(i.type===3&&i.data?.custom_id==="intro_preview")return delayedReply(i,env,ctx,()=>introPreview(i,env));
+   if(i.type===3&&i.data?.custom_id==="intro_publish")return delayedReply(i,env,ctx,()=>introPublish(i,env));
+   if(i.type===3&&i.data?.custom_id==="intro_reset")return delayedReply(i,env,ctx,()=>introReset(i,env));
+   if(i.type===5&&i.data?.custom_id?.startsWith("intro_save:"))return delayedReply(i,env,ctx,()=>introSave(i,env,i.data.custom_id.slice(11)));
+   if(i.type===5&&i.data?.custom_id==="intro_pet_submit")return delayedReply(i,env,ctx,()=>introPetSubmit(i,env));
    if(i.type===5&&i.data?.custom_id==="long_intro_submit")return delayedReply(i,env,ctx,()=>submitLongIntro(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_end:")){
     const eventId=String(i.data.custom_id.slice("club_event_end:".length));
