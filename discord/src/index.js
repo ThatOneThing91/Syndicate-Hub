@@ -3479,23 +3479,71 @@ function introEmbeds(user,data,preview=false){
  return output;
 }
 async function introModal(i,env,section){
- const spec=INTRO_SECTIONS[section];if(!spec)return reply("This section is unavailable.");
- const user=introUser(i);if(!user?.id)return reply("Could not identify your account.");
- // Showing a modal is the initial interaction response and cannot be deferred.
- // Keep the saved-value lookup bounded so an overloaded D1 request can't time out the button.
+ const spec=INTRO_SECTIONS[section];
+ if(!spec)return reply("That section is unavailable.");
+ const user=introUser(i);
+ if(!user?.id)return reply("Couldn't identify your Discord account.");
  let data={};
  try{
+  // This lookup is best-effort. Opening the modal must not depend on D1.
   const row=await Promise.race([
    env.DB.prepare("SELECT data FROM community_intro_drafts WHERE user_id=?").bind(user.id).first(),
-   new Promise(resolve=>setTimeout(()=>resolve(null),900))
+   new Promise(resolve=>setTimeout(()=>resolve(null),500))
   ]);
-  if(row?.data){const parsed=JSON.parse(row.data);if(parsed&&typeof parsed==="object"&&!Array.isArray(parsed))data=parsed;}
- }catch(e){console.error("intro prefill unavailable",String(e));}
+  if(row?.data){
+   const parsed=JSON.parse(row.data);
+   if(parsed&&typeof parsed==="object"&&!Array.isArray(parsed))data=parsed;
+  }
+ }catch(e){console.error("intro modal prefill",String(e));}
+ // Compatible action-row text inputs, as in the previous working introduction form.
  const components=spec.fields.map(([id,label,required,placeholder,max,style])=>({
-  type:18,label,component:{type:4,custom_id:id,style,required,max_length:max,
-   min_length:required?1:0,placeholder,...(data[id]?{value:String(data[id]).slice(0,max)}:{})}
+  type:1,components:[{type:4,custom_id:id,label,style,required,max_length:max,
+   ...(required?{min_length:1}:{}),placeholder,
+   ...(typeof data[id]==="string"&&data[id]?{value:data[id].slice(0,max)}:{})}]
  }));
  return discordResponse({type:9,data:{custom_id:"intro_save:"+section,title:spec.title.slice(0,45),components}});
+}
+// Acknowledge instantly, then edit that same private response after background work.
+// Unlike a deferred callback, this produces an immediate visible response on Discord mobile.
+function introQueuedWork(i,env,ctx,work,progress){
+ const acknowledge=introReply("⏳ "+progress);
+ ctx.waitUntil((async()=>{
+  let result;
+  try{result=await work();}
+  catch(e){console.error("intro job",String(e));result=reply("I couldn't finish that action. Your saved information was not intentionally changed.");}
+  let data={content:"The action ended without a response."};
+  try{
+   const body=result instanceof Response?await result.json():result;
+   if(body?.data)data=body.data;
+  }catch(e){console.error("intro job parse",String(e));}
+  const response={
+   content:typeof data.content==="string"?data.content:"Done.",
+   embeds:Array.isArray(data.embeds)?data.embeds:[],
+   components:Array.isArray(data.components)?data.components:[],
+   allowed_mentions:{parse:[]}
+  };
+  try{
+   const r=await fetch("https://discord.com/api/v10/webhooks/"+APPLICATION_ID+"/"+i.token+"/messages/@original",{
+    method:"PATCH",headers:{"content-type":"application/json"},
+    body:JSON.stringify(response),signal:AbortSignal.timeout(9000)
+   });
+   if(!r.ok)console.error("intro response update HTTP",r.status,(await r.text()).slice(0,400));
+  }catch(e){console.error("intro response update failed",String(e));}
+ })());
+ return acknowledge;
+}
+function introPetLauncher(){
+ const petChannel="1572097271401680936";
+ return discordResponse({type:4,data:{
+  flags:64,allowed_mentions:{parse:[]},
+  embeds:[{color:0xAC72D8,title:"🐾 Share Your Pet Pictures",
+   description:"Show off your pets with up to **10 photos** and a message of your own. The bot will post your gallery in <#"+petChannel+"> and tag you.\n\n**Tap Upload Photos below** to select pictures and add a caption. If Discord mobile can't open the upload form, you can still post pictures directly in the pet channel.",
+   footer:{text:"Shadow Syndicate • Pet Gallery"}}],
+  components:[{type:1,components:[
+   {type:2,style:1,label:"📸 Upload Photos",custom_id:"intro_pet_upload"},
+   {type:2,style:5,label:"🐾 Open Pet Pictures",url:"https://discord.com/channels/"+GUILD_ID+"/"+petChannel}
+  ]}]
+ }});
 }
 function introPhotoModal(){
  return discordResponse({type:9,data:{custom_id:"intro_pet_submit",title:"🐾 Share Your Pet Photos",components:[
@@ -3758,28 +3806,49 @@ async scheduled(event,env,ctx){
   let i;try{i=JSON.parse(raw)}catch{return new Response("Invalid JSON",{status:400})}
   if(i.type===1)return new Response(JSON.stringify({type:1}),{headers:{"content-type":"application/json"}});
   if(![2,3,4,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
-  // Introduction Studio buttons are handled before unrelated role/premium setup.
-  // Initial UI responses are synchronous: no database or webhook round trip.
+  // Route all Introduction Studio interactions before unrelated premium/role work.
   const introAction=String(i.data?.custom_id||"");
-  if((i.type===3||i.type===5) && (/^intro_(?:studio_open|pet_open|edit:|preview$|publish$|reset$|save:|pet_submit$)/.test(introAction))){
+  if((i.type===3||i.type===5) &&
+    /^(?:intro_studio_open|intro_pet_open|intro_pet_upload|intro_edit:(?:about|interests|favorites|extras)|intro_preview|intro_publish|intro_reset|intro_save:(?:about|interests|favorites|extras)|intro_pet_submit)$/.test(introAction)){
+   const started=Date.now();
+   let response;
+   try{
+    if(i.type===3&&introAction==="intro_studio_open"){
+     response=introReply(
+      "💜 **Welcome to your Introduction Studio!** Choose a section below to begin. Save your answers privately, preview, and publish whenever you're ready.",
+      [{title:"✨ Your Story, Your Way",color:0x8955DD,
+        description:"**🪪 About Me** — name, bio, pronouns, region and languages\n**🎮 Interests** — games, hobbies, music and more\n**💖 Favorites** — food, colors, fandoms and obsessions\n**✨ Fun & Pets** — fun facts, talents, pets and conversation starters\n\n**Only your name or nickname is required.** You can update your post later.",
+        footer:{text:"Shadow Syndicate • Private introduction workspace"}}]
+     );
+    }else if(i.type===3&&introAction==="intro_pet_open"){
+     response=introPetLauncher();
+    }else if(i.type===3&&introAction==="intro_pet_upload"){
+     response=introPhotoModal();
+    }else if(i.type===3&&introAction.startsWith("intro_edit:")){
+     response=await introModal(i,env,introAction.slice("intro_edit:".length));
+    }else if(i.type===3&&introAction==="intro_preview"){
+     response=introQueuedWork(i,env,ctx,()=>introPreview(i,env),"Preparing your private preview…");
+    }else if(i.type===3&&introAction==="intro_publish"){
+     response=introQueuedWork(i,env,ctx,()=>introPublish(i,env),"Publishing or updating your introduction…");
+    }else if(i.type===3&&introAction==="intro_reset"){
+     response=introQueuedWork(i,env,ctx,()=>introReset(i,env),"Clearing your draft…");
+    }else if(i.type===5&&introAction.startsWith("intro_save:")){
+     response=introQueuedWork(i,env,ctx,()=>introSave(i,env,introAction.slice("intro_save:".length)),"Saving your answers…");
+    }else if(i.type===5&&introAction==="intro_pet_submit"){
+     response=introQueuedWork(i,env,ctx,()=>introPetSubmit(i,env),"Posting your pet gallery…");
+    }else response=reply("Use the Introduction Studio buttons to continue.");
+   }catch(e){
+    console.error("intro interaction",introAction,String(e));
+    response=reply("The introduction form couldn't open. Please try that section once more.");
+   }
+   // Store the initial callback type and execution time to pinpoint remaining failures.
    if(env.DB)ctx.waitUntil((async()=>{
-    await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_intro_button_events(id INTEGER PRIMARY KEY AUTOINCREMENT,custom_id TEXT NOT NULL,interaction_type INTEGER NOT NULL,received_at TEXT NOT NULL)").run();
-    await env.DB.prepare("INSERT INTO community_intro_button_events(custom_id,interaction_type,received_at) VALUES(?,?,?)")
-     .bind(introAction.slice(0,90),i.type,new Date().toISOString()).run();
-   })().catch(e=>console.error("intro button audit",String(e))));
-   if(i.type===3&&introAction==="intro_studio_open")return introReply(
-    "💜 **Welcome to your Introduction Studio!** Pick a section below to start. Your answers are saved privately until you publish, and you can return to edit your introduction whenever you like.",
-    [{title:"✨ Make Your Introduction Yours",color:0x8955DD,
-      description:"**🪪 About Me** — bio, name, pronouns, region & languages\n**🎮 Interests** — games, hobbies, music & more\n**💖 Favorites** — food, colors, fandoms & obsessions\n**✨ Fun & Pets** — fun facts, pets, talents & conversation starters\n\n**Only your name or nickname is required.** Once you have some answers, tap **👀 Preview** and **✅ Publish / Update**.",
-      footer:{text:"Shadow Syndicate • Your private introduction workspace"}}]
-   );
-   if(i.type===3&&introAction==="intro_pet_open")return introPhotoModal();
-   if(i.type===3&&introAction.startsWith("intro_edit:"))return await introModal(i,env,introAction.slice("intro_edit:".length));
-   if(i.type===3&&introAction==="intro_preview")return delayedReply(i,env,ctx,()=>introPreview(i,env));
-   if(i.type===3&&introAction==="intro_publish")return delayedReply(i,env,ctx,()=>introPublish(i,env));
-   if(i.type===3&&introAction==="intro_reset")return delayedReply(i,env,ctx,()=>introReset(i,env));
-   if(i.type===5&&introAction.startsWith("intro_save:"))return delayedReply(i,env,ctx,()=>introSave(i,env,introAction.slice("intro_save:".length)));
-   if(i.type===5&&introAction==="intro_pet_submit")return delayedReply(i,env,ctx,()=>introPetSubmit(i,env));
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_intro_button_results(id INTEGER PRIMARY KEY AUTOINCREMENT,custom_id TEXT NOT NULL,interaction_type INTEGER NOT NULL,response_type INTEGER,elapsed_ms INTEGER,created_at TEXT NOT NULL)").run();
+    let kind=null;try{kind=(await response.clone().json())?.type??null}catch{}
+    await env.DB.prepare("INSERT INTO community_intro_button_results(custom_id,interaction_type,response_type,elapsed_ms,created_at) VALUES(?,?,?,?,?)")
+     .bind(introAction.slice(0,90),i.type,kind,Date.now()-started,new Date().toISOString()).run();
+   })().catch(e=>console.error("intro result audit",String(e))));
+   return response;
   }
   if(i.type===4){if(i.data?.name==="role")return roleAutocomplete(i,env);return autocompleteResponse();}
   if(i.type===2){
