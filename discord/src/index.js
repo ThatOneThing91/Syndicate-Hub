@@ -3689,6 +3689,9 @@ async function introStudioDiagnostics(env){
  checks.interaction_endpoint=appResponse.status===200
    ?(endpointUrl.includes(expectedHost)&&endpointUrl.endsWith("/discord/interactions")?"ok":"configured to "+(endpointUrl||"(none)"))
    :"Discord application lookup HTTP "+appResponse.status;
+ checks.signing_key=liveApplication?.verify_key
+   ?(String(liveApplication.verify_key).toLowerCase()===String(PUBLIC_KEY).toLowerCase()?"ok":"mismatch")
+   :"verify_key unavailable (HTTP "+appResponse.status+")";
  const status=Object.values(checks).every(x=>x==="ok")?"ready":"error";
  await env.DB.prepare("INSERT INTO community_intro_diagnostics(id,status,details,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,details=excluded.details,updated_at=excluded.updated_at")
   .bind(status,JSON.stringify(checks),new Date().toISOString()).run();
