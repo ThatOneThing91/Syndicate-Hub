@@ -3481,7 +3481,16 @@ function introEmbeds(user,data,preview=false){
 async function introModal(i,env,section){
  const spec=INTRO_SECTIONS[section];if(!spec)return reply("This section is unavailable.");
  const user=introUser(i);if(!user?.id)return reply("Could not identify your account.");
- const {data}=await introDraft(env,user.id);
+ // Showing a modal is the initial interaction response and cannot be deferred.
+ // Keep the saved-value lookup bounded so an overloaded D1 request can't time out the button.
+ let data={};
+ try{
+  const row=await Promise.race([
+   env.DB.prepare("SELECT data FROM community_intro_drafts WHERE user_id=?").bind(user.id).first(),
+   new Promise(resolve=>setTimeout(()=>resolve(null),900))
+  ]);
+  if(row?.data){const parsed=JSON.parse(row.data);if(parsed&&typeof parsed==="object"&&!Array.isArray(parsed))data=parsed;}
+ }catch(e){console.error("intro prefill unavailable",String(e));}
  const components=spec.fields.map(([id,label,required,placeholder,max,style])=>({
   type:18,label,component:{type:4,custom_id:id,style,required,max_length:max,
    min_length:required?1:0,placeholder,...(data[id]?{value:String(data[id]).slice(0,max)}:{})}
@@ -3746,6 +3755,29 @@ async scheduled(event,env,ctx){
   let i;try{i=JSON.parse(raw)}catch{return new Response("Invalid JSON",{status:400})}
   if(i.type===1)return new Response(JSON.stringify({type:1}),{headers:{"content-type":"application/json"}});
   if(![2,3,4,5].includes(i.type)||i.guild_id!==GUILD_ID)return reply("This bot is only available in the Syndicate Hub server.");
+  // Introduction Studio buttons are handled before unrelated role/premium setup.
+  // Initial UI responses are synchronous: no database or webhook round trip.
+  const introAction=String(i.data?.custom_id||"");
+  if((i.type===3||i.type===5) && (/^intro_(?:studio_open|pet_open|edit:|preview$|publish$|reset$|save:|pet_submit$)/.test(introAction))){
+   if(env.DB)ctx.waitUntil((async()=>{
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_intro_button_events(id INTEGER PRIMARY KEY AUTOINCREMENT,custom_id TEXT NOT NULL,interaction_type INTEGER NOT NULL,received_at TEXT NOT NULL)").run();
+    await env.DB.prepare("INSERT INTO community_intro_button_events(custom_id,interaction_type,received_at) VALUES(?,?,?)")
+     .bind(introAction.slice(0,90),i.type,new Date().toISOString()).run();
+   })().catch(e=>console.error("intro button audit",String(e))));
+   if(i.type===3&&introAction==="intro_studio_open")return introReply(
+    "💜 **Welcome to your Introduction Studio!** Pick a section below to start. Your answers are saved privately until you publish, and you can return to edit your introduction whenever you like.",
+    [{title:"✨ Make Your Introduction Yours",color:0x8955DD,
+      description:"**🪪 About Me** — bio, name, pronouns, region & languages\n**🎮 Interests** — games, hobbies, music & more\n**💖 Favorites** — food, colors, fandoms & obsessions\n**✨ Fun & Pets** — fun facts, pets, talents & conversation starters\n\n**Only your name or nickname is required.** Once you have some answers, tap **👀 Preview** and **✅ Publish / Update**.",
+      footer:{text:"Shadow Syndicate • Your private introduction workspace"}}]
+   );
+   if(i.type===3&&introAction==="intro_pet_open")return introPhotoModal();
+   if(i.type===3&&introAction.startsWith("intro_edit:"))return await introModal(i,env,introAction.slice("intro_edit:".length));
+   if(i.type===3&&introAction==="intro_preview")return delayedReply(i,env,ctx,()=>introPreview(i,env));
+   if(i.type===3&&introAction==="intro_publish")return delayedReply(i,env,ctx,()=>introPublish(i,env));
+   if(i.type===3&&introAction==="intro_reset")return delayedReply(i,env,ctx,()=>introReset(i,env));
+   if(i.type===5&&introAction.startsWith("intro_save:"))return delayedReply(i,env,ctx,()=>introSave(i,env,introAction.slice("intro_save:".length)));
+   if(i.type===5&&introAction==="intro_pet_submit")return delayedReply(i,env,ctx,()=>introPetSubmit(i,env));
+  }
   if(i.type===4){if(i.data?.name==="role")return roleAutocomplete(i,env);return autocompleteResponse();}
   if(i.type===2){
    if(i.data?.name==="birthday")return delayedReply(i,env,ctx,()=>birthdayLookupCommand(i,env));
