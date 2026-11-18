@@ -3478,11 +3478,13 @@ function introEmbeds(user,data,preview=false){
  }
  return output;
 }
-function introModal(section){
+async function introModal(i,env,section){
  const spec=INTRO_SECTIONS[section];if(!spec)return reply("This section is unavailable.");
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your account.");
+ const {data}=await introDraft(env,user.id);
  const components=spec.fields.map(([id,label,required,placeholder,max,style])=>({
   type:18,label,component:{type:4,custom_id:id,style,required,max_length:max,
-   min_length:required?1:0,placeholder}
+   min_length:required?1:0,placeholder,...(data[id]?{value:String(data[id]).slice(0,max)}:{})}
  }));
  return discordResponse({type:9,data:{custom_id:"intro_save:"+section,title:spec.title.slice(0,45),components}});
 }
@@ -3539,6 +3541,103 @@ async function introReset(i,env){
  await introTable(env);
  await env.DB.prepare("UPDATE community_intro_drafts SET data='{}',updated_at=? WHERE user_id=?").bind(new Date().toISOString(),user.id).run();
  return introReply("🗑 Your draft is cleared. Any introduction you've already published will stay in the channel.");
+}
+
+
+
+async function introPublish(i,env){
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your Discord account.");
+ const {row,data}=await introDraft(env,user.id);
+ if(!String(data.name||"").trim())return introReply("Please add a name or nickname in **🪪 About Me** first.");
+ const saved=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='channel_id'").first();
+ const channel=String(saved?.value||"");
+ if(!/^\d{15,22}$/.test(channel))return introReply("Introductions aren't configured yet. Please try again.");
+ const hash=JSON.stringify(data);
+ if(row?.post_id&&row.post_hash===hash)return introReply("💜 Your introduction is already published and up to date! Feel free to edit any section.");
+ // Prevent accidental duplicate posts from quick double-taps.
+ const lease=await env.DB.prepare("UPDATE community_intro_drafts SET publish_lease_until=? WHERE user_id=? AND publish_lease_until<?")
+  .bind(Date.now()+75000,user.id,Date.now()).run();
+ if(Number(lease.meta?.changes||0)!==1)return introReply("Your introduction is being published already. Check the channel in a moment.");
+ try{
+  const payload={content:"💜 <@"+user.id+"> shared their introduction!",
+   embeds:introEmbeds(user,data),allowed_mentions:{parse:[],users:[String(user.id)]}};
+  let sent=null;
+  if(row?.post_id){
+   sent=await discordApi(env,"/channels/"+channel+"/messages/"+row.post_id,"PATCH",payload);
+   if(sent.status===404)sent=null;
+  }
+  if(!sent)sent=await discordApi(env,"/channels/"+channel+"/messages","POST",payload);
+  if(![200,201].includes(sent.status)||!sent.data?.id)throw Error("Introduction post HTTP "+sent.status+" "+JSON.stringify(sent.data).slice(0,200));
+  await env.DB.prepare("UPDATE community_intro_drafts SET post_id=?,post_hash=?,publish_lease_until=0,updated_at=? WHERE user_id=?")
+   .bind(String(sent.data.id),hash,new Date().toISOString(),user.id).run();
+  return introReply("✅ **Introduction "+(row?.post_id&&row.post_id===sent.data.id?"updated":"published")+"!**\nhttps://discord.com/channels/"+GUILD_ID+"/"+channel+"/"+sent.data.id+"\n\nYou can update it without creating duplicates.");
+ }catch(e){
+  console.error("intro publish error",String(e));
+  await env.DB.prepare("UPDATE community_intro_drafts SET publish_lease_until=0 WHERE user_id=?").bind(user.id).run();
+  return introReply("Couldn't publish just now. Your draft is still saved — please try again.");
+ }
+}
+async function introPetSubmit(i,env){
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your Discord account.");
+ const saved=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='pet_channel_id'").first();
+ const channel=String(saved?.value||"");
+ if(!/^\d{15,22}$/.test(channel))return reply("Pet Pictures isn't configured yet.");
+ const values=introValues(i),ids=Array.isArray(values.pet_files)?values.pet_files:[];
+ const resolved=i.data?.resolved?.attachments||{};
+ if(ids.length<1||ids.length>10)return reply("Please select 1–10 pet pictures.");
+ const attachments=ids.map(id=>resolved[id]);
+ if(attachments.some(a=>!a))return reply("Discord didn't provide all of the selected photos. Try uploading again.");
+ // Validate Discord's temporary upload URLs rather than fetching arbitrary user-controlled URLs.
+ for(const photo of attachments){
+  let uri;try{uri=new URL(String(photo.url||""))}catch{return reply("An uploaded picture had an invalid URL.");}
+  if(uri.protocol!=="https:"||!["cdn.discordapp.com","media.discordapp.net"].includes(uri.hostname)||
+    !String(photo.content_type||"").startsWith("image/")||Number(photo.size||0)>20*1024*1024)
+   return reply("Only pictures up to 20 MB each can be submitted.");
+ }
+ const names=introEscape(values.pet_names,140);
+ const caption=introEscape(values.pet_caption,600);
+ const total=attachments.length;
+ let completed=0,firstId="";
+ // Reupload into the pet channel; ephemeral modal attachment URLs must not be posted directly.
+ for(let offset=0;offset<total;offset+=3){
+  const chunk=attachments.slice(offset,offset+3),form=new FormData(),listed=[];
+  for(let j=0;j<chunk.length;j++){
+   const photo=chunk[j];
+   let downloaded;
+   try{downloaded=await fetch(String(photo.url),{redirect:"error",signal:AbortSignal.timeout(20000)});}
+   catch(e){console.error("pet download",String(e));return reply("Posted "+completed+"/"+total+" photos. Another photo could not be downloaded. Please retry only the remaining ones.");}
+   if(!downloaded.ok)return reply("Posted "+completed+"/"+total+" photos. Discord couldn't retrieve the next photo.");
+   const bytes=await downloaded.arrayBuffer();
+   if(bytes.byteLength>20*1024*1024)return reply("A picture exceeded the 20 MB limit.");
+   const extension=String(photo.filename||"").split(".").pop().toLowerCase();
+   const ext=/^(jpe?g|png|gif|webp|heic|avif)$/.test(extension)?extension:"jpg";
+   const filename="pet-"+(offset+j+1)+"."+ext;
+   form.append("files["+j+"]",new Blob([bytes],{type:photo.content_type}),filename);
+   listed.push({id:j,filename});
+  }
+  const first=offset===0;
+  const payload={
+   content:"🐾 Pet photos from <@"+user.id+">"+(first?"!":" • more pictures"),
+   ...(first?{embeds:[{title:"🐾 Pet Spotlight",color:0xAC72D8,
+    description:(names?"**Meet "+names+"**\n\n":"")+(caption||"A little pet happiness for the crew!"),
+    footer:{text:"Shadow Syndicate • Pet Pictures"},timestamp:new Date().toISOString()}]}:{}),
+   attachments:listed,allowed_mentions:{parse:[],users:[String(user.id)]}
+  };
+  form.append("payload_json",JSON.stringify(payload));
+  let status,result;
+  try{
+   const response=await fetch("https://discord.com/api/v10/channels/"+channel+"/messages",{
+    method:"POST",headers:{Authorization:"Bot "+env.DISCORD_BOT_TOKEN},body:form,signal:AbortSignal.timeout(25000)});
+   status=response.status;result=await response.json().catch(()=>null);
+  }catch(e){console.error("pet upload",String(e));return reply("Posted "+completed+"/"+total+" photos. The next batch failed; please retry the remaining pictures.");}
+  if(![200,201].includes(status)||!result?.id){
+   console.error("pet upload failed",status,JSON.stringify(result).slice(0,250));
+   return reply("Posted "+completed+"/"+total+" photos. Discord rejected the next batch.");
+  }
+  if(!firstId)firstId=String(result.id);
+  completed+=chunk.length;
+ }
+ return reply("🐾 **All "+completed+" pet pictures were posted!**\nhttps://discord.com/channels/"+GUILD_ID+"/"+channel+"/"+firstId+"\nYour message and Discord tag are included.");
 }
 
 
@@ -3639,7 +3738,14 @@ async scheduled(event,env,ctx){
   try {
    if(i.type===3&&i.data?.custom_id?.startsWith("birthday_celebrate:"))return delayedReply(i,env,ctx,()=>birthdayCelebrationInteraction(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("welcome_wave:"))return delayedReply(i,env,ctx,()=>welcomeWaveInteraction(i,env));
-   if(i.type===3&&i.data?.custom_id==="long_intro_open")return openLongIntro(i,env);
+   if(i.type===3&&["long_intro_open","intro_studio_open"].includes(i.data?.custom_id))return delayedReply(i,env,ctx,()=>introHome(i,env));
+   if(i.type===3&&i.data?.custom_id?.startsWith("intro_edit:"))return await introModal(i,env,i.data.custom_id.slice(11));
+   if(i.type===3&&i.data?.custom_id==="intro_pet_open")return introPhotoModal();
+   if(i.type===3&&i.data?.custom_id==="intro_preview")return delayedReply(i,env,ctx,()=>introPreview(i,env));
+   if(i.type===3&&i.data?.custom_id==="intro_publish")return delayedReply(i,env,ctx,()=>introPublish(i,env));
+   if(i.type===3&&i.data?.custom_id==="intro_reset")return delayedReply(i,env,ctx,()=>introReset(i,env));
+   if(i.type===5&&i.data?.custom_id?.startsWith("intro_save:"))return delayedReply(i,env,ctx,()=>introSave(i,env,i.data.custom_id.slice(11)));
+   if(i.type===5&&i.data?.custom_id==="intro_pet_submit")return delayedReply(i,env,ctx,()=>introPetSubmit(i,env));
    if(i.type===5&&i.data?.custom_id==="long_intro_submit")return delayedReply(i,env,ctx,()=>submitLongIntro(i,env));
    if(i.type===3&&i.data?.custom_id?.startsWith("club_event_end:")){
     const eventId=String(i.data.custom_id.slice("club_event_end:".length));
