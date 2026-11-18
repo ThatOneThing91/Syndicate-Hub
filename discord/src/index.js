@@ -3387,6 +3387,161 @@ async function submitLongIntro(i,env){
 }
 
 
+
+// Introduction Studio — independent questions, private drafts and editable profiles.
+const INTRO_SECTIONS={
+ about:{title:"🪪 About Me",fields:[
+  ["name","Name or nickname","What should we call you?",true,80,1],
+  ["pronouns","Pronouns","Optional — only if you want to share.",false,80,1],
+  ["bio","Describe yourself","Tell everyone a little about yourself.",false,650,2],
+  ["region","Where you're from (broadly)","Country, state or region, not an address.",false,140,1],
+  ["languages","Languages you speak","Which languages do you know?",false,160,1]]},
+ interests:{title:"🎮 Interests & Games",fields:[
+  ["games","Favorite games","Roblox, other games, genres, anything!",false,320,2],
+  ["hobbies","Hobbies & pastimes","What do you love doing?",false,320,2],
+  ["music","Music & artists","Songs, artists, genres and playlists.",false,320,2],
+  ["watching","Movies, shows & books","Your favorites or recent discoveries.",false,320,2],
+  ["creative","Your creative side","Art, writing, building, sports, projects...",false,320,2]]},
+ favorites:{title:"💖 Favorites",fields:[
+  ["food","Favorite food & snacks","Something you could eat any day.",false,250,2],
+  ["colors","Colors & aesthetics","Your colors, styles or vibes.",false,250,2],
+  ["characters","Characters & fandoms","Favorite characters and communities.",false,250,2],
+  ["comfort","Little things you love","What makes your day better?",false,250,2],
+  ["current","Currently obsessed with","What are you enjoying lately?",false,250,2]]},
+ extras:{title:"✨ Fun Facts & Pets",fields:[
+  ["funfact","A fun fact about you","Something unexpected or memorable.",false,320,2],
+  ["pets","Your pets","Names, types and personalities.",false,320,2],
+  ["talent","Talents & quirks","Hidden talents or funny habits.",false,320,2],
+  ["askme","Ask me about...","A great conversation starter.",false,320,2],
+  ["anything","Anything else?","Make this introduction your own!",false,450,2]]}
+};
+const INTRO_ORDER=["about","interests","favorites","extras"];
+const INTRO_LABELS={
+ name:"🪪 Name / nickname",pronouns:"💬 Pronouns",bio:"📝 A little about me",region:"🌎 From",
+ languages:"🗣️ Languages",games:"🎮 Favorite games",hobbies:"🧩 Hobbies",music:"🎧 Music",
+ watching:"🎬 Movies, shows & books",creative:"🎨 Creative interests",
+ food:"🍿 Food & snacks",colors:"🎨 Colors & aesthetic",characters:"🌟 Characters & fandoms",
+ comfort:"🌷 Things I love",current:"⚡ Current obsession",funfact:"✨ Fun fact",
+ pets:"🐾 My pets",talent:"🌈 Talents & quirks",askme:"💬 Ask me about",anything:"💌 One more thing"
+};
+async function introTable(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_intro_drafts(user_id TEXT PRIMARY KEY,data TEXT NOT NULL DEFAULT '{}',post_id TEXT,post_hash TEXT,publish_lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
+}
+function introUser(i){return i.member?.user||i.user;}
+async function introDraft(env,userId){
+ await introTable(env);
+ const row=await env.DB.prepare("SELECT * FROM community_intro_drafts WHERE user_id=?").bind(userId).first();
+ let data={};try{data=JSON.parse(row?.data||"{}")}catch{}
+ return {row,data:data&&typeof data==="object"&&!Array.isArray(data)?data:{}};
+}
+function introButtons(){
+ return [
+  {type:1,components:[
+   {type:2,style:2,label:"🪪 About Me",custom_id:"intro_edit:about"},
+   {type:2,style:2,label:"🎮 Interests",custom_id:"intro_edit:interests"},
+   {type:2,style:2,label:"💖 Favorites",custom_id:"intro_edit:favorites"},
+   {type:2,style:2,label:"✨ Fun & Pets",custom_id:"intro_edit:extras"}]},
+  {type:1,components:[
+   {type:2,style:2,label:"👀 Preview",custom_id:"intro_preview"},
+   {type:2,style:3,label:"✅ Publish / Update",custom_id:"intro_publish"},
+   {type:2,style:4,label:"🗑 Reset Draft",custom_id:"intro_reset"},
+   {type:2,style:2,label:"🐾 Pet Photos",custom_id:"intro_pet_open"}]}
+ ];
+}
+function introReply(content,embeds=[]){
+ return discordResponse({type:4,data:{content,embeds,components:introButtons(),flags:64,allowed_mentions:{parse:[]}}});
+}
+function introEscape(value,max=230){
+ return String(value||"").trim().slice(0,max).replace(/@/g,"＠").replace(/([\\*_~\x60|>])/g,"\\$1");
+}
+function introEmbeds(user,data,preview=false){
+ const name=introEscape(data.name||"New Member",65);
+ const avatar=user?.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+".png?size=256":"https://cdn.discordapp.com/embed/avatars/0.png";
+ const layouts=[
+  {key:"about",title:"💜 Meet "+name,color:0x8955DD,description:"There's more to everyone than a username. Here's their story."},
+  {key:"interests",title:"🎮 Games, Hobbies & Creativity",color:0x7157C7,description:"A look at the worlds and activities they enjoy."},
+  {key:"favorites",title:"💖 A Few Favorite Things",color:0xB36AD0,description:"The little things that make them smile."},
+  {key:"extras",title:"✨ Beyond the Username",color:0x9066CF,description:"Fun facts, pets and conversation starters."}
+ ];
+ const output=[];
+ for(const layout of layouts){
+  const fields=INTRO_SECTIONS[layout.key].fields.filter(([id])=>String(data[id]||"").trim())
+   .map(([id])=>({name:INTRO_LABELS[id],value:introEscape(data[id],id==="bio"?390:195)||"—",inline:false}));
+  if(layout.key!=="about"&&!fields.length)continue;
+  output.push({title:layout.title,description:layout.description,color:layout.color,fields,
+   ...(layout.key==="about"?{
+     author:{name:preview?"INTRODUCTION PREVIEW":"SHADOW SYNDICATE  •  MEMBER INTRODUCTION",icon_url:avatar},
+     thumbnail:{url:avatar},
+     footer:{text:"💜 Say hello, find common interests and make a new friend!"},
+     timestamp:new Date().toISOString()
+    }:{})});
+ }
+ return output;
+}
+function introModal(section){
+ const spec=INTRO_SECTIONS[section];if(!spec)return reply("This section is unavailable.");
+ const components=spec.fields.map(([id,label,required,placeholder,max,style])=>({
+  type:18,label,component:{type:4,custom_id:id,style,required,max_length:max,
+   min_length:required?1:0,placeholder}
+ }));
+ return discordResponse({type:9,data:{custom_id:"intro_save:"+section,title:spec.title.slice(0,45),components}});
+}
+function introPhotoModal(){
+ return discordResponse({type:9,data:{custom_id:"intro_pet_submit",title:"🐾 Share Your Pet Photos",components:[
+  {type:18,label:"Pet names (optional)",component:{type:4,custom_id:"pet_names",style:1,required:false,max_length:140,placeholder:"Who are we looking at?"}},
+  {type:18,label:"Your message / photo caption",description:"Give your pictures a personal touch.",component:{type:4,custom_id:"pet_caption",style:2,required:false,max_length:650,placeholder:"Tell us about your pets or a funny story."}},
+  {type:18,label:"Upload pet photos",description:"Choose 1–10 pictures; all selected pictures will be posted.",
+   component:{type:19,custom_id:"pet_files",min_values:1,max_values:10,file_types:["image"],required:true}}
+ ]}});
+}
+function introValues(i){
+ const result={};
+ for(const item of i.data?.components||[]){
+  for(const child of [item.component,...(item.components||[])].filter(Boolean)){
+   if(child.custom_id&&typeof child.value==="string")result[child.custom_id]=child.value.trim();
+   else if(child.custom_id&&Array.isArray(child.values))result[child.custom_id]=child.values;
+  }
+ }
+ return result;
+}
+async function introHome(i,env){
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your Discord account.");
+ const {data,row}=await introDraft(env,user.id);
+ const progress=INTRO_ORDER.map(section=>{
+  const spec=INTRO_SECTIONS[section];
+  const count=spec.fields.filter(([id])=>String(data[id]||"").trim()).length;
+  return (count?"✅":"▫️")+" **"+spec.title+"** — "+count+" / "+spec.fields.length+" prompts";
+ }).join("\n");
+ return introReply("Welcome to your private introduction studio. Complete whichever sections you'd like, preview, and publish when you're ready.",[
+  {title:"💜 Your Introduction Studio",color:0x8955DD,
+   description:progress+"\n\n**Your answers save automatically between sections.** Everything except your name or nickname is optional.",
+   footer:{text:row?.post_id?"Already introduced? Publishing will edit your existing post.":"Preview your profile before sharing it with the server."}}
+ ]);
+}
+async function introSave(i,env,section){
+ const user=introUser(i),spec=INTRO_SECTIONS[section];
+ if(!user?.id||!spec)return reply("That section could not be saved.");
+ const vals=introValues(i),{data}=await introDraft(env,user.id);
+ for(const [id] of spec.fields)if(Object.prototype.hasOwnProperty.call(vals,id))data[id]=String(vals[id]||"").trim();
+ if(section==="about"&&!String(data.name||"").trim())return introReply("Add a name or nickname in the **About Me** section first.");
+ await env.DB.prepare("INSERT INTO community_intro_drafts(user_id,data,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at")
+  .bind(user.id,JSON.stringify(data),new Date().toISOString()).run();
+ return introReply("✅ **"+spec.title+"** saved! Continue with another section, or preview your profile.");
+}
+async function introPreview(i,env){
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your Discord account.");
+ const {data}=await introDraft(env,user.id);
+ if(!String(data.name||"").trim())return introReply("Start in **🪪 About Me** and add your name or nickname.");
+ return introReply("👀 **Only you can see this preview.** Edit any section or publish when you like the result.",introEmbeds(user,data,true));
+}
+async function introReset(i,env){
+ const user=introUser(i);if(!user?.id)return reply("Could not identify your Discord account.");
+ await introTable(env);
+ await env.DB.prepare("UPDATE community_intro_drafts SET data='{}',updated_at=? WHERE user_id=?").bind(new Date().toISOString(),user.id).run();
+ return introReply("🗑 Your draft is cleared. Any introduction you've already published will stay in the channel.");
+}
+
+
 export default {
 async scheduled(event,env,ctx){
   if(!env.DISCORD_BOT_TOKEN)return;
