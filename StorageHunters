@@ -7502,7 +7502,7 @@ local __parts={
 "W1ccMRpPVW8ca25zbmR2eR07hI2Ifj5Sa4t1cF6Fa42DiXt4nYBvNJKol4Oaio+iTj8dV6eaS6ObmrNfd4e1sqGioVeqsqGaSb++wq/GrI7Ju6esi8O5t8a1xtiYqrjR5cqww7+EmWxytN/t1dDTiNng4NHJ8Oqp",
 "yOHm2+jkzYX9+Ovro+7g8u/fmPoQ/+sC8vcKtqeb5hsF5v4GCRD87rT9FhMDBxMDFvP2+xofJuYhDxwxHhEB4CwrGOPVGTYetAw5NvHJ"
 }
-local __data=table.concat(__parts))
+local __data=table.concat(__parts)
 __parts=nil
 local __alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 local __lookup={}
