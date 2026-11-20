@@ -902,7 +902,11 @@ const ROBLOX_ACHIEVEMENT_ROLES = Object.freeze([
 
 
 const LINK_ROBLOX_COMMAND = Object.freeze({
- name:"link-roblox",description:"Link your Roblox account for badge and gamepass roles",type:1,dm_permission:false
+ name:"link-roblox",
+ description:"Check public Roblox inventory for badge/gamepass roles; ownership is not verified",
+ type:1,
+ dm_permission:false,
+ options:[{type:3,name:"username_or_id",description:"Username or ID for public inventory; blank starts Roblox sign-in for private inventory",required:false}]
 });
 const UNLINK_ROBLOX_COMMAND = Object.freeze({
  name:"unlink-roblox",description:"Unlink Roblox and remove your achievement roles",type:1,dm_permission:false
@@ -2011,6 +2015,7 @@ async function ensureMemberIdRole(env,discordId,robloxId){
 async function ensureRobloxLinkTables(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_link_states(state TEXT PRIMARY KEY,discord_user_id TEXT NOT NULL,code_verifier TEXT NOT NULL,expires_at TEXT NOT NULL,created_at TEXT NOT NULL)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_discord_links(discord_user_id TEXT PRIMARY KEY,roblox_user_id TEXT NOT NULL UNIQUE,roblox_username TEXT NOT NULL,refresh_cipher TEXT NOT NULL,refresh_iv TEXT NOT NULL,original_nickname TEXT,next_sync_at TEXT NOT NULL,sync_started_at TEXT,sync_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_public_links(discord_user_id TEXT PRIMARY KEY,roblox_user_id TEXT NOT NULL,roblox_username TEXT NOT NULL,original_nickname TEXT,next_sync_at TEXT NOT NULL,sync_started_at TEXT,sync_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
 }
 function randomBase64Url(length){
  const bytes=crypto.getRandomValues(new Uint8Array(length));
@@ -2056,6 +2061,8 @@ async function beginRobloxLink(i,env){
  await ensureRobloxLinkTables(env);
  const existing=await env.DB.prepare("SELECT roblox_username FROM roblox_discord_links WHERE discord_user_id=?").bind(did).first();
  if(existing)return reply("Your Discord account is already linked to Roblox username "+String(existing.roblox_username).replace(/[*_~|]/g,"")+". Use /unlink-roblox before linking another account.");
+ const publicExisting=await env.DB.prepare("SELECT roblox_username FROM roblox_public_links WHERE discord_user_id=?").bind(did).first();
+ if(publicExisting)return reply("Your Discord account is already linked to Roblox username "+String(publicExisting.roblox_username).replace(/[*_~|]/g,"")+". Use /unlink-roblox before linking another account.");
  const config=robloxOAuthConfig(env);
  if(!config.clientId||!config.clientSecret)return reply("Roblox account linking is not configured yet. The server owner needs to register the Roblox OAuth app and add its client ID and secret to the Syndicate Discord Worker.");
  const state=randomBase64Url(32),verifier=randomBase64Url(48);
@@ -2088,7 +2095,7 @@ function robloxHtmlPage(title,message,status=200){
  const html="<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>"+safe(title)+"</title><style>body{margin:0;background:#18121f;color:#f7f2ff;font:16px system-ui;display:grid;min-height:100vh;place-items:center}.card{max-width:560px;margin:24px;padding:28px;border:1px solid #60447a;border-radius:18px;background:#241b2c;box-shadow:0 12px 40px #0007}h1{color:#c7a7ee;margin-top:0}p{line-height:1.6}</style></head><body><main class=\"card\"><h1>"+safe(title)+"</h1><p>"+safe(message)+"</p><p>You can close this tab and return to Discord.</p></main></body></html>";
  return new Response(html,{status,headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","content-security-policy":"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"}});
 }
-async function robloxInventoryOwnership(accessToken,robloxUserId){
+async function robloxInventoryOwnership(accessToken,robloxUserId,useApiKey=false){
  const badgeIds=ROBLOX_ACHIEVEMENT_ROLES.filter(x=>x.kind==="badge").map(x=>x.source_id);
  const passIds=ROBLOX_ACHIEVEMENT_ROLES.filter(x=>x.kind==="gamepass").map(x=>x.source_id);
  const targetIds=new Set([...badgeIds,...passIds]);
@@ -2098,9 +2105,13 @@ async function robloxInventoryOwnership(accessToken,robloxUserId){
  const owned=new Set();let pageToken="";
  for(let page=0;page<5;page++){
   if(pageToken)url.searchParams.set("pageToken",pageToken);
-  const response=await fetch(url.toString(),{headers:{Authorization:"Bearer "+accessToken},signal:AbortSignal.timeout(15000)});
+  const headers=useApiKey?{"x-api-key":String(accessToken)}:{Authorization:"Bearer "+String(accessToken)};
+  const response=await fetch(url.toString(),{headers,signal:AbortSignal.timeout(15000)});
   const data=await response.json().catch(()=>null);
-  if(!response.ok||!Array.isArray(data?.inventoryItems))throw Error("Roblox inventory read failed (HTTP "+response.status+"). Confirm the inventory permission was approved.");
+  if(!response.ok||!Array.isArray(data?.inventoryItems)){
+   if(useApiKey&&(response.status===401||response.status===403))throw Error("Roblox did not allow access to this account's inventory (HTTP "+response.status+"). It may be private. Leave the username blank and use the Roblox approval flow, or make the inventory visible to everyone.");
+   throw Error("Roblox inventory read failed (HTTP "+response.status+"). Confirm the inventory permission was approved.");
+  }
   for(const item of data.inventoryItems){
    const candidates=[
     item?.assetDetails?.assetId,item?.badgeDetails?.badgeId,item?.badgeDetails?.id,
@@ -2114,11 +2125,11 @@ async function robloxInventoryOwnership(accessToken,robloxUserId){
  }
  return owned;
 }
-async function syncRobloxMember(env,link,accessToken){
+async function syncRobloxMember(env,link,accessToken,useApiKey=false){
  const discordId=String(link.discord_user_id),robloxId=String(link.roblox_user_id),username=String(link.roblox_username);
  const member=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId);
  if(member.status!==200)throw Error("Discord member lookup failed (HTTP "+member.status+").");
- const owned=await robloxInventoryOwnership(accessToken,robloxId);
+ const owned=await robloxInventoryOwnership(accessToken,robloxId,useApiKey);
  const catalog=await env.DB.prepare("SELECT role_key,kind,source_id,role_id FROM roblox_achievement_role_catalog").all();
  const byKey=new Map((catalog.results||[]).map(x=>[x.role_key,x]));
  let added=0,removed=0;
@@ -2144,6 +2155,55 @@ async function syncRobloxMember(env,link,accessToken){
   else nicknameError="Nickname update could not be applied (HTTP "+changed.status+"); achievement role checks succeeded.";
  }
  return {owned:owned.size,added,removed,nicknameUpdated,nicknameError};
+}
+async function resolveRobloxProfileByInput(input){
+ const profile=await resolveRobloxAccount(input);
+ if(!profile)throw Error("That Roblox username or user ID could not be found.");
+ if(profile.name)return {id:String(profile.id),username:String(profile.name)};
+ const response=await fetch("https://users.roblox.com/v1/users/"+encodeURIComponent(profile.id),{signal:AbortSignal.timeout(15000)});
+ const data=await response.json().catch(()=>null);
+ if(!response.ok||!data?.id||!data?.name)throw Error("That Roblox user ID could not be found.");
+ return {id:String(data.id),username:String(data.name)};
+}
+async function beginRobloxPublicLink(i,env,accountInput){
+ const did=String(i.member?.user?.id||i.user?.id||"");
+ if(!did)return reply("I couldn't identify your Discord account.");
+ if(!env.DB)return reply("The Roblox account-link service is not configured.");
+ if(!env.ROBLOX_OPEN_CLOUD_API_KEY)return reply("Username linking needs one server-side setup: add the Roblox Open Cloud API key as the ROBLOX_OPEN_CLOUD_API_KEY secret on the Syndicate Discord Worker. Members won't need to sign in. Until then, leave the username blank to use the existing Roblox approval flow.");
+ await ensureRobloxLinkTables(env);
+ await ensureRobloxAchievementRoles(env);
+ const setup=await env.DB.prepare("SELECT status,completed,total FROM roblox_achievement_role_setup WHERE id=1").first();
+ if(setup?.status!=="ready")return reply("The badge and gamepass roles are still being prepared ("+Number(setup?.completed||0)+"/"+Number(setup?.total||ROBLOX_ACHIEVEMENT_ROLES.length)+"). Try /link-roblox again shortly.");
+ let account;
+ try{account=await resolveRobloxProfileByInput(accountInput)}catch(e){return reply("I could not resolve that Roblox username or ID. "+String(e).slice(0,300))}
+ const existingOAuth=await env.DB.prepare("SELECT roblox_user_id,roblox_username FROM roblox_discord_links WHERE discord_user_id=?").bind(did).first();
+ if(existingOAuth){
+  if(String(existingOAuth.roblox_user_id)===account.id)return reply("This Roblox account is already linked and its badge/gamepass roles refresh automatically.");
+  return reply("A different Roblox account is already linked. Use /unlink-roblox before linking another one.");
+ }
+ const otherOAuth=await env.DB.prepare("SELECT discord_user_id FROM roblox_discord_links WHERE roblox_user_id=?").bind(account.id).first();
+ if(otherOAuth)return reply("That Roblox account is already linked through Roblox approval. Contact an administrator if this is your account.");
+ let link=await env.DB.prepare("SELECT roblox_user_id,roblox_username,original_nickname FROM roblox_public_links WHERE discord_user_id=?").bind(did).first();
+ if(link&&String(link.roblox_user_id)!==account.id)return reply("A different Roblox account is already linked. Use /unlink-roblox before linking another one.");
+ const member=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+did);
+ if(member.status!==200)return reply("I couldn't find your Discord membership in Shadow Syndicate.");
+ const stamp=new Date().toISOString(),newLink=!link;
+ if(newLink){
+  link={discord_user_id:did,roblox_user_id:account.id,roblox_username:account.username,original_nickname:member.data.nick??null};
+  await env.DB.prepare("INSERT INTO roblox_public_links(discord_user_id,roblox_user_id,roblox_username,original_nickname,next_sync_at,sync_started_at,sync_error,created_at,updated_at) VALUES(?,?,?,?,?,NULL,NULL,?,?)")
+   .bind(did,account.id,account.username,link.original_nickname,new Date(Date.now()+15*60*1000).toISOString(),stamp,stamp).run();
+ }
+ const active={discord_user_id:did,roblox_user_id:account.id,roblox_username:account.username};
+ try{
+  const result=await syncRobloxMember(env,active,env.ROBLOX_OPEN_CLOUD_API_KEY,true);
+  const next=new Date(Date.now()+15*60*1000).toISOString();
+  await env.DB.prepare("UPDATE roblox_public_links SET roblox_username=?,next_sync_at=?,sync_started_at=NULL,sync_error=NULL,updated_at=? WHERE discord_user_id=?").bind(account.username,next,new Date().toISOString(),did).run();
+  const nick=result.nicknameUpdated?" Your Discord nickname is now "+account.username+".":result.nicknameError?" Badge and gamepass checks worked, but Discord blocked the nickname update.":"";
+  return reply("Linked public Roblox profile **"+account.username+"** (ID "+account.id+"). The bot found "+result.owned+" matching badge/gamepass item(s), added "+result.added+" role(s), and removed "+result.removed+" role(s). Roles refresh about every 15 minutes."+nick+" This lookup does not verify that you own this profile. If its inventory is private, leave the username blank and use Roblox approval.");
+ }catch(e){
+  if(newLink)await env.DB.prepare("DELETE FROM roblox_public_links WHERE discord_user_id=? AND roblox_user_id=?").bind(did,account.id).run();
+  return reply("I couldn't check that Roblox account. "+String(e).slice(0,500)+" If its inventory is private, leave the username blank and use Roblox approval.");
+ }
 }
 async function robloxOAuthCallback(request,env){
  if(!env.DB)return robloxHtmlPage("Setup unavailable","The account-link service is not configured.",503);
@@ -2205,7 +2265,8 @@ async function unlinkRobloxAccount(i,env){
  if(!did)return reply("I couldn't identify your Discord account.");
  await ensureRobloxLinkTables(env);
  const link=await env.DB.prepare("SELECT roblox_user_id,roblox_username,refresh_cipher,refresh_iv,original_nickname FROM roblox_discord_links WHERE discord_user_id=?").bind(did).first();
- if(!link)return reply("There is no Roblox account linked to your Discord account.");
+ const publicLink=await env.DB.prepare("SELECT roblox_user_id,roblox_username,original_nickname FROM roblox_public_links WHERE discord_user_id=?").bind(did).first();
+ if(!link&&!publicLink)return reply("There is no Roblox account linked to your Discord account.");
  const catalog=await env.DB.prepare("SELECT role_id FROM roblox_achievement_role_catalog").all();
  const member=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+did);
  if(member.status===200){
@@ -2214,15 +2275,19 @@ async function unlinkRobloxAccount(i,env){
    const removed=await discordRoleMembershipApi(env,"/guilds/"+GUILD_ID+"/members/"+did+"/roles/"+row.role_id,"DELETE");
    if(removed.status!==204)console.error("Roblox unlink role removal",removed.status,row.role_id);
   }
-  const restored=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+did,"PATCH",{nick:link.original_nickname||null});
+  const originalNickname=link?link.original_nickname:publicLink.original_nickname;
+  const restored=await discordApi(env,"/guilds/"+GUILD_ID+"/members/"+did,"PATCH",{nick:originalNickname||null});
   if(restored.status!==200)console.error("Roblox unlink nickname restore",restored.status);
  }
- try{
-  const refresh=await decryptRobloxRefreshToken(env,link.refresh_cipher,link.refresh_iv);
-  const config=robloxOAuthConfig(env);
-  await fetch("https://apis.roblox.com/oauth/v1/token/revoke",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({token:refresh,client_id:config.clientId,client_secret:config.clientSecret}).toString()});
- }catch(e){console.error("Roblox token revoke",String(e))}
+ if(link?.refresh_cipher&&link?.refresh_iv){
+  try{
+   const refresh=await decryptRobloxRefreshToken(env,link.refresh_cipher,link.refresh_iv);
+   const config=robloxOAuthConfig(env);
+   await fetch("https://apis.roblox.com/oauth/v1/token/revoke",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({token:refresh,client_id:config.clientId,client_secret:config.clientSecret}).toString()});
+  }catch(e){console.error("Roblox token revoke",String(e))}
+ }
  await env.DB.prepare("DELETE FROM roblox_discord_links WHERE discord_user_id=?").bind(did).run();
+ await env.DB.prepare("DELETE FROM roblox_public_links WHERE discord_user_id=?").bind(did).run();
  return reply("Your Roblox account was unlinked. Achievement roles were removed, and your previous Discord nickname was restored.");
 }
 async function syncLinkedRobloxAccounts(env){
@@ -2248,6 +2313,33 @@ async function syncLinkedRobloxAccounts(env){
    const next=new Date(Date.now()+30*60*1000).toISOString();
    await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=?,sync_started_at=NULL,sync_error=?,updated_at=? WHERE discord_user_id=?").bind(next,String(e).slice(0,500),new Date().toISOString(),row.discord_user_id).run();
    console.error("Roblox automatic sync",row.discord_user_id,String(e));
+  }
+ }
+}
+async function syncPublicRobloxAccounts(env){
+ if(!env.DB||!env.ROBLOX_OPEN_CLOUD_API_KEY)return;
+ await ensureRobloxLinkTables(env);
+ const setup=await env.DB.prepare("SELECT status FROM roblox_achievement_role_setup WHERE id=1").first();
+ if(setup?.status!=="ready")return;
+ const now=Date.now(),stamp=new Date(now).toISOString();
+ const rows=await env.DB.prepare("SELECT discord_user_id,roblox_user_id,roblox_username FROM roblox_public_links WHERE next_sync_at<=? AND (sync_started_at IS NULL OR sync_started_at<=?) ORDER BY next_sync_at LIMIT 5")
+  .bind(stamp,new Date(now-10*60*1000).toISOString()).all();
+ for(const row of rows.results||[]){
+  const claim=await env.DB.prepare("UPDATE roblox_public_links SET sync_started_at=?,updated_at=? WHERE discord_user_id=? AND next_sync_at<=? AND (sync_started_at IS NULL OR sync_started_at<=?)")
+   .bind(stamp,stamp,row.discord_user_id,stamp,new Date(now-10*60*1000).toISOString()).run();
+  if(!claim.meta?.changes)continue;
+  try{
+   const profile=await resolveRobloxProfileByInput(String(row.roblox_user_id));
+   const link={...row,roblox_username:profile.username};
+   const result=await syncRobloxMember(env,link,env.ROBLOX_OPEN_CLOUD_API_KEY,true);
+   const next=new Date(Date.now()+15*60*1000).toISOString();
+   await env.DB.prepare("UPDATE roblox_public_links SET roblox_username=?,next_sync_at=?,sync_started_at=NULL,sync_error=?,updated_at=? WHERE discord_user_id=?")
+    .bind(profile.username,next,result.nicknameError,new Date().toISOString(),row.discord_user_id).run();
+  }catch(e){
+   const next=new Date(Date.now()+30*60*1000).toISOString();
+   await env.DB.prepare("UPDATE roblox_public_links SET next_sync_at=?,sync_started_at=NULL,sync_error=?,updated_at=? WHERE discord_user_id=?")
+    .bind(next,String(e).slice(0,500),new Date().toISOString(),row.discord_user_id).run();
+   console.error("Roblox public inventory sync",row.discord_user_id,String(e));
   }
  }
 }
@@ -2868,7 +2960,7 @@ async function ensureBetaHubAccess(env) {
 
 
 async function ensurePremiumChannelAndRemoveCommands(env) {
- const revision="premium-only-buttons-v14-birthday-command";
+ const revision="premium-only-buttons-v15-roblox-username-link";
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS premium_channel_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,backup TEXT,details TEXT,last_error TEXT,lease_until INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO premium_channel_setup(id,revision,status,updated_at) VALUES(1,?,'pending',?)").bind(revision,new Date().toISOString()).run();
  const claim=await env.DB.prepare("UPDATE premium_channel_setup SET lease_until=? WHERE id=1 AND (revision!=? OR status!='ready') AND lease_until<=?").bind(Date.now()+180000,revision,Date.now()).run();
@@ -3760,6 +3852,7 @@ async scheduled(event,env,ctx){
   ctx.waitUntil(ensureRobloxAchievementRoles(env).catch(e=>console.error("Roblox role catalog",String(e))));
 
   ctx.waitUntil(syncLinkedRobloxAccounts(env).catch(e=>console.error("Roblox account sync",String(e))));
+  ctx.waitUntil(syncPublicRobloxAccounts(env).catch(e=>console.error("Roblox public account sync",String(e))));
   ctx.waitUntil(flushShadowMemberLeaveNotifications(env).catch(e=>console.error("member leave notifications",String(e))));
   ctx.waitUntil(ensureShadowLeaveTestMessage(env).catch(e=>console.error("member leave test message",String(e))));
   // Native Discord welcome is authoritative; don't edit legacy custom welcome embeds.
@@ -3859,7 +3952,10 @@ async scheduled(event,env,ctx){
    if(i.data?.name==="close")return delayedReply(i,env,ctx,()=>deletePremiumTicket(i,env));
    if(i.data?.name==="verified")return delayedReply(i,env,ctx,()=>verifyTicketMember(i,env),false);
    if(i.data?.name==="payment")return delayedReply(i,env,ctx,()=>sendPremiumPaymentLink(i,env));
-   if(i.data?.name==="link-roblox")return delayedReply(i,env,ctx,()=>beginRobloxLink(i,env));
+   if(i.data?.name==="link-roblox"){
+    const account=interactionOption(i,"username_or_id")?.value;
+    return delayedReply(i,env,ctx,()=>account!=null?beginRobloxPublicLink(i,env,String(account)):beginRobloxLink(i,env));
+   }
    if(i.data?.name==="unlink-roblox")return delayedReply(i,env,ctx,()=>unlinkRobloxAccount(i,env));
    return reply("That slash command is not available.");
   }
