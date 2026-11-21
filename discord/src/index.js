@@ -3533,7 +3533,7 @@ async function ensureRobloxRoleReferenceChannel(env){
     const response=await fetch(url,{headers:{accept:"application/json"}});
     if(!response.ok)continue;
     const data=await response.json();
-    const name=String(data?.name||data?.displayName||data?.Name||"").replace(/[\\r\\n]+/g," ").replace(/\\s+/g," ").trim();
+    const name=String(data?.name||data?.displayName||data?.Name||"").replace(/[\r\n]+/g," ").replace(/\s+/g," ").trim();
     if(name)return name.slice(0,180);
    }catch{}
   }
@@ -3552,17 +3552,17 @@ async function ensureRobloxRoleReferenceChannel(env){
   console.warn("Roblox role reference waiting for source names",stillMissing.length);
   return;
  }
- const linkText=value=>String(value||"").replace(/[\\r\\n]+/g," ").replace(/\\s+/g," ").trim().replace(/\\\\/g,"\\\\\\\\").replace(/\\[/g,"\\\\[").replace(/\\]/g,"\\\\]").slice(0,180);
+ const linkText=value=>String(value||"").replace(/[\r\n]+/g," ").replace(/\s+/g," ").trim().replace(/\\/g,"\\\\").replace(/\[/g,"\\[").replace(/\]/g,"\\]").slice(0,180);
  const buildEmbeds=(items,kind,title,color)=>{
   const typeLabel=kind==="badge"?"badge":"Game Pass";
   const baseUrl=kind==="badge"?"https://www.roblox.com/badges/":"https://www.roblox.com/game-pass/";
   const lines=items.map(item=>"• ["+linkText(sourceNames.get(item.kind+":"+item.source_id))+"]("+baseUrl+item.source_id+") → **"+item.name+"**");
-  const prefix="Roblox "+typeLabel+" name → custom Discord role\\n\\n";
+  const prefix="Roblox "+typeLabel+" name → custom Discord role\n\n";
   const parts=[];
   let current=prefix;
   for(const line of lines){
    if(current.length+line.length+1>3900&&current!==prefix){parts.push(current.trimEnd());current=prefix;}
-   current+=line+"\\n";
+   current+=line+"\n";
   }
   parts.push(current.trimEnd());
   return parts.map((description,index)=>({
