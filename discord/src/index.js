@@ -3490,6 +3490,65 @@ async function ensureCommunityIntroChannels(env){
  }
 
 }
+async function ensureRobloxRoleReferenceChannel(env){
+ if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_role_reference_state(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT NOT NULL,message_id TEXT NOT NULL,revision TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ const state=await env.DB.prepare("SELECT channel_id,message_id,revision FROM roblox_role_reference_state WHERE id=1").first();
+ const normalize=name=>String(name||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+ let channel=null;
+ if(state?.channel_id){
+  const existing=await discordApi(env,"/channels/"+state.channel_id);
+  if(existing.status===200&&String(existing.data?.guild_id)===String(GUILD_ID))channel=existing.data;
+ }
+ let guildChannels=null;
+ if(!channel){
+  const listed=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
+  if(listed.status!==200||!Array.isArray(listed.data))throw Error("Could not read server channels (HTTP "+listed.status+").");
+  guildChannels=listed.data;
+  channel=guildChannels.find(item=>item.type===0&&normalize(item.name)==="roles")||null;
+  if(!channel){
+   const selection=guildChannels.find(item=>item.type===0&&(String(item.id)==="1564527127276290098"||["reaction-roles","choose-your-roles"].includes(normalize(item.name))));
+   const created=await discordApi(env,"/guilds/"+GUILD_ID+"/channels","POST",{
+    name:"roles",type:0,topic:"Badge and gamepass role reference for Shadow Syndicate.",
+    ...(selection?.parent_id?{parent_id:selection.parent_id}:{})
+   });
+   if(![200,201].includes(created.status)||!created.data?.id)throw Error("Could not create #roles (HTTP "+created.status+").");
+   channel=created.data;
+  }
+ }
+ if(normalize(channel.name)!=="roles"){
+  const renamed=await discordApi(env,"/channels/"+channel.id,"PATCH",{name:"roles",topic:"Badge and gamepass role reference for Shadow Syndicate."});
+  if(renamed.status!==200)throw Error("Could not set the roles channel name (HTTP "+renamed.status+").");
+  channel=renamed.data;
+ }
+ const revision="roblox-role-reference-v1";
+ const badges=ROBLOX_ACHIEVEMENT_ROLES.filter(item=>item.kind==="badge");
+ const passes=ROBLOX_ACHIEVEMENT_ROLES.filter(item=>item.kind==="gamepass");
+ const badgeLines=badges.map(item=>"• [Badge "+item.source_id+"](https://www.roblox.com/badges/"+item.source_id+") → **"+item.name+"**").join("\n");
+ const passLines=passes.map(item=>"• [Game Pass "+item.source_id+"](https://www.roblox.com/game-pass/"+item.source_id+") → **"+item.name+"**").join("\n");
+ const payload={embeds:[
+  {color:0x8555D9,title:"🏅 Badge Roles ("+badges.length+")",description:"Roblox badge ID → Discord role\n\n"+badgeLines,footer:{text:"Tap a badge ID to view it on Roblox."}},
+  {color:0xA27A3F,title:"🎟️ Game Pass Roles ("+passes.length+")",description:"Roblox Game Pass ID → Discord role\n\n"+passLines,footer:{text:"Tap a Game Pass ID to view it on Roblox."}}
+ ],allowed_mentions:{parse:[]}};
+ let message=null;
+ if(state?.channel_id===String(channel.id)&&state?.message_id){
+  const existing=await discordApi(env,"/channels/"+channel.id+"/messages/"+state.message_id);
+  if(existing.status===200&&existing.data?.author?.id===APPLICATION_ID){
+   if(state.revision===revision)return;
+   const edited=await discordApi(env,"/channels/"+channel.id+"/messages/"+state.message_id,"PATCH",payload);
+   if(edited.status===200)message=edited.data;
+   else if(edited.status!==404)throw Error("Could not update the role reference embed (HTTP "+edited.status+").");
+  }
+ }
+ if(!message){
+  const posted=await discordApi(env,"/channels/"+channel.id+"/messages","POST",payload);
+  if(![200,201].includes(posted.status)||!posted.data?.id)throw Error("Could not post the role reference embed (HTTP "+posted.status+").");
+  message=posted.data;
+ }
+ await env.DB.prepare("INSERT INTO roblox_role_reference_state(id,channel_id,message_id,revision,updated_at) VALUES(1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET channel_id=excluded.channel_id,message_id=excluded.message_id,revision=excluded.revision,updated_at=excluded.updated_at")
+  .bind(String(channel.id),String(message.id),revision,new Date().toISOString()).run();
+}
+
 function longIntroModal(){
  const fields=[
   ["intro_name","Name / nickname",true,"What should we call you?"],
@@ -3909,6 +3968,7 @@ async scheduled(event,env,ctx){
   ctx.waitUntil(ensureClubNightPollPreview(env).catch(e=>console.error("club night poll preview",String(e))));
   ctx.waitUntil(applyShadowRoleIcons(env).catch(e=>console.error("role icon setup",String(e))));
   ctx.waitUntil(ensureRobloxAchievementRoles(env).catch(e=>console.error("Roblox role catalog",String(e))));
+  ctx.waitUntil(ensureRobloxRoleReferenceChannel(env).catch(e=>console.error("Roblox role reference",String(e))));
 
   ctx.waitUntil(syncLinkedRobloxAccounts(env).catch(e=>console.error("Roblox account sync",String(e))));
   ctx.waitUntil(syncPublicRobloxAccounts(env).catch(e=>console.error("Roblox public account sync",String(e))));
