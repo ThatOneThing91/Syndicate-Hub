@@ -3493,6 +3493,7 @@ async function ensureCommunityIntroChannels(env){
 async function ensureRobloxRoleReferenceChannel(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_role_reference_state(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT NOT NULL,message_id TEXT NOT NULL,revision TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_role_reference_names(kind TEXT NOT NULL,source_id TEXT NOT NULL,source_name TEXT,attempted_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(kind,source_id))").run();
  const state=await env.DB.prepare("SELECT channel_id,message_id,revision FROM roblox_role_reference_state WHERE id=1").first();
  const normalize=name=>String(name||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
  let channel=null;
@@ -3500,14 +3501,12 @@ async function ensureRobloxRoleReferenceChannel(env){
   const existing=await discordApi(env,"/channels/"+state.channel_id);
   if(existing.status===200&&String(existing.data?.guild_id)===String(GUILD_ID))channel=existing.data;
  }
- let guildChannels=null;
  if(!channel){
   const listed=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
   if(listed.status!==200||!Array.isArray(listed.data))throw Error("Could not read server channels (HTTP "+listed.status+").");
-  guildChannels=listed.data;
-  channel=guildChannels.find(item=>item.type===0&&normalize(item.name)==="roles")||null;
+  channel=listed.data.find(item=>item.type===0&&normalize(item.name)==="roles")||null;
   if(!channel){
-   const selection=guildChannels.find(item=>item.type===0&&(String(item.id)==="1564527127276290098"||["reaction-roles","choose-your-roles"].includes(normalize(item.name))));
+   const selection=listed.data.find(item=>item.type===0&&(String(item.id)==="1564527127276290098"||["reaction-roles","choose-your-roles"].includes(normalize(item.name))));
    const created=await discordApi(env,"/guilds/"+GUILD_ID+"/channels","POST",{
     name:"roles",type:0,topic:"Badge and gamepass role reference for Shadow Syndicate.",
     ...(selection?.parent_id?{parent_id:selection.parent_id}:{})
@@ -3521,15 +3520,72 @@ async function ensureRobloxRoleReferenceChannel(env){
   if(renamed.status!==200)throw Error("Could not set the roles channel name (HTTP "+renamed.status+").");
   channel=renamed.data;
  }
- const revision="roblox-role-reference-v1";
- const badges=ROBLOX_ACHIEVEMENT_ROLES.filter(item=>item.kind==="badge");
- const passes=ROBLOX_ACHIEVEMENT_ROLES.filter(item=>item.kind==="gamepass");
- const badgeLines=badges.map(item=>"• [Badge "+item.source_id+"](https://www.roblox.com/badges/"+item.source_id+") → **"+item.name+"**").join("\n");
- const passLines=passes.map(item=>"• [Game Pass "+item.source_id+"](https://www.roblox.com/game-pass/"+item.source_id+") → **"+item.name+"**").join("\n");
+ const roles=ROBLOX_ACHIEVEMENT_ROLES;
+ const cached=await env.DB.prepare("SELECT kind,source_id,source_name,attempted_at FROM roblox_role_reference_names").all();
+ const cacheRows=new Map((cached.results||[]).map(row=>[String(row.kind)+":"+String(row.source_id),row]));
+ const sourceNames=new Map((cached.results||[]).filter(row=>row.source_name).map(row=>[String(row.kind)+":"+String(row.source_id),String(row.source_name)]));
+ const getSourceName=async item=>{
+  const id=encodeURIComponent(item.source_id);
+  const urls=item.kind==="badge"
+   ?["https://badges.roblox.com/v1/badges/"+id]
+   :["https://apis.roblox.com/game-passes/v1/game-passes/"+id+"/product-info","https://economy.roblox.com/v1/game-pass/"+id+"/product-info"];
+  for(const url of urls){
+   try{
+    const response=await fetch(url,{headers:{accept:"application/json"}});
+    if(!response.ok)continue;
+    const data=await response.json();
+    const name=String(data?.name||data?.displayName||data?.Name||"").replace(/[\r\n]+/g," ").replace(/\s+/g," ").trim();
+    if(name)return name.slice(0,180);
+   }catch{}
+  }
+  return null;
+ };
+ const retryWindowMs=30*60*1000;
+ const missing=roles.filter(item=>{
+  const key=item.kind+":"+item.source_id;
+  const lastAttempt=Date.parse(cacheRows.get(key)?.attempted_at||"");
+  return !sourceNames.has(key)&&(!Number.isFinite(lastAttempt)||Date.now()-lastAttempt>=retryWindowMs);
+ });
+ for(let offset=0;offset<missing.length;offset+=8){
+  const batch=await Promise.all(missing.slice(offset,offset+8).map(async item=>({item,name:await getSourceName(item)})));
+  const stamp=new Date().toISOString();
+  const writes=batch.map(result=>env.DB.prepare("INSERT INTO roblox_role_reference_names(kind,source_id,source_name,attempted_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(kind,source_id) DO UPDATE SET source_name=COALESCE(excluded.source_name,roblox_role_reference_names.source_name),attempted_at=excluded.attempted_at,updated_at=CASE WHEN excluded.source_name IS NOT NULL THEN excluded.updated_at ELSE roblox_role_reference_names.updated_at END").bind(result.item.kind,result.item.source_id,result.name,stamp,stamp));
+  await env.DB.batch(writes);
+  for(const result of batch)if(result.name){sourceNames.set(result.item.kind+":"+result.item.source_id,result.name);cacheRows.set(result.item.kind+":"+result.item.source_id,{kind:result.item.kind,source_id:result.item.source_id,source_name:result.name,attempted_at:stamp});}
+  else cacheRows.set(result.item.kind+":"+result.item.source_id,{kind:result.item.kind,source_id:result.item.source_id,source_name:null,attempted_at:stamp});
+ }
+ const stillMissing=roles.filter(item=>!sourceNames.has(item.kind+":"+item.source_id));
+ if(stillMissing.length){
+  console.warn("Roblox role reference waiting for source names",stillMissing.length);
+  return;
+ }
+ const linkText=value=>String(value||"").replace(/[\r\n]+/g," ").replace(/\s+/g," ").trim().replace(/\\/g,"\\\\").replace(/\[/g,"\\[").replace(/\]/g,"\\]").slice(0,180);
+ const buildEmbeds=(items,kind,title,color)=>{
+  const typeLabel=kind==="badge"?"badge":"Game Pass";
+  const baseUrl=kind==="badge"?"https://www.roblox.com/badges/":"https://www.roblox.com/game-pass/";
+  const lines=items.map(item=>"• ["+linkText(sourceNames.get(item.kind+":"+item.source_id))+"]("+baseUrl+item.source_id+") → **"+item.name+"**");
+  const prefix="Roblox "+typeLabel+" name → custom Discord role\n\n";
+  const parts=[];
+  let current=prefix;
+  for(const line of lines){
+   if(current.length+line.length+1>3900&&current!==prefix){parts.push(current.trimEnd());current=prefix;}
+   current+=line+"\n";
+  }
+  parts.push(current.trimEnd());
+  return parts.map((description,index)=>({
+   color,
+   title:parts.length===1?title:title+" · Part "+(index+1),
+   description,
+   footer:{text:"Tap a "+typeLabel+" name to open it on Roblox."}
+  }));
+ };
+ const badges=roles.filter(item=>item.kind==="badge");
+ const passes=roles.filter(item=>item.kind==="gamepass");
  const payload={embeds:[
-  {color:0x8555D9,title:"🏅 Badge Roles ("+badges.length+")",description:"Roblox badge ID → Discord role\n\n"+badgeLines,footer:{text:"Tap a badge ID to view it on Roblox."}},
-  {color:0xA27A3F,title:"🎟️ Game Pass Roles ("+passes.length+")",description:"Roblox Game Pass ID → Discord role\n\n"+passLines,footer:{text:"Tap a Game Pass ID to view it on Roblox."}}
+  ...buildEmbeds(badges,"badge","🏅 Badge Roles ("+badges.length+")",0x8555D9),
+  ...buildEmbeds(passes,"gamepass","🎟️ Game Pass Roles ("+passes.length+")",0xA27A3F)
  ],allowed_mentions:{parse:[]}};
+ const revision="roblox-role-reference-v2-named-items";
  let message=null;
  if(state?.channel_id===String(channel.id)&&state?.message_id){
   const existing=await discordApi(env,"/channels/"+channel.id+"/messages/"+state.message_id);
