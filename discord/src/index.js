@@ -2150,6 +2150,37 @@ async function robloxInventoryOwnership(accessToken,robloxUserId,useApiKey=false
  }
  return owned;
 }
+async function robloxNicknameFailureReason(env,discordId,memberData,result){
+ const status=Number(result?.status||0),detail=String(result?.data?.message||"Discord denied the nickname update").slice(0,160);
+ if(status!==403)return "Nickname update failed (HTTP "+status+"): "+detail;
+ try{
+  const [guild,botMember,roles]=await Promise.all([
+   discordApi(env,"/guilds/"+GUILD_ID),
+   discordApi(env,"/guilds/"+GUILD_ID+"/members/"+APPLICATION_ID),
+   discordApi(env,"/guilds/"+GUILD_ID+"/roles")
+  ]);
+  if(guild.status!==200||botMember.status!==200||roles.status!==200)return "Discord denied nickname update (HTTP 403: "+detail+"). Could not inspect nickname permissions.";
+  if(String(guild.data?.owner_id)===String(discordId))return "Discord does not allow the bot to change the server owner's nickname.";
+  const roleById=new Map((roles.data||[]).map(role=>[String(role.id),role]));
+  const botRoleIds=new Set((botMember.data?.roles||[]).map(String));
+  const hasManageNicknames=[...botRoleIds].some(id=>{
+   const role=roleById.get(id);
+   if(!role)return false;
+   try{
+    const bits=BigInt(role.permissions||"0");
+    return (bits&8n)!==0n||(bits&(1n<<27n))!==0n;
+   }catch{return false;}
+  });
+  if(!hasManageNicknames)return "Syndicate Hub needs the Manage Nicknames permission to set server nicknames.";
+  const topPosition=member=>Math.max(0,...(member?.roles||[]).map(id=>Number(roleById.get(String(id))?.position||0)));
+  const botPosition=topPosition(botMember.data),targetPosition=topPosition(memberData);
+  if(targetPosition>=botPosition)return "Syndicate Hub's highest role must be moved above this member's highest role to set their server nickname.";
+  return "Discord denied the nickname update (HTTP 403: "+detail+").";
+ }catch(e){
+  return "Discord denied the nickname update (HTTP 403: "+detail+"). Permission check failed: "+String(e).slice(0,120);
+ }
+}
+
 async function syncRobloxMember(env,link,accessToken,useApiKey=false,memberSnapshot=null){
  const discordId=String(link.discord_user_id),robloxId=String(link.roblox_user_id),username=String(link.roblox_username);
  const [member,owned,catalog]=await Promise.all([
@@ -2193,11 +2224,11 @@ async function syncRobloxMember(env,link,accessToken,useApiKey=false,memberSnaps
    if(rolesResult.status!==200)throw Error("Could not sync achievement roles (HTTP "+rolesResult.status+").");
    const nickResult=await patchMember({nick:username});
    if(nickResult.status===200)nicknameUpdated=true;
-   else nicknameError="Nickname update could not be applied (HTTP "+nickResult.status+"); achievement role checks succeeded.";
+   else nicknameError=await robloxNicknameFailureReason(env,discordId,member.data,nickResult);
   }else if(hasRoleChanges){
    throw Error("Could not sync achievement roles (HTTP "+changed.status+").");
   }else{
-   nicknameError="Nickname update could not be applied (HTTP "+changed.status+"); achievement role checks succeeded.";
+   nicknameError=await robloxNicknameFailureReason(env,discordId,member.data,changed);
   }
  }
  return {owned:owned.size,added,removed,nicknameUpdated,nicknameError};
