@@ -2389,7 +2389,7 @@ async function syncPublicRobloxAccounts(env){
    const profile=await resolveRobloxProfileByInput(String(row.roblox_user_id));
    const link={...row,roblox_username:profile.username};
    const result=await syncRobloxMember(env,link,env.ROBLOX_OPEN_CLOUD_API_KEY,true);
-   const next=new Date(Date.now()+15*60*1000).toISOString();
+   const next=new Date(Date.now()+10*60*1000).toISOString();
    await env.DB.prepare("UPDATE roblox_public_links SET roblox_username=?,next_sync_at=?,sync_started_at=NULL,sync_error=?,updated_at=? WHERE discord_user_id=?")
     .bind(profile.username,next,result.nicknameError,new Date().toISOString(),row.discord_user_id).run();
   }catch(e){
@@ -3448,19 +3448,18 @@ async function ensureCommunityIntroChannels(env){
  const oldPanel=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_id'").first();
  const oldLocation=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_channel_id'").first();
  const revision=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_revision'").first();
- const currentRevision="intro-studio-20261121-v3-roblox-link";
+ const currentRevision="intro-studio-20261121-v4-compact-roblox-roles";
  await put("pet_channel_id",petPhotos.id);
  const panel={embeds:[{
   color:0x8555D9,author:{name:"SHADOW SYNDICATE • COMMUNITY"},
-  title:"💜 Your Story Starts Here",
-  description:"Everyone has a story, and this is where yours begins.\n\nBuild your own member spotlight, section by section. Talk about your favorite games, music, hobbies, personality, pets, and whatever else makes you **you**.\n\n**Save as you go. Preview before publishing. Edit whenever you want.**",
+
   fields:[
    {name:"🪪 About You",value:"Name, pronouns, a personal bio, broad location and languages.",inline:false},
    {name:"🎮 Interests & Games",value:"Games, hobbies, music, movies, books and creative interests.",inline:false},
    {name:"💖 Your Favorites",value:"Food, colors, fandoms, comforts and current obsessions.",inline:false},
    {name:"✨ The Fun Stuff",value:"Fun facts, pets, talents, conversation starters and anything else.",inline:false},
    {name:"🐾 Pet Gallery",value:"Upload up to ten pet pictures with a personal message. Your photos and tag go to <#"+petPhotos.id+">.",inline:false},
-   {name:"🎮 Roblox Roles",value:"Use Link Roblox below and enter a username or user ID to check public badge/gamepass inventory. Matching roles sync, and your Discord nickname updates to your Roblox name. This lookup does not verify account ownership.",inline:false}
+   {name:"🎮 Roblox Roles",value:"Link your Roblox below to get access to your custom roles. Roles refresh every 10 minutes.",inline:false}
   ],
   footer:{text:"Only a name or nickname is required • Everything else is your choice"}
  }],components:[{type:1,components:[
@@ -3496,6 +3495,7 @@ async function ensureRobloxRoleReferenceChannel(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_role_reference_names(kind TEXT NOT NULL,source_id TEXT NOT NULL,source_name TEXT,attempted_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(kind,source_id))").run();
  const state=await env.DB.prepare("SELECT channel_id,message_id,revision FROM roblox_role_reference_state WHERE id=1").first();
  const normalize=name=>String(name||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+ const roleChannelName="🎭・roles";
  let channel=null;
  if(state?.channel_id){
   const existing=await discordApi(env,"/channels/"+state.channel_id);
@@ -3508,15 +3508,15 @@ async function ensureRobloxRoleReferenceChannel(env){
   if(!channel){
    const selection=listed.data.find(item=>item.type===0&&(String(item.id)==="1564527127276290098"||["reaction-roles","choose-your-roles"].includes(normalize(item.name))));
    const created=await discordApi(env,"/guilds/"+GUILD_ID+"/channels","POST",{
-    name:"roles",type:0,topic:"Badge and gamepass role reference for Shadow Syndicate.",
+    name:roleChannelName,type:0,topic:"Badge and gamepass role reference for Shadow Syndicate.",
     ...(selection?.parent_id?{parent_id:selection.parent_id}:{})
    });
    if(![200,201].includes(created.status)||!created.data?.id)throw Error("Could not create #roles (HTTP "+created.status+").");
    channel=created.data;
   }
  }
- if(normalize(channel.name)!=="roles"){
-  const renamed=await discordApi(env,"/channels/"+channel.id,"PATCH",{name:"roles",topic:"Badge and gamepass role reference for Shadow Syndicate."});
+ if(String(channel.name)!==roleChannelName){
+  const renamed=await discordApi(env,"/channels/"+channel.id,"PATCH",{name:roleChannelName,topic:"Badge and gamepass role reference for Shadow Syndicate."});
   if(renamed.status!==200)throw Error("Could not set the roles channel name (HTTP "+renamed.status+").");
   channel=renamed.data;
  }
@@ -3603,7 +3603,7 @@ async function ensureRobloxRoleReferenceChannel(env){
   ...buildEmbeds(badges,"badge","🏅 Badge Roles ("+badges.length+")",0x8555D9),
   ...buildEmbeds(passes,"gamepass","🎟️ Game Pass Roles ("+passes.length+")",0xA27A3F)
  ],allowed_mentions:{parse:[]}};
- const revision="roblox-role-reference-v2-named-items";
+ const revision="roblox-role-reference-v3-emoji-channel";
  let message=null;
  if(state?.channel_id===String(channel.id)&&state?.message_id){
   const existing=await discordApi(env,"/channels/"+channel.id+"/messages/"+state.message_id);
