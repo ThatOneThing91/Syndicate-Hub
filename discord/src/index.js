@@ -961,7 +961,14 @@ async function welcomeWaveInteraction(i,env){
  if(!match)return reply("That welcome button is no longer valid.");
  const joinedUserId=match[1],welcomerId=String(i.member?.user?.id||i.user?.id||"");
  if(!welcomerId)return reply("I couldn't identify your Discord account.");
- if(String(i.channel_id)!==INTRO_WELCOME_CHANNEL_ID)return reply("That welcome button only works in #welcome.");
+ const channelId=String(i.channel_id||"");
+ let introductionsChannelId="";
+ if(env.DB){
+  try{introductionsChannelId=String((await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='channel_id'").first())?.value||"")}
+  catch(e){console.error("welcome channel lookup",String(e))}
+ }
+ if(channelId!==INTRO_WELCOME_CHANNEL_ID&&channelId!==introductionsChannelId)
+  return reply("That welcome button only works in the welcome or introductions channel.");
  return postCelebrationReply(i,env,{scope:"welcome",targetId:joinedUserId,actorId:welcomerId});
 }
 async function birthdayRemoveButton(i,env){
@@ -3640,7 +3647,7 @@ async function introModal(i,env,section){
   }
  }catch(e){console.error("intro modal prefill",String(e));}
  // Compatible action-row text inputs, as in the previous working introduction form.
- const components=spec.fields.map(([id,label,required,placeholder,max,style])=>({
+ const components=spec.fields.map(([id,label,placeholder,required,max,style])=>({
   type:1,components:[{type:4,custom_id:id,label,style,required,max_length:max,
    ...(required?{min_length:1}:{}),placeholder,
    ...(typeof data[id]==="string"&&data[id]?{value:data[id].slice(0,max)}:{})}]
