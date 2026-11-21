@@ -3538,6 +3538,24 @@ async function ensureRobloxRoleReferenceChannel(env){
     if(name)return name.slice(0,180);
    }catch{}
   }
+  if(item.kind==="gamepass"){
+   try{
+    const response=await fetch("https://www.roblox.com/game-pass/"+id,{headers:{accept:"text/html"}});
+    if(response.ok){
+     const html=await response.text();
+     const meta=html.match(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)/i)||html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:title["']/i);
+     const title=html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+     const raw=meta?.[1]||title?.[1]||"";
+     const name=raw.replace(/&amp;/gi,"&").replace(/&#39;|&#x27;/gi,"'").replace(/&quot;/gi,'"').replace(/\s*[-|]\s*Roblox\s*$/i,"").replace(/\s+/g," ").trim();
+     if(name&&!/^roblox$/i.test(name)&&!/not found/i.test(name))return name.slice(0,180);
+     const slug=(response.url||"").match(new RegExp("/game-pass/"+item.source_id+"/([^/?#]+)","i"))?.[1];
+     if(slug){
+      const slugName=decodeURIComponent(slug).replace(/[-_]+/g," ").trim();
+      if(slugName)return slugName.slice(0,180);
+     }
+    }
+   }catch{}
+  }
   return null;
  };
  const retryWindowMs=30*60*1000;
