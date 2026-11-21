@@ -3493,7 +3493,7 @@ async function ensureCommunityIntroChannels(env){
 async function ensureRobloxRoleReferenceChannel(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_role_reference_state(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT NOT NULL,message_id TEXT NOT NULL,revision TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
- await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_role_reference_names(kind TEXT NOT NULL,source_id TEXT NOT NULL,source_name TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(kind,source_id))").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_role_reference_names(kind TEXT NOT NULL,source_id TEXT NOT NULL,source_name TEXT,attempted_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(kind,source_id))").run();
  const state=await env.DB.prepare("SELECT channel_id,message_id,revision FROM roblox_role_reference_state WHERE id=1").first();
  const normalize=name=>String(name||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
  let channel=null;
@@ -3521,8 +3521,9 @@ async function ensureRobloxRoleReferenceChannel(env){
   channel=renamed.data;
  }
  const roles=ROBLOX_ACHIEVEMENT_ROLES;
- const cached=await env.DB.prepare("SELECT kind,source_id,source_name FROM roblox_role_reference_names").all();
- const sourceNames=new Map((cached.results||[]).map(row=>[String(row.kind)+":"+String(row.source_id),String(row.source_name)]));
+ const cached=await env.DB.prepare("SELECT kind,source_id,source_name,attempted_at FROM roblox_role_reference_names").all();
+ const cacheRows=new Map((cached.results||[]).map(row=>[String(row.kind)+":"+String(row.source_id),row]));
+ const sourceNames=new Map((cached.results||[]).filter(row=>row.source_name).map(row=>[String(row.kind)+":"+String(row.source_id),String(row.source_name)]));
  const getSourceName=async item=>{
   const id=encodeURIComponent(item.source_id);
   const urls=item.kind==="badge"
@@ -3539,13 +3540,19 @@ async function ensureRobloxRoleReferenceChannel(env){
   }
   return null;
  };
- const missing=roles.filter(item=>!sourceNames.has(item.kind+":"+item.source_id));
+ const retryWindowMs=30*60*1000;
+ const missing=roles.filter(item=>{
+  const key=item.kind+":"+item.source_id;
+  const lastAttempt=Date.parse(cacheRows.get(key)?.attempted_at||"");
+  return !sourceNames.has(key)&&(!Number.isFinite(lastAttempt)||Date.now()-lastAttempt>=retryWindowMs);
+ });
  for(let offset=0;offset<missing.length;offset+=8){
   const batch=await Promise.all(missing.slice(offset,offset+8).map(async item=>({item,name:await getSourceName(item)})));
   const stamp=new Date().toISOString();
-  const writes=batch.filter(result=>result.name).map(result=>env.DB.prepare("INSERT INTO roblox_role_reference_names(kind,source_id,source_name,updated_at) VALUES(?,?,?,?) ON CONFLICT(kind,source_id) DO UPDATE SET source_name=excluded.source_name,updated_at=excluded.updated_at").bind(result.item.kind,result.item.source_id,result.name,stamp));
-  if(writes.length)await env.DB.batch(writes);
-  for(const result of batch)if(result.name)sourceNames.set(result.item.kind+":"+result.item.source_id,result.name);
+  const writes=batch.map(result=>env.DB.prepare("INSERT INTO roblox_role_reference_names(kind,source_id,source_name,attempted_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(kind,source_id) DO UPDATE SET source_name=COALESCE(excluded.source_name,roblox_role_reference_names.source_name),attempted_at=excluded.attempted_at,updated_at=CASE WHEN excluded.source_name IS NOT NULL THEN excluded.updated_at ELSE roblox_role_reference_names.updated_at END").bind(result.item.kind,result.item.source_id,result.name,stamp,stamp));
+  await env.DB.batch(writes);
+  for(const result of batch)if(result.name){sourceNames.set(result.item.kind+":"+result.item.source_id,result.name);cacheRows.set(result.item.kind+":"+result.item.source_id,{kind:result.item.kind,source_id:result.item.source_id,source_name:result.name,attempted_at:stamp});}
+  else cacheRows.set(result.item.kind+":"+result.item.source_id,{kind:result.item.kind,source_id:result.item.source_id,source_name:null,attempted_at:stamp});
  }
  const stillMissing=roles.filter(item=>!sourceNames.has(item.kind+":"+item.source_id));
  if(stillMissing.length){
