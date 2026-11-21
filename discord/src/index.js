@@ -2165,6 +2165,10 @@ async function resolveRobloxProfileByInput(input){
  if(!response.ok||!data?.id||!data?.name)throw Error("That Roblox user ID could not be found.");
  return {id:String(data.id),username:String(data.name)};
 }
+function robloxPublicLinkModal(){
+ const payload={type:9,data:{custom_id:"roblox_public_link_modal",title:"Link Roblox Account",components:[{type:1,components:[{type:4,custom_id:"roblox_username_or_id",label:"Roblox username or user ID",style:1,required:true,min_length:1,max_length:50,placeholder:"Username or numeric ID"}]}]}};
+ return new Response(JSON.stringify(payload),{headers:{"content-type":"application/json"}});
+}
 async function beginRobloxPublicLink(i,env,accountInput){
  const did=String(i.member?.user?.id||i.user?.id||"");
  if(!did)return reply("I couldn't identify your Discord account.");
@@ -3391,7 +3395,7 @@ async function ensureCommunityIntroChannels(env){
  const oldPanel=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_id'").first();
  const oldLocation=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_channel_id'").first();
  const revision=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_revision'").first();
- const currentRevision="intro-studio-20261118-v2";
+ const currentRevision="intro-studio-20261121-v3-roblox-link";
  await put("pet_channel_id",petPhotos.id);
  const panel={embeds:[{
   color:0x8555D9,author:{name:"SHADOW SYNDICATE • COMMUNITY"},
@@ -3402,12 +3406,14 @@ async function ensureCommunityIntroChannels(env){
    {name:"🎮 Interests & Games",value:"Games, hobbies, music, movies, books and creative interests.",inline:false},
    {name:"💖 Your Favorites",value:"Food, colors, fandoms, comforts and current obsessions.",inline:false},
    {name:"✨ The Fun Stuff",value:"Fun facts, pets, talents, conversation starters and anything else.",inline:false},
-   {name:"🐾 Pet Gallery",value:"Upload up to ten pet pictures with a personal message. Your photos and tag go to <#"+petPhotos.id+">.",inline:false}
+   {name:"🐾 Pet Gallery",value:"Upload up to ten pet pictures with a personal message. Your photos and tag go to <#"+petPhotos.id+">.",inline:false},
+   {name:"🎮 Roblox Roles",value:"Use Link Roblox below and enter a username or user ID to check public badge/gamepass inventory. Matching roles sync, and your Discord nickname updates to your Roblox name. This lookup does not verify account ownership.",inline:false}
   ],
   footer:{text:"Only a name or nickname is required • Everything else is your choice"}
  }],components:[{type:1,components:[
   {type:2,style:1,label:"💜 Build My Introduction",custom_id:"intro_studio_open"},
-  {type:2,style:2,label:"🐾 Share Pet Photos",custom_id:"intro_pet_open"}
+  {type:2,style:2,label:"🐾 Share Pet Photos",custom_id:"intro_pet_open"},
+  {type:2,style:2,label:"🎮 Link Roblox",custom_id:"roblox_public_link_open"}
  ]}],allowed_mentions:{parse:[]}};
  let posted=null;
  if(oldPanel?.value&&String(oldLocation?.value||"")===String(rolesChannel.id)){
@@ -3979,7 +3985,13 @@ async scheduled(event,env,ctx){
   }
   if(i.type===3&&birthdayId==="syndicate_birthday_remove")return delayedReply(i,env,ctx,()=>birthdayRemoveButton(i,env));
   if(i.type===5&&birthdayId==="syndicate_birthday_modal")return delayedReply(i,env,ctx,()=>birthdayModalSubmit(i,env));
-  if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
+  if(i.type===3&&i.data?.custom_id==="roblox_public_link_open")return robloxPublicLinkModal();
+   if(i.type===5&&i.data?.custom_id==="roblox_public_link_modal"){
+    const accountInput=String(i.data.components?.flatMap(row=>row.components||[]).find(component=>component.custom_id==="roblox_username_or_id")?.value||"").trim();
+    if(!accountInput||accountInput.length>50)return reply("Enter a Roblox username or user ID (up to 50 characters).");
+    return delayedReply(i,env,ctx,()=>beginRobloxPublicLink(i,env,accountInput));
+   }
+   if(needsBetaAccess(i)&&!hasVipAccess(i))return reply("🔒 The VIP role is required to access Syndicate Hub keys. Use the hub’s Discord invite or ask staff for help.");
   if(!env.DB)return reply("The bot database is temporarily unavailable.");
    ctx.waitUntil(ensurePremiumChannelAndRemoveCommands(env).catch(e=>console.error("premium command setup",String(e))));
   try {
