@@ -10,23 +10,24 @@ async function refreshWelcomeMemberStats(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS welcome_member_stats(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT NOT NULL,message_id TEXT NOT NULL,last_total INTEGER,last_online INTEGER,updated_at TEXT NOT NULL)").run();
  let current=await env.DB.prepare("SELECT channel_id,message_id,last_total,last_online,updated_at FROM welcome_member_stats WHERE id=1").first();
+ if(current&&String(current.channel_id)!==WELCOME_CHANNEL_ID)current=null;
  if(!current){
-  // Adopt the most recent welcome already sent by this bot, without reposting it.
+  // Adopt a bot welcome from #welcome, never a legacy post in #introductions.
   const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
   const normalize=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
-  const intro=channels.status===200&&Array.isArray(channels.data)
-   ?channels.data.find(c=>[0,5].includes(c.type)&&(String(c.id)==="1564527128253436005"||normalize(c.name)==="introductions")):null;
-  if(!intro)return;
-  const history=await discordApi(env,"/channels/"+intro.id+"/messages?limit=100");
+  const welcome=channels.status===200&&Array.isArray(channels.data)
+   ?channels.data.find(c=>[0,5].includes(c.type)&&(String(c.id)===WELCOME_CHANNEL_ID||normalize(c.name)==="welcome")):null;
+  if(!welcome)return;
+  const history=await discordApi(env,"/channels/"+welcome.id+"/messages?limit=100");
   if(history.status!==200||!Array.isArray(history.data))return;
-  const mostRecent=history.data.find(m=>m.author?.id===APPLICATION_ID &&
-    Array.isArray(m.embeds)&&m.embeds.some(e=>e.title==="Welcome!"));
+  const mostRecent=history.data.find(m=>m.author?.id===APPLICATION_ID&&
+   Array.isArray(m.embeds)&&m.embeds.some(e=>e.title==="Welcome!"||String(e.title||"").startsWith("Welcome, ")));
   if(!mostRecent)return;
-  await env.DB.prepare("INSERT OR IGNORE INTO welcome_member_stats(id,channel_id,message_id,last_total,last_online,updated_at) VALUES(1,?,?,NULL,NULL,?)")
-   .bind(intro.id,String(mostRecent.id),"1970-01-01T00:00:00Z").run();
+  await env.DB.prepare("INSERT INTO welcome_member_stats(id,channel_id,message_id,last_total,last_online,updated_at) VALUES(1,?,?,NULL,NULL,?) ON CONFLICT(id) DO UPDATE SET channel_id=excluded.channel_id,message_id=excluded.message_id,last_total=NULL,last_online=NULL,updated_at=excluded.updated_at WHERE welcome_member_stats.channel_id<>excluded.channel_id")
+   .bind(String(welcome.id),String(mostRecent.id),"1970-01-01T00:00:00Z").run();
   current=await env.DB.prepare("SELECT channel_id,message_id,last_total,last_online,updated_at FROM welcome_member_stats WHERE id=1").first();
  }
- if(!current||Date.now()-Date.parse(current.updated_at||"")<60000)return;
+ if(!current||String(current.channel_id)!==WELCOME_CHANNEL_ID||Date.now()-Date.parse(current.updated_at||"")<60000)return;
  const response=await discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=true");
  if(response.status!==200)throw Error("Welcome count guild query HTTP "+response.status);
  const guild=response.data||{};
@@ -55,8 +56,6 @@ async function refreshWelcomeMemberStats(env){
  await env.DB.prepare("UPDATE welcome_member_stats SET last_total=?,last_online=?,updated_at=? WHERE id=1")
   .bind(totalOk?total:current.last_total,onlineOk?online:current.last_online,stamp).run();
 }
-
-
 async function ensureJoinTrackingTable(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_join_welcomes(user_id TEXT PRIMARY KEY,role_assigned INTEGER NOT NULL DEFAULT 0,welcome_sent INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,joined_at TEXT,welcome_message_id TEXT,welcome_channel_id TEXT,welcome_lease_until INTEGER NOT NULL DEFAULT 0)").run();
  const columns=await env.DB.prepare("PRAGMA table_info(member_join_welcomes)").all();
@@ -98,10 +97,10 @@ async function handleMemberJoin(env,state,member){
   .bind(user.id,roleDone?1:0,new Date().toISOString(),joinedAt,leaseUntil,claimTime).run();
  if(Number(claim.meta?.changes||0)===0)return;
  const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
- const intro=joinChannel(channels.status===200?channels.data:[],"introductions");
- if(!intro){
+ const welcome=joinChannel(channels.status===200?channels.data:[],"welcome");
+ if(!welcome){
   await env.DB.prepare("UPDATE member_join_welcomes SET role_assigned=?,welcome_sent=0,welcome_lease_until=0,updated_at=? WHERE user_id=? AND joined_at=?").bind(roleDone?1:0,new Date().toISOString(),user.id,joinedAt).run();
-  await memberJoinDiag(env,"welcome_failure","Could not find introductions channel; channels HTTP "+channels.status+" user "+user.id);return;
+  await memberJoinDiag(env,"welcome_failure","Could not find welcome channel; channels HTTP "+channels.status+" user "+user.id);return;
  }
  const guild=await discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=true");
  const totalRaw=Number(state?.memberCount||0)>0?Number(state.memberCount):(guild.status===200?Number(guild.data?.approximate_member_count??guild.data?.member_count):0);
@@ -113,18 +112,19 @@ async function handleMemberJoin(env,state,member){
  const avatar=user.avatar?"https://cdn.discordapp.com/avatars/"+user.id+"/"+user.avatar+(String(user.avatar).startsWith("a_")?".gif":".png")+"?size=256":null;
  const guildIcon=guild.status===200&&guild.data?.icon?"https://cdn.discordapp.com/icons/"+GUILD_ID+"/"+guild.data.icon+(String(guild.data.icon).startsWith("a_")?".gif":".png")+"?size=64":null;
  const memberNumber=Number.isFinite(totalRaw)&&totalRaw>0?totalRaw.toLocaleString("en-US"):"new";
- const payload={allowed_mentions:{parse:[],users:[String(user.id)]},content:"👋 Welcome <@"+user.id+">!",embeds:[{author:{name:guildName,...(guildIcon?{icon_url:guildIcon}:{})},title:"Welcome!",description:"<@"+user.id+"> joined "+guildName+"!\nYou're member **#"+memberNumber+"**.",color:0x7c3aed,...(avatar?{thumbnail:{url:avatar}}:{}),fields,footer:{text:"Member count updates automatically."},timestamp:new Date().toISOString()}],components:[{type:1,components:[{type:2,style:1,label:"🎟️ Send a welcome sticker",custom_id:"welcome_wave:"+user.id}]}]};
- const sent=await discordApi(env,"/channels/"+intro.id+"/messages","POST",payload);
+ const memberDisplayName=String(member.nick||user.global_name||user.username||"new member").trim().slice(0,180);
+ const payload={allowed_mentions:{parse:[],users:[String(user.id)]},content:"👋 Welcome to "+guildName+", <@"+user.id+">! We're glad you're here.",embeds:[{author:{name:guildName,...(guildIcon?{icon_url:guildIcon}:{})},title:"Welcome, "+memberDisplayName+"!",description:"You've joined "+guildName+"!\nYou're member **#"+memberNumber+"**. Make yourself at home.",color:0x7c3aed,...(avatar?{thumbnail:{url:avatar}}:{}),fields,footer:{text:"Member count updates automatically."},timestamp:new Date().toISOString()}],components:[{type:1,components:[{type:2,style:1,label:"🎟️ Send a welcome sticker",custom_id:"welcome_wave:"+user.id}]}]};
+ const sent=await discordApi(env,"/channels/"+welcome.id+"/messages","POST",payload);
  if(sent.status!==200||!sent.data?.id){
   await env.DB.prepare("UPDATE member_join_welcomes SET role_assigned=?,welcome_sent=0,welcome_lease_until=0,updated_at=? WHERE user_id=? AND joined_at=?").bind(roleDone?1:0,new Date().toISOString(),user.id,joinedAt).run();
   await memberJoinDiag(env,"welcome_failure","Welcome message HTTP "+sent.status+" for "+user.id+" "+JSON.stringify(sent.data||{}).slice(0,180));return;
  }
  const now=new Date().toISOString();
  await env.DB.prepare("UPDATE member_join_welcomes SET role_assigned=?,welcome_sent=1,welcome_message_id=?,welcome_channel_id=?,welcome_lease_until=0,updated_at=? WHERE user_id=? AND joined_at=?")
-  .bind(roleDone?1:0,String(sent.data.id),String(intro.id),now,user.id,joinedAt).run();
+  .bind(roleDone?1:0,String(sent.data.id),String(welcome.id),now,user.id,joinedAt).run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS welcome_member_stats(id INTEGER PRIMARY KEY CHECK(id=1),channel_id TEXT NOT NULL,message_id TEXT NOT NULL,last_total INTEGER,last_online INTEGER,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT INTO welcome_member_stats(id,channel_id,message_id,last_total,last_online,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET channel_id=excluded.channel_id,message_id=excluded.message_id,last_total=excluded.last_total,last_online=excluded.last_online,updated_at=excluded.updated_at")
-  .bind(String(intro.id),String(sent.data.id),Number.isFinite(totalRaw)&&totalRaw>0?totalRaw:null,Number.isFinite(onlineRaw)&&onlineRaw>=0?onlineRaw:null,"1970-01-01T00:00:00Z").run();
+  .bind(String(welcome.id),String(sent.data.id),Number.isFinite(totalRaw)&&totalRaw>0?totalRaw:null,Number.isFinite(onlineRaw)&&onlineRaw>=0?onlineRaw:null,"1970-01-01T00:00:00Z").run();
  await memberJoinDiag(env,"join_result","user "+user.id+" role="+roleDone+" bot_welcome="+sent.data.id+" joined="+joinedAt);
 }
 
@@ -206,23 +206,24 @@ async function configureNativeJoinGreeting(env){
  if(prior&&now-Number(prior.last_checked)<15*60000)return;
  await env.DB.prepare("INSERT INTO join_system_settings(id,last_checked,status) VALUES(1,?,'checking') ON CONFLICT(id) DO UPDATE SET last_checked=excluded.last_checked").bind(now).run();
  const [cr,gr]=await Promise.all([discordApi(env,"/guilds/"+GUILD_ID+"/channels"),discordApi(env,"/guilds/"+GUILD_ID)]);
- const intro=joinChannel(cr.status===200?cr.data:[],"introductions");
- if(!intro||gr.status!==200){await memberJoinDiag(env,"system_welcome_error","Channels "+cr.status+" guild "+gr.status+" introductions="+Boolean(intro));return;}
- await ensureIntroductionLinksAndStickerReplies(env,cr.data,intro);
+ const channels=cr.status===200?cr.data:[];
+ const welcome=joinChannel(channels,"welcome");
+ const intro=joinChannel(channels,"introductions");
+ if(!welcome||!intro||gr.status!==200){await memberJoinDiag(env,"system_welcome_error","Channels "+cr.status+" guild "+gr.status+" welcome="+Boolean(welcome)+" introductions="+Boolean(intro));return;}
+ await ensureIntroductionLinksAndStickerReplies(env,channels,intro);
  const flags=Number(gr.data?.system_channel_flags||0),desired=flags|1;
- if(gr.data.system_channel_id===intro.id&&flags===desired){
+ if(gr.data.system_channel_id===welcome.id&&flags===desired){
   await env.DB.prepare("UPDATE join_system_settings SET status='enabled' WHERE id=1").run();return;
  }
- const patch=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:intro.id,system_channel_flags:desired});
+ const patch=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:welcome.id,system_channel_flags:desired});
  if(patch.status===200){
   await env.DB.prepare("UPDATE join_system_settings SET status='enabled' WHERE id=1").run();
-  await memberJoinDiag(env,"system_welcome_enabled","Native join notice suppressed; bot welcome enabled in introductions");
+  await memberJoinDiag(env,"system_welcome_enabled","Native join notice suppressed; personalized bot welcome enabled in welcome");
  }else{
   await env.DB.prepare("UPDATE join_system_settings SET status=? WHERE id=1").bind("HTTP "+patch.status).run();
   await memberJoinDiag(env,"system_welcome_error","Guild settings HTTP "+patch.status+" "+JSON.stringify(patch.data||{}).slice(0,220));
  }
 }
-
 const SHADOW_LEAVE_LOG_CHANNEL = "1564527161216335902";
 function shadowRoleIcon(name, position=0) {
  const n=String(name||"").toLowerCase();
@@ -962,13 +963,19 @@ async function welcomeWaveInteraction(i,env){
  const joinedUserId=match[1],welcomerId=String(i.member?.user?.id||i.user?.id||"");
  if(!welcomerId)return reply("I couldn't identify your Discord account.");
  const channelId=String(i.channel_id||"");
- let introductionsChannelId="";
+ let introductionsChannelId="",welcomeChannelId=WELCOME_CHANNEL_ID;
  if(env.DB){
-  try{introductionsChannelId=String((await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='channel_id'").first())?.value||"")}
-  catch(e){console.error("welcome channel lookup",String(e))}
+  try{
+   const [savedWelcome,savedIntro]=await Promise.all([
+    env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='welcome_channel_id'").first(),
+    env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='channel_id'").first()
+   ]);
+   welcomeChannelId=String(savedWelcome?.value||welcomeChannelId);
+   introductionsChannelId=String(savedIntro?.value||"");
+  }catch(e){console.error("welcome channel lookup",String(e))}
  }
- if(channelId!==INTRO_WELCOME_CHANNEL_ID&&channelId!==introductionsChannelId)
-  return reply("That welcome button only works in the welcome or introductions channel.");
+ if(channelId!==welcomeChannelId&&channelId!==introductionsChannelId)
+  return reply("This sticker button belongs in #welcome.");
  return postCelebrationReply(i,env,{scope:"welcome",targetId:joinedUserId,actorId:welcomerId});
 }
 async function birthdayRemoveButton(i,env){
@@ -1026,7 +1033,7 @@ async function nextCelebrationItem(env,scope,items){
  if(!row)return items[Math.floor(Math.random()*items.length)];
  let active;
  try{active=JSON.parse(row.items_json)}catch{active=items}
- if(!Array.isArray(active)||active.length!==items.length)active=shuffleCelebration(items);
+ if(!Array.isArray(active)||active.length!==items.length||active.some(item=>!items.includes(item)))active=shuffleCelebration(items);
  return active[row.cursor]||items[Math.floor(Math.random()*items.length)];
 }
 async function currentCelebrationStickers(env){
@@ -1077,16 +1084,28 @@ async function postCelebrationReply(i,env,{scope,targetId,actorId}){
  const sourceId=String(i.message?.id||"");
  if(!/^\d{17,20}$/.test(sourceId))return reply("That celebration button is no longer valid.");
  const claim=await env.DB.prepare("INSERT OR IGNORE INTO celebration_reply_claims(source_message_id,actor_id,created_at) VALUES(?,?,?)").bind(sourceId,actorId,new Date().toISOString()).run();
- if(!(claim?.meta?.changes>0))return reply("You already posted a celebration on this message.");
+ if(!(claim?.meta?.changes>0))return reply("You already sent a sticker for this welcome.");
  try{
-  const templates=scope==="birthday"?CELEBRATION_BIRTHDAY_PROMPTS:CELEBRATION_WELCOME_PROMPTS;
-  const template=await nextCelebrationItem(env,"prompts:"+scope,templates);
+  if(scope==="welcome"){
+   const sticker=await nextCelebrationSticker(env,"welcome");
+   if(!sticker){
+    await env.DB.prepare("DELETE FROM celebration_reply_claims WHERE source_message_id=? AND actor_id=?").bind(sourceId,actorId).run();
+    return reply("I couldn't find an available server sticker to send.");
+   }
+   const posted=await discordApi(env,"/channels/"+i.channel_id+"/messages","POST",{sticker_ids:[String(sticker)],allowed_mentions:{parse:[]}});
+   if(![200,201].includes(posted.status)||!posted.data?.id){
+    console.error("welcome sticker rejected",JSON.stringify({status:posted.status,error:posted.data,stickerId:sticker,channelId:i.channel_id}));
+    await env.DB.prepare("DELETE FROM celebration_reply_claims WHERE source_message_id=? AND actor_id=?").bind(sourceId,actorId).run();
+    return reply("Discord wouldn't send that sticker. Check that the bot can use this server sticker.");
+   }
+   return reply("Sticker sent!");
+  }
+  const template=await nextCelebrationItem(env,"prompts:"+scope,CELEBRATION_BIRTHDAY_PROMPTS);
   const actorLabel=String(i.member?.user?.global_name||i.member?.user?.username||i.user?.global_name||i.user?.username||"A friend");
   const description=template.replaceAll("{actor}",actorLabel).replaceAll("{target}","you");
-  const content=scope==="birthday"?"🎂 Happy birthday, <@"+targetId+">! 🎉":description+" 🎊";
+  const content="🎂 Happy birthday, <@"+targetId+">! 🎉";
   const sticker=await nextCelebrationSticker(env,scope);
-  const payload={content,allowed_mentions:{parse:[],users:[targetId]}};
-  if(scope==="birthday")payload.embeds=[makeCelebrationEmbed(scope,description,actorLabel)];
+  const payload={content,allowed_mentions:{parse:[],users:[targetId]},embeds:[makeCelebrationEmbed(scope,description,actorLabel)]};
   const posted=await sendCelebrationMessage(env,i.channel_id,payload,sticker);
   if(posted.status!==200||!posted.data?.id)throw Error("Discord rejected the celebration post ("+posted.status+").");
   return reply(posted.stickerRejected?"Your message posted, but Discord rejected the sticker. Check the bot's sticker permissions and the server's available stickers.":!sticker?"Your message posted, but this server has no available stickers for the bot to send yet.":"Celebration posted with a sticker!");
@@ -3101,28 +3120,31 @@ async function ensurePremiumChannelAndRemoveCommands(env) {
 }
 async function maintainCommunitySetup(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_setup(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL,status TEXT NOT NULL,details TEXT,last_error TEXT,updated_at TEXT NOT NULL)").run();
- const revision="introductions-bot-welcome-and-join-role-v3";
+ const revision="welcome-channel-bot-join-and-stickers-v4";
  const saved=await env.DB.prepare("SELECT revision,status FROM community_setup WHERE id=1").first();
  if(saved?.revision===revision&&saved.status==="ready")return;
+ const previouslyReady=saved?.status==="ready";
  const channels=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
  if(channels.status!==200||!Array.isArray(channels.data))throw Error("Could not load server channels: "+channels.status);
  const normalize=name=>String(name||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+ const welcomes=channels.data.filter(c=>[0,5].includes(c.type)&&(String(c.id)===WELCOME_CHANNEL_ID||normalize(c.name)==="welcome"));
  const introductions=channels.data.filter(c=>[0,5].includes(c.type)&&normalize(c.name)==="introductions");
+ if(welcomes.length!==1)throw Error("Expected one welcome channel; found "+welcomes.length);
  if(introductions.length!==1)throw Error("Expected one introductions channel; found "+introductions.length);
  const guild=await discordApi(env,"/guilds/"+GUILD_ID+"?with_counts=false");
  if(guild.status!==200)throw Error("Could not read server settings: "+guild.status);
  const suppressJoin=Number(guild.data.system_channel_flags||0)|1;
- if(guild.data.system_channel_id!==introductions[0].id||Number(guild.data.system_channel_flags||0)!==suppressJoin){
-  const changed=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:introductions[0].id,system_channel_flags:suppressJoin});
-  if(changed.status!==200||changed.data?.system_channel_id!==introductions[0].id||((Number(changed.data?.system_channel_flags||0)&1)===0))throw Error("Could not suppress native introductions welcome: "+changed.status);
+ if(guild.data.system_channel_id!==welcomes[0].id||Number(guild.data.system_channel_flags||0)!==suppressJoin){
+  const changed=await discordApi(env,"/guilds/"+GUILD_ID,"PATCH",{system_channel_id:welcomes[0].id,system_channel_flags:suppressJoin});
+  if(changed.status!==200||changed.data?.system_channel_id!==welcomes[0].id||((Number(changed.data?.system_channel_flags||0)&1)===0))throw Error("Could not suppress native join notice for #welcome: "+changed.status);
  }
  const club=channels.data.filter(c=>[0,5].includes(c.type)&&normalize(c.name)==="club-members");
  if(club.length>1)throw Error("More than one club members channel matched; leaving them untouched.");
- if(club.length===1){
+ if(!previouslyReady&&club.length===1){
   const removed=await discordApi(env,"/channels/"+club[0].id,"DELETE");
   if(removed.status!==204)throw Error("Could not delete the club members channel: "+removed.status);
  }
- const details={introductions_channel_id:introductions[0].id,join_notices:"discord_native_system_channel_sticker_replies",deleted_club_channel_id:club[0]?.id||null};
+ const details={welcome_channel_id:welcomes[0].id,introductions_channel_id:introductions[0].id,join_notices:"native_suppressed_custom_bot_welcome",deleted_club_channel_id:!previouslyReady?club[0]?.id||null:null};
  await env.DB.prepare("INSERT INTO community_setup(id,revision,status,details,last_error,updated_at) VALUES(1,?,'ready',?,NULL,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,status='ready',details=excluded.details,last_error=NULL,updated_at=excluded.updated_at").bind(revision,JSON.stringify(details),new Date().toISOString()).run();
 }
 async function cleanupUnwantedReleaseMessage(env){
@@ -3433,20 +3455,21 @@ async function ensureSuggestionsChannel(e){
  if(![200,201].includes(m.status)||!m.data?.id)throw Error("Embed post failed: "+m.status);
  await e.DB.prepare("INSERT OR REPLACE INTO suggestions_channel_setup(id,channel_id,message_id,status,updated_at) VALUES(1,?,?,?,?)").bind(ch.id,m.data.id,"posted",new Date().toISOString()).run();
 }
- const INTRO_WELCOME_CHANNEL_ID="1564527128253436005";
+ const WELCOME_CHANNEL_ID="1564527128253436005";
 async function ensureCommunityIntroChannels(env){
  if(!env.DB||!env.DISCORD_BOT_TOKEN)return;
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS community_intro_setup(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL)").run();
  const channelsResult=await discordApi(env,"/guilds/"+GUILD_ID+"/channels");
  if(channelsResult.status!==200||!Array.isArray(channelsResult.data))throw Error("Could not read guild channels ("+channelsResult.status+").");
  const channels=channelsResult.data;
- const welcome=channels.find(channel=>String(channel.id)===INTRO_WELCOME_CHANNEL_ID);
- if(welcome&&welcome.name!=="👋・welcome"){
+ const normalizeIntroChannel=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+ const welcome=channels.find(channel=>[0,5].includes(channel.type)&&(String(channel.id)===WELCOME_CHANNEL_ID||normalizeIntroChannel(channel.name)==="welcome"));
+ if(!welcome)throw Error("Could not find the welcome channel.");
+ if(welcome.name!=="👋・welcome"){
   const renamed=await discordApi(env,"/channels/"+welcome.id,"PATCH",{name:"👋・welcome",topic:"Server welcomes and member updates. Use 💜・introductions to share a longer intro."});
   if(renamed.status!==200)throw Error("Could not rename welcome channel ("+renamed.status+"): "+JSON.stringify(renamed.data));
   welcome.name="👋・welcome";
  }
- const normalizeIntroChannel=n=>String(n||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
  let intro=channels.find(channel=>channel.type===0&&normalizeIntroChannel(channel.name)==="introductions");
  if(intro&&intro.name!=="💜・introductions"){
   const renamed=await discordApi(env,"/channels/"+intro.id,"PATCH",{name:"💜・introductions",topic:"Share a little about yourself with the crew. Every prompt is optional except your name or nickname."});
@@ -3471,7 +3494,9 @@ async function ensureCommunityIntroChannels(env){
   if(![200,201].includes(created.status)||!created.data?.id)throw Error("Could not create pet-pictures channel ("+created.status+"): "+JSON.stringify(created.data));
   petPhotos=created.data;
  }
- await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('channel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(intro.id),new Date().toISOString()).run();
+ const setupStamp=new Date().toISOString();
+ await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('channel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(intro.id),setupStamp).run();
+ await env.DB.prepare("INSERT INTO community_intro_setup(key,value,updated_at) VALUES('welcome_channel_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(String(welcome.id),setupStamp).run();
 
  const rolesChannel=channels.find(c=>c.type===0&&(String(c.id)==="1564527127276290098"||normalizeIntroChannel(c.name)==="reaction-roles"));
  if(!rolesChannel)throw Error("Reaction Roles not found; keeping the previous panel unchanged.");
