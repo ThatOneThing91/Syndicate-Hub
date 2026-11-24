@@ -1092,7 +1092,7 @@ async function postCelebrationReply(i,env,{scope,targetId,actorId}){
     await env.DB.prepare("DELETE FROM celebration_reply_claims WHERE source_message_id=? AND actor_id=?").bind(sourceId,actorId).run();
     return reply("I couldn't find an available server sticker to send.");
    }
-   const posted=await discordApi(env,"/channels/"+i.channel_id+"/messages","POST",{sticker_ids:[String(sticker)],allowed_mentions:{parse:[]}});
+   const posted=await discordApi(env,"/channels/"+i.channel_id+"/messages","POST",{sticker_ids:[String(sticker)],message_reference:{message_id:sourceId,channel_id:String(i.channel_id)},allowed_mentions:{parse:[]}});
    if(![200,201].includes(posted.status)||!posted.data?.id){
     console.error("welcome sticker rejected",JSON.stringify({status:posted.status,error:posted.data,stickerId:sticker,channelId:i.channel_id}));
     await env.DB.prepare("DELETE FROM celebration_reply_claims WHERE source_message_id=? AND actor_id=?").bind(sourceId,actorId).run();
