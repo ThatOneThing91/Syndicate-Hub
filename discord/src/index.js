@@ -1120,7 +1120,7 @@ async function currentCelebrationStickers(env){
  const result=await discordApi(env,"/guilds/"+GUILD_ID+"/stickers");
  if(result.status!==200||!Array.isArray(result.data)){celebrationStickerCache=[];celebrationStickerCacheAt=Date.now();return []}
  const all=result.data.filter(item=>item?.id&&item.available!==false);
- const festive=all.filter(item=>/celebr|birthday|welcome|party|confetti|congrats|congrat|cake|yay|hype|dance|wave|hello|cheer|sparkle/i.test(String(item.name||"")+" "+String(item.tags||"")));
+ const festive=all.filter(item=>/^Syndicate |celebr|birthday|welcome|party|confetti|congrats|congrat|cake|yay|hype|dance|wave|hello|cheer|sparkle/i.test(String(item.name||"")+" "+String(item.tags||"")));
  celebrationStickerCache=festive.length?festive:all;
  celebrationStickerCacheAt=Date.now();
  return celebrationStickerCache;
