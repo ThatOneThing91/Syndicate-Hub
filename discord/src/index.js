@@ -1029,6 +1029,11 @@ function shuffleCelebration(items){
 async function nextCelebrationItem(env,scope,items){
  const now=new Date().toISOString(), deck=JSON.stringify(shuffleCelebration(items));
  await env.DB.prepare("INSERT OR IGNORE INTO celebration_rotation(scope,items_json,cursor,updated_at) VALUES(?,?, -1, ?)").bind(scope,deck,now).run();
+ const existing=await env.DB.prepare("SELECT items_json FROM celebration_rotation WHERE scope=?").bind(scope).first();
+ let prior;try{prior=JSON.parse(existing?.items_json||"[]")}catch{prior=[]}
+ if(!Array.isArray(prior)||prior.length!==items.length||prior.some(x=>!items.includes(x))){
+  await env.DB.prepare("UPDATE celebration_rotation SET items_json=?,cursor=-1 WHERE scope=? AND items_json=?").bind(deck,scope,existing?.items_json||"").run();
+ }
  const row=await env.DB.prepare("UPDATE celebration_rotation SET cursor=(cursor+1)%?,updated_at=? WHERE scope=? RETURNING items_json,cursor").bind(items.length,now,scope).first();
  if(!row)return items[Math.floor(Math.random()*items.length)];
  let active;
@@ -1036,6 +1041,80 @@ async function nextCelebrationItem(env,scope,items){
  if(!Array.isArray(active)||active.length!==items.length||active.some(item=>!items.includes(item)))active=shuffleCelebration(items);
  return active[row.cursor]||items[Math.floor(Math.random()*items.length)];
 }
+
+const WELCOME_STICKER_DESIGNS=[
+ ["Syndicate Hello","👋","#b59aff",0],["Syndicate Cheers","🎉","#ffca73",1],
+ ["Syndicate Heart","💜","#e99bdf",2],["Syndicate Star","🌟","#f6dc80",3],
+ ["Syndicate Hype","🥳","#7ce6d5",4],["Syndicate Wink","😉","#a9b5ff",5],
+ ["Syndicate Happy","😊","#ffac91",6],["Syndicate Cool","😎","#85d4ff",7],
+ ["Syndicate Love","🫶","#f8a3bb",8],["Syndicate Yay","🙌","#b4f0aa",9],
+ ["Syndicate Sparkle","✨","#c6a6ff",10],["Syndicate Smile","😄","#ffd49b",11]
+];
+async function welcomeStickerPng(design){
+ const N=320,raw=new Uint8Array(N*(N*4+1)), color=design[2].match(/\w\w/g).map(x=>parseInt(x,16)), v=design[3];
+ const ink=[42,28,66],white=[255,255,255],pink=[255,120,167],gold=[255,221,111];
+ const disk=(x,y,cx,cy,rx,ry=rx)=>((x-cx)/rx)**2+((y-cy)/ry)**2<=1;
+ const star=(x,y,cx,cy,r)=>Math.abs(x-cx)+Math.abs(y-cy)<=r;
+ const heart=(x,y,cx,cy,r)=>{let a=(x-cx)/r,b=-(y-cy)/r;return (a*a+b*b-1)**3-a*a*b*b*b<=0};
+ for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+  let p=null;
+  if(disk(x,y,160,164,115,113))p=white;
+  if(disk(x,y,160,164,108,106))p=ink;
+  if(disk(x,y,160,160,99,97))p=color;
+  if(disk(x,y,133,103,47,16))p=color.map(c=>Math.min(255,c+18));
+  for(const cx of [123,197]){
+   if((v===2||v===8)&&heart(x,y,cx,142,17))p=pink;
+   else if(v===3&&star(x,y,cx,142,17))p=gold;
+   else if(v===7&&Math.abs(x-cx)<24&&Math.abs(y-143)<15)p=ink;
+   else if(v===5&&cx===197&&Math.abs(x-cx)<13&&Math.abs(y-143)<4)p=ink;
+   else if(disk(x,y,cx,142,11,15))p=ink;
+   if(disk(x,y,cx-4,137,3)&&v!==7&&v!==5&&v!==2&&v!==8&&v!==3)p=white;
+  }
+  if(v===7&&Math.abs(x-160)<19&&Math.abs(y-141)<4)p=ink;
+  if(disk(x,y,108,171,14,7)||disk(x,y,212,171,14,7))p=pink;
+  if(disk(x,y,160,180,35,28)&&y>177){p=ink;if(y>194&&disk(x,y,160,201,19,9))p=pink;}
+  const points=[[62,63],[258,66],[49,227],[271,232],[158,30]];
+  for(let k=0;k<points.length;k++){
+   const [cx,cy]=points[k];if(star(x,y,cx,cy,9+((v+k)%3)*4))p=k%2?gold:color;
+  }
+  if(v===0||v===9){if(disk(x,y,248,187,25,27))p=white;if(disk(x,y,248,187,20,22))p=gold;for(let k=0;k<3;k++)if(disk(x,y,233+k*13,163-(k%2)*8,6,17))p=gold;}
+  if(v===1||v===4){if(y>=26&&y<=83&&Math.abs(x-160)<(y-26)*0.53)p=ink;if(y>=31&&y<=78&&Math.abs(x-160)<(y-31)*0.48)p=gold;if(disk(x,y,160,26,8))p=pink;}
+  if(v===6||v===11){if(heart(x,y,55,100,12)||heart(x,y,265,104,12))p=pink;}
+  if(p){let i=y*(N*4+1)+1+x*4;raw.set([...p,255],i);}
+ }
+ const zip=new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream("deflate"))).arrayBuffer());
+ const u32=n=>new Uint8Array([(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255]);
+ const chunk=(type,bytes)=>{const t=new TextEncoder().encode(type),data=new Uint8Array(t.length+bytes.length);data.set(t);data.set(bytes,4);let crc=0xffffffff;for(const b of data){crc^=b;for(let k=0;k<8;k++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}return [u32(bytes.length),data,u32((crc^0xffffffff)>>>0)];};
+ const hdr=new Uint8Array(13);hdr.set(u32(N),0);hdr.set(u32(N),4);hdr.set([8,6,0,0,0],8);
+ return new Blob([new Uint8Array([137,80,78,71,13,10,26,10]),...chunk("IHDR",hdr),...chunk("IDAT",zip),...chunk("IEND",new Uint8Array())],{type:"image/png"});
+}
+async function ensureWelcomeStickerPool(env){
+ if(!env.DISCORD_BOT_TOKEN||!env.DB)return;
+ const now=Date.now();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS welcome_sticker_setup(id INTEGER PRIMARY KEY CHECK(id=1),lease_until INTEGER NOT NULL,status TEXT)").run();
+ await env.DB.prepare("INSERT OR IGNORE INTO welcome_sticker_setup(id,lease_until,status) VALUES(1,0,'pending')").run();
+ const lock=await env.DB.prepare("UPDATE welcome_sticker_setup SET lease_until=? WHERE id=1 AND lease_until<=? RETURNING id").bind(now+120000,now).first();
+ if(!lock)return;
+ let status="pending",next=now+60000;
+ try{
+  const list=await discordApi(env,"/guilds/"+GUILD_ID+"/stickers");
+  if(list.status!==200||!Array.isArray(list.data)){status="list HTTP "+list.status;next=now+600000;return;}
+  const names=new Set(list.data.map(x=>String(x.name)));
+  const missing=WELCOME_STICKER_DESIGNS.filter(x=>!names.has(x[0]));
+  if(!missing.length){status="ready: "+list.data.length+" guild stickers";next=now+86400000;return;}
+  let added=0;
+  for(const d of missing.slice(0,3)){
+   const form=new FormData();form.set("name",d[0]);form.set("description","Shadow Syndicate welcome collection");form.set("tags",d[1]);form.set("file",await welcomeStickerPng(d),"welcome.png");
+   const response=await fetch("https://discord.com/api/v10/guilds/"+GUILD_ID+"/stickers",{method:"POST",headers:{Authorization:"Bot "+env.DISCORD_BOT_TOKEN},body:form,signal:AbortSignal.timeout(10000)});
+   const data=await response.json().catch(()=>({}));
+   if(!response.ok){status="create HTTP "+response.status+" / "+String(data.code||"")+" "+String(data.message||"").slice(0,120);next=now+(response.status===429?Math.max(60000,1000*Number(data.retry_after||60)):3600000);return;}
+   added++;celebrationStickerCache=null;
+  }
+  status="added "+added+"; guild total "+(list.data.length+added);
+ }catch(e){status=String(e).slice(0,200);next=now+600000;}
+ finally{await env.DB.prepare("UPDATE welcome_sticker_setup SET lease_until=?,status=? WHERE id=1").bind(next,status).run();}
+}
+
 async function currentCelebrationStickers(env){
  if(celebrationStickerCache&&Date.now()-celebrationStickerCacheAt<60000)return celebrationStickerCache;
  const result=await discordApi(env,"/guilds/"+GUILD_ID+"/stickers");
@@ -1087,18 +1166,24 @@ async function postCelebrationReply(i,env,{scope,targetId,actorId}){
  if(!(claim?.meta?.changes>0))return reply("You already sent a sticker for this welcome.");
  try{
   if(scope==="welcome"){
-   const sticker=await nextCelebrationSticker(env,"welcome");
-   if(!sticker){
-    await env.DB.prepare("DELETE FROM celebration_reply_claims WHERE source_message_id=? AND actor_id=?").bind(sourceId,actorId).run();
-    return reply("I couldn't find an available server sticker to send.");
+   const stickers=await currentCelebrationStickers(env);
+   const tried=new Set();
+   const base={message_reference:{message_id:sourceId,channel_id:String(i.channel_id)},allowed_mentions:{parse:[],replied_user:false}};
+   for(let attempt=0;attempt<Math.min(3,stickers.length);attempt++){
+    const sticker=await nextCelebrationSticker(env,"welcome");
+    if(!sticker||tried.has(sticker))continue;
+    tried.add(sticker);
+    const posted=await discordApi(env,"/channels/"+i.channel_id+"/messages","POST",{...base,sticker_ids:[String(sticker)]});
+    if([200,201].includes(posted.status)&&posted.data?.id)return reply("Sticker sent!");
+    console.warn("welcome sticker rejected",posted.status,posted.data?.code);
+    if(posted.status===429||posted.status>=500)break;
    }
-   const posted=await discordApi(env,"/channels/"+i.channel_id+"/messages","POST",{sticker_ids:[String(sticker)],message_reference:{message_id:sourceId,channel_id:String(i.channel_id)},allowed_mentions:{parse:[]}});
-   if(![200,201].includes(posted.status)||!posted.data?.id){
-    console.error("welcome sticker rejected",JSON.stringify({status:posted.status,error:posted.data,stickerId:sticker,channelId:i.channel_id}));
-    await env.DB.prepare("DELETE FROM celebration_reply_claims WHERE source_message_id=? AND actor_id=?").bind(sourceId,actorId).run();
-    return reply("Discord wouldn't send that sticker. Check that the bot can use this server sticker.");
-   }
-   return reply("Sticker sent!");
+   const template=await nextCelebrationItem(env,"prompts:welcome",CELEBRATION_WELCOME_PROMPTS);
+   const actorLabel=String(i.member?.user?.global_name||i.member?.user?.username||i.user?.global_name||i.user?.username||"A friend");
+   const content=template.replaceAll("{actor}",actorLabel).replaceAll("{target}","<@"+targetId+">");
+   const posted=await discordApi(env,"/channels/"+i.channel_id+"/messages","POST",{...base,content});
+   if(![200,201].includes(posted.status)||!posted.data?.id)throw Error("Welcome reply failed HTTP "+posted.status);
+   return reply("Welcome greeting sent!");
   }
   const template=await nextCelebrationItem(env,"prompts:"+scope,CELEBRATION_BIRTHDAY_PROMPTS);
   const actorLabel=String(i.member?.user?.global_name||i.member?.user?.username||i.user?.global_name||i.user?.username||"A friend");
@@ -4119,6 +4204,7 @@ async scheduled(event,env,ctx){
   ctx.waitUntil(ensurePlatformPanel(env).catch(e=>console.error("platform panel",String(e))));
   ctx.waitUntil(syncExistingKeyAccessPanel(env).catch(e=>console.error("key panel layout sync",String(e))));
   ctx.waitUntil(maintainCommunitySetup(env).catch(e=>console.error("community setup",String(e))));
+  ctx.waitUntil(ensureWelcomeStickerPool(env).catch(e=>console.error("welcome sticker setup",String(e))));
 
   ctx.waitUntil(refreshExecutorStatus(env).catch(async e=>{console.error("executor status refresh",String(e));await env.DB.prepare("UPDATE executor_feed_state SET last_error=?,next_run=? WHERE id=1").bind("Panel delivery: "+String(e).slice(0,1400),Date.now()+60000).run();}));
   ctx.waitUntil(refreshRobloxUpdates(env).catch(e=>console.error("Roblox updates",String(e))));
