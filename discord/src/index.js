@@ -902,6 +902,10 @@ const ROBLOX_ACHIEVEMENT_ROLES = Object.freeze([
 ]);
 
 
+const INDEX_BADGE_IDS = new Set(["2119370661379569","599586120872973","4322087043340422","1542612394801402","1523977774949788","1951652142311679","4343718850734940","1748654945450203","3443940266061497","2779271482766260","253397934063860","3416683540311532","2991713882977619"]);
+const INDEX_MASTERY_ROLE = Object.freeze({key:"mastery_index",kind:"mastery",source_id:"all_index_badges",name:"Grand Archivist",emoji:"📚",color:0xB58AF0});
+const ROBLOX_MANAGED_ROLES = Object.freeze([...ROBLOX_ACHIEVEMENT_ROLES,INDEX_MASTERY_ROLE]);
+
 const LINK_ROBLOX_COMMAND = Object.freeze({
  name:"link-roblox",
  description:"Check public Roblox inventory for badge/gamepass roles; ownership is not verified",
@@ -2250,8 +2254,10 @@ async function robloxInventoryOwnership(accessToken,robloxUserId,useApiKey=false
    for(const candidate of candidates){const id=String(candidate??"");if(targetIds.has(id))owned.add(id);}
   }
   pageToken=String(data.nextPageToken||"");
-  if(!pageToken||!data.inventoryItems.length)break;
+  if(!pageToken)break;
+  if(!data.inventoryItems.length)throw Error("Roblox returned an incomplete inventory page.");
  }
+ if(pageToken)throw Error("Roblox inventory pagination did not finish; keeping existing roles.");
  return owned;
 }
 async function robloxNicknameFailureReason(env,discordId,memberData,result){
@@ -2296,10 +2302,13 @@ async function syncRobloxMember(env,link,accessToken,useApiKey=false,memberSnaps
  const byKey=new Map((catalog.results||[]).map(x=>[x.role_key,x]));
  const desiredRoles=new Set((member.data.roles||[]).map(String));
  let added=0,removed=0;
- for(const def of ROBLOX_ACHIEVEMENT_ROLES){
+ const mastery=byKey.get(INDEX_MASTERY_ROLE.key);
+ const allIndexes=[...INDEX_BADGE_IDS].every(id=>owned.has(id));
+ const consolidate=!!mastery?.role_id&&allIndexes;
+ for(const def of ROBLOX_MANAGED_ROLES){
   const row=byKey.get(def.key);
   if(!row?.role_id)continue;
-  const roleId=String(row.role_id),has=owned.has(def.source_id),assigned=desiredRoles.has(roleId);
+  const roleId=String(row.role_id),has=def.kind==="mastery"?allIndexes:owned.has(def.source_id)&&!(consolidate&&INDEX_BADGE_IDS.has(def.source_id)),assigned=desiredRoles.has(roleId);
   if(has&&!assigned){desiredRoles.add(roleId);added++;}
   else if(!has&&assigned){desiredRoles.delete(roleId);removed++;}
  }
@@ -2541,17 +2550,17 @@ async function ensureRobloxAchievementRoles(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_achievement_role_setup(id INTEGER PRIMARY KEY CHECK(id=1),status TEXT NOT NULL DEFAULT 'pending',completed INTEGER NOT NULL DEFAULT 0,total INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0,last_error TEXT,updated_at TEXT NOT NULL)").run();
  await env.DB.prepare("INSERT OR IGNORE INTO roblox_achievement_role_setup(id,status,updated_at) VALUES(1,'pending',?)").bind(new Date().toISOString()).run();
  const now=Date.now();
- const claim=await env.DB.prepare("UPDATE roblox_achievement_role_setup SET status='running',lease_until=?,updated_at=? WHERE id=1 AND status!='ready' AND lease_until<=?").bind(now+55000,new Date(now).toISOString(),now).run();
+ const claim=await env.DB.prepare("UPDATE roblox_achievement_role_setup SET status='running',lease_until=?,updated_at=? WHERE id=1 AND (status!='ready' OR total!=?) AND lease_until<=?").bind(now+55000,new Date(now).toISOString(),ROBLOX_MANAGED_ROLES.length,now).run();
  if(!claim.meta?.changes)return;
  try{
   const stamp=new Date().toISOString();
-  await env.DB.batch(ROBLOX_ACHIEVEMENT_ROLES.map(d=>env.DB.prepare("INSERT INTO roblox_achievement_role_catalog(role_key,kind,source_id,role_name,emoji,color,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(role_key) DO UPDATE SET kind=excluded.kind,source_id=excluded.source_id,role_name=excluded.role_name,emoji=excluded.emoji,color=excluded.color,updated_at=excluded.updated_at").bind(d.key,d.kind,d.source_id,d.name,d.emoji,d.color,stamp)));
+  await env.DB.batch(ROBLOX_MANAGED_ROLES.map(d=>env.DB.prepare("INSERT INTO roblox_achievement_role_catalog(role_key,kind,source_id,role_name,emoji,color,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(role_key) DO UPDATE SET kind=excluded.kind,source_id=excluded.source_id,role_name=excluded.role_name,emoji=excluded.emoji,color=excluded.color,updated_at=excluded.updated_at").bind(d.key,d.kind,d.source_id,d.name,d.emoji,d.color,stamp)));
   const existing=await discordApi(env,"/guilds/"+GUILD_ID+"/roles");
   if(existing.status!==200||!Array.isArray(existing.data))throw Error("Could not list server roles (HTTP "+existing.status+").");
   const allRoles=existing.data;
   const mapped=await env.DB.prepare("SELECT role_key,role_id FROM roblox_achievement_role_catalog").all();
   const ids=new Map((mapped.results||[]).map(r=>[r.role_key,r.role_id]));
-  const pending=ROBLOX_ACHIEVEMENT_ROLES.filter(d=>!ids.get(d.key)||!allRoles.some(r=>String(r.id)===String(ids.get(d.key))));
+  const pending=ROBLOX_MANAGED_ROLES.filter(d=>!ids.get(d.key)||!allRoles.some(r=>String(r.id)===String(ids.get(d.key))));
   let made=0;
   for(const d of pending){
    const matches=allRoles.filter(r=>r.name===d.name&&!r.managed);
@@ -2573,7 +2582,7 @@ async function ensureRobloxAchievementRoles(env){
    if(made>=32)break;
   }
   const refreshed=await env.DB.prepare("SELECT COUNT(*) AS total,SUM(CASE WHEN role_id IS NOT NULL THEN 1 ELSE 0 END) AS completed FROM roblox_achievement_role_catalog").first();
-  const complete=Number(refreshed?.completed||0),total=ROBLOX_ACHIEVEMENT_ROLES.length;
+  const complete=Number(refreshed?.completed||0),total=ROBLOX_MANAGED_ROLES.length;
   const status=complete===total?"ready":"running";
   await env.DB.prepare("UPDATE roblox_achievement_role_setup SET status=?,completed=?,total=?,lease_until=0,last_error=NULL,updated_at=? WHERE id=1").bind(status,complete,total,new Date().toISOString()).run();
   if(status==="ready")await cleanupLegacyNetWorthRoles(env,allRoles);
@@ -3589,7 +3598,7 @@ async function ensureCommunityIntroChannels(env){
  const oldPanel=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_id'").first();
  const oldLocation=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_channel_id'").first();
  const revision=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='panel_revision'").first();
- const currentRevision="intro-studio-20261121-v4-compact-roblox-roles";
+ const currentRevision="intro-studio-v5-separate-roblox";
  await put("pet_channel_id",petPhotos.id);
  const panel={embeds:[{
   color:0x8555D9,author:{name:"SHADOW SYNDICATE • COMMUNITY"},
@@ -3599,14 +3608,12 @@ async function ensureCommunityIntroChannels(env){
    {name:"🎮 Interests & Games",value:"Games, hobbies, music, movies, books and creative interests.",inline:false},
    {name:"💖 Your Favorites",value:"Food, colors, fandoms, comforts and current obsessions.",inline:false},
    {name:"✨ The Fun Stuff",value:"Fun facts, pets, talents, conversation starters and anything else.",inline:false},
-   {name:"🐾 Pet Gallery",value:"Upload up to ten pet pictures with a personal message. Your photos and tag go to <#"+petPhotos.id+">.",inline:false},
-   {name:"🎮 Roblox Roles",value:"Link your Roblox below to get access to your custom roles. Roles refresh every 10 minutes.",inline:false}
+   {name:"🐾 Pet Gallery",value:"Upload up to ten pet pictures with a personal message. Your photos and tag go to <#"+petPhotos.id+">.",inline:false}
   ],
   footer:{text:"Only a name or nickname is required • Everything else is your choice"}
  }],components:[{type:1,components:[
   {type:2,style:1,label:"💜 Build My Introduction",custom_id:"intro_studio_open"},
-  {type:2,style:2,label:"🐾 Share Pet Photos",custom_id:"intro_pet_open"},
-  {type:2,style:2,label:"🎮 Link Roblox",custom_id:"roblox_public_link_open"}
+  {type:2,style:2,label:"🐾 Share Pet Photos",custom_id:"intro_pet_open"}
  ]}],allowed_mentions:{parse:[]}};
  let posted=null;
  if(oldPanel?.value&&String(oldLocation?.value||"")===String(rolesChannel.id)){
@@ -3628,6 +3635,36 @@ async function ensureCommunityIntroChannels(env){
    if(![200,204,404].includes(removed.status))console.error("Old introduction panel removal HTTP",removed.status);
   }
  }
+ 
+ const linkRevision="roblox-link-panel-v1";
+ const linkPanel={embeds:[{
+  color:0xB58AF0,author:{name:"SHADOW SYNDICATE • ROBLOX"},
+  title:"🎮 Link Your Roblox",
+  description:"Bring your Storage Hunters achievements into Discord. Connect your public Roblox profile using your username or user ID — **no Roblox login or password required.**",
+  fields:[
+   {name:"🔗 How to link",value:"Press the button below and enter your Roblox username or numeric user ID. Your inventory must be public for the no-login method.",inline:false},
+   {name:"🏅 Your rewards",value:"Earn custom badge and gamepass roles automatically. Complete all 13 index badges to unlock **Grand Archivist** in place of your individual index roles.",inline:false},
+   {name:"🔄 Automatic updates",value:"Your server nickname will match your Roblox username when Discord permissions allow it. Your achievement roles refresh approximately every 10–15 minutes. Use `/unlink-roblox` to disconnect.",inline:false}
+  ],footer:{text:"Public profile lookup • Does not verify account ownership"}
+ }],components:[{type:1,components:[{type:2,style:1,label:"Link Roblox",emoji:{name:"🎮"},custom_id:"roblox_public_link_open"}]}],allowed_mentions:{parse:[]}};
+ const storedLink=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='roblox_panel_id'").first();
+ const storedRevision=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='roblox_panel_revision'").first();
+ let linkMessage=null;
+ if(storedLink?.value){
+  const found=await discordApi(env,"/channels/"+rolesChannel.id+"/messages/"+storedLink.value);
+  if(found.status===200&&found.data?.author?.id===APPLICATION_ID){
+   linkMessage=storedRevision?.value===linkRevision?found:await discordApi(env,"/channels/"+rolesChannel.id+"/messages/"+storedLink.value,"PATCH",linkPanel);
+  }else if(found.status!==404)throw Error("Roblox panel lookup HTTP "+found.status);
+ }
+ if(!linkMessage){
+  const recent=await discordApi(env,"/channels/"+rolesChannel.id+"/messages?limit=50");
+  if(recent.status!==200)throw Error("Roblox panel search HTTP "+recent.status);
+  const existing=recent.data.find(m=>m.author?.id===APPLICATION_ID&&m.embeds?.some(e=>e.title==="🎮 Link Your Roblox"));
+  linkMessage=existing?await discordApi(env,"/channels/"+rolesChannel.id+"/messages/"+existing.id,"PATCH",linkPanel):await discordApi(env,"/channels/"+rolesChannel.id+"/messages","POST",{...linkPanel,nonce:"roblox-link-panel-v1",enforce_nonce:true});
+ }
+ if(![200,201].includes(linkMessage.status)||!linkMessage.data?.id)throw Error("Roblox linking panel HTTP "+linkMessage.status);
+ await put("roblox_panel_id",linkMessage.data.id);
+ await put("roblox_panel_revision",linkRevision);
 
 }
 async function ensureRobloxRoleReferenceChannel(env){
@@ -3741,10 +3778,11 @@ async function ensureRobloxRoleReferenceChannel(env){
  const badges=roles.filter(item=>item.kind==="badge");
  const passes=roles.filter(item=>item.kind==="gamepass");
  const payload={embeds:[
+  {title:"📚 Grand Archivist",color:0xB58AF0,description:"Complete all 13 mapped index badges to earn this mastery role. It replaces the individual index roles while leaving all other badge and gamepass roles unchanged."},
   ...buildEmbeds(badges,"badge","🏅 Badge Roles ("+badges.length+")",0x8555D9),
   ...buildEmbeds(passes,"gamepass","🎟️ Game Pass Roles ("+passes.length+")",0xA27A3F)
  ],allowed_mentions:{parse:[]}};
- const revision="roblox-role-reference-v3-emoji-channel";
+ const revision="roblox-role-reference-v4-index-mastery";
  let message=null;
  if(state?.channel_id===String(channel.id)&&state?.message_id){
   const existing=await discordApi(env,"/channels/"+channel.id+"/messages/"+state.message_id);
