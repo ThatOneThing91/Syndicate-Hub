@@ -2146,7 +2146,8 @@ async function ensureRobloxLinkTables(env){
  await env.DB.batch([
   env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_link_states(state TEXT PRIMARY KEY,discord_user_id TEXT NOT NULL,code_verifier TEXT NOT NULL,expires_at TEXT NOT NULL,created_at TEXT NOT NULL)"),
   env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_discord_links(discord_user_id TEXT PRIMARY KEY,roblox_user_id TEXT NOT NULL UNIQUE,roblox_username TEXT NOT NULL,refresh_cipher TEXT NOT NULL,refresh_iv TEXT NOT NULL,original_nickname TEXT,next_sync_at TEXT NOT NULL,sync_started_at TEXT,sync_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"),
-  env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_public_links(discord_user_id TEXT PRIMARY KEY,roblox_user_id TEXT NOT NULL,roblox_username TEXT NOT NULL,original_nickname TEXT,next_sync_at TEXT NOT NULL,sync_started_at TEXT,sync_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)")
+  env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_public_links(discord_user_id TEXT PRIMARY KEY,roblox_user_id TEXT NOT NULL,roblox_username TEXT NOT NULL,original_nickname TEXT,next_sync_at TEXT NOT NULL,sync_started_at TEXT,sync_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"),
+  env.DB.prepare("CREATE TABLE IF NOT EXISTS roblox_index_role_preferences(discord_user_id TEXT NOT NULL,roblox_user_id TEXT NOT NULL,compact INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,PRIMARY KEY(discord_user_id,roblox_user_id))")
  ]);
 }
 
@@ -2291,7 +2292,7 @@ async function robloxNicknameFailureReason(env,discordId,memberData,result){
  }
 }
 
-async function syncRobloxMember(env,link,accessToken,useApiKey=false,memberSnapshot=null){
+async function syncRobloxMember(env,link,accessToken,useApiKey=false,memberSnapshot=null,indexChoice=null){
  const discordId=String(link.discord_user_id),robloxId=String(link.roblox_user_id),username=String(link.roblox_username);
  const [member,owned,catalog]=await Promise.all([
   memberSnapshot?Promise.resolve(memberSnapshot):discordApi(env,"/guilds/"+GUILD_ID+"/members/"+discordId),
@@ -2304,11 +2305,17 @@ async function syncRobloxMember(env,link,accessToken,useApiKey=false,memberSnaps
  let added=0,removed=0;
  const mastery=byKey.get(INDEX_MASTERY_ROLE.key);
  const allIndexes=[...INDEX_BADGE_IDS].every(id=>owned.has(id));
- const consolidate=!!mastery?.role_id&&allIndexes;
+ if(indexChoice!==null){
+  if(indexChoice===true&&!allIndexes)return {indexEligible:false,indexCount:[...INDEX_BADGE_IDS].filter(id=>owned.has(id)).length};
+  if(indexChoice===true&&!mastery?.role_id)throw Error("Grand Archivist is not available yet.");
+  await env.DB.prepare("INSERT INTO roblox_index_role_preferences(discord_user_id,roblox_user_id,compact,updated_at) VALUES(?,?,?,?) ON CONFLICT(discord_user_id,roblox_user_id) DO UPDATE SET compact=excluded.compact,updated_at=excluded.updated_at").bind(discordId,robloxId,indexChoice?1:0,new Date().toISOString()).run();
+ }
+ const preference=await env.DB.prepare("SELECT compact FROM roblox_index_role_preferences WHERE discord_user_id=? AND roblox_user_id=?").bind(discordId,robloxId).first();
+ const consolidate=!!mastery?.role_id&&allIndexes&&Number(preference?.compact)===1;
  for(const def of ROBLOX_MANAGED_ROLES){
   const row=byKey.get(def.key);
   if(!row?.role_id)continue;
-  const roleId=String(row.role_id),has=def.kind==="mastery"?allIndexes:owned.has(def.source_id)&&!(consolidate&&INDEX_BADGE_IDS.has(def.source_id)),assigned=desiredRoles.has(roleId);
+  const roleId=String(row.role_id),has=def.kind==="mastery"?consolidate:owned.has(def.source_id)&&!(consolidate&&INDEX_BADGE_IDS.has(def.source_id)),assigned=desiredRoles.has(roleId);
   if(has&&!assigned){desiredRoles.add(roleId);added++;}
   else if(!has&&assigned){desiredRoles.delete(roleId);removed++;}
  }
@@ -2344,7 +2351,7 @@ async function syncRobloxMember(env,link,accessToken,useApiKey=false,memberSnaps
    nicknameError=await robloxNicknameFailureReason(env,discordId,member.data,changed);
   }
  }
- return {owned:owned.size,added,removed,nicknameUpdated,nicknameError};
+ return {owned:owned.size,added,removed,nicknameUpdated,nicknameError,indexEligible:allIndexes,indexCount:[...INDEX_BADGE_IDS].filter(id=>owned.has(id)).length,consolidated:consolidate};
 }
 
 async function resolveRobloxProfileByInput(input){
@@ -2461,6 +2468,35 @@ async function robloxOAuthCallback(request,env){
   return robloxHtmlPage("Could not finish linking","The Roblox connection did not finish. Return to Discord and start a fresh /link-roblox request.",502);
  }
 }
+async function indexRoleChoice(i,env,compact){
+ const did=String(i.member?.user?.id||i.user?.id||"");
+ if(!did||String(i.guild_id)!==String(GUILD_ID)||!env.DB)return reply("This button is only available in Shadow Syndicate.");
+ await ensureRobloxLinkTables(env);
+ const [publicLink,oauthLink]=await Promise.all([
+  env.DB.prepare("SELECT discord_user_id,roblox_user_id,roblox_username FROM roblox_public_links WHERE discord_user_id=?").bind(did).first(),
+  env.DB.prepare("SELECT discord_user_id,roblox_user_id,roblox_username FROM roblox_discord_links WHERE discord_user_id=?").bind(did).first()
+ ]);
+ if(!publicLink&&!oauthLink)return reply("Link your Roblox profile in <#1564527127276290098> first.");
+ const link=oauthLink||publicLink;
+ if(oauthLink){
+  // The existing scheduled OAuth worker owns refresh-token rotation.
+  // Save the requested display mode; actual eligibility is checked by sync.
+  await env.DB.prepare("INSERT INTO roblox_index_role_preferences(discord_user_id,roblox_user_id,compact,updated_at) VALUES(?,?,?,?) ON CONFLICT(discord_user_id,roblox_user_id) DO UPDATE SET compact=excluded.compact,updated_at=excluded.updated_at").bind(did,String(link.roblox_user_id),compact?1:0,new Date().toISOString()).run();
+  await env.DB.prepare("UPDATE roblox_discord_links SET next_sync_at=? WHERE discord_user_id=?").bind(new Date().toISOString(),did).run();
+  return reply(compact?"Preference saved. Your next verified inventory sync will equip Grand Archivist only if you own all 13 index badges.":"Preference saved. Your next inventory sync will restore your individual index roles.");
+ }
+ if(!env.ROBLOX_OPEN_CLOUD_API_KEY)return reply("Roblox inventory lookup is temporarily unavailable.");
+ const now=Date.now(),stamp=new Date(now).toISOString();
+ const claim=await env.DB.prepare("UPDATE roblox_public_links SET sync_started_at=?,updated_at=? WHERE discord_user_id=? AND (sync_started_at IS NULL OR sync_started_at<=?)").bind(stamp,stamp,did,new Date(now-10*60*1000).toISOString()).run();
+ if(!claim.meta?.changes)return reply("Your roles are currently syncing. Try again shortly.");
+ try{
+  const result=await syncRobloxMember(env,link,env.ROBLOX_OPEN_CLOUD_API_KEY,true,null,compact);
+  if(compact&&!result.indexEligible)return reply("You have completed "+result.indexCount+"/13 index badges. Complete the rest to equip Grand Archivist.");
+  return reply(compact?"📚 Grand Archivist equipped. Your individual index roles have been replaced.":"Your earned individual index roles are restored.");
+ }finally{
+  await env.DB.prepare("UPDATE roblox_public_links SET sync_started_at=NULL,next_sync_at=? WHERE discord_user_id=? AND sync_started_at=?").bind(new Date(Date.now()+10*60*1000).toISOString(),did,stamp).run();
+ }
+}
 async function unlinkRobloxAccount(i,env){
  const did=String(i.member?.user?.id||i.user?.id||"");
  if(!did)return reply("I couldn't identify your Discord account.");
@@ -2489,6 +2525,7 @@ async function unlinkRobloxAccount(i,env){
  }
  await env.DB.prepare("DELETE FROM roblox_discord_links WHERE discord_user_id=?").bind(did).run();
  await env.DB.prepare("DELETE FROM roblox_public_links WHERE discord_user_id=?").bind(did).run();
+ await env.DB.prepare("DELETE FROM roblox_index_role_preferences WHERE discord_user_id=?").bind(did).run();
  return reply("Your Roblox account was unlinked. Achievement roles were removed, and your previous Discord nickname was restored.");
 }
 async function syncLinkedRobloxAccounts(env){
@@ -3636,16 +3673,11 @@ async function ensureCommunityIntroChannels(env){
   }
  }
  
- const linkRevision="roblox-link-panel-v1";
+ const linkRevision="roblox-link-panel-v2-short";
  const linkPanel={embeds:[{
-  color:0xB58AF0,author:{name:"SHADOW SYNDICATE • ROBLOX"},
+  color:0xB58AF0,
   title:"🎮 Link Your Roblox",
-  description:"Bring your Storage Hunters achievements into Discord. Connect your public Roblox profile using your username or user ID — **no Roblox login or password required.**",
-  fields:[
-   {name:"🔗 How to link",value:"Press the button below and enter your Roblox username or numeric user ID. Your inventory must be public for the no-login method.",inline:false},
-   {name:"🏅 Your rewards",value:"Earn custom badge and gamepass roles automatically. Complete all 13 index badges to unlock **Grand Archivist** in place of your individual index roles.",inline:false},
-   {name:"🔄 Automatic updates",value:"Your server nickname will match your Roblox username when Discord permissions allow it. Your achievement roles refresh approximately every 10–15 minutes. Use `/unlink-roblox` to disconnect.",inline:false}
-  ],footer:{text:"Public profile lookup • Does not verify account ownership"}
+  description:"Link your Roblox using your username or user ID to gain access to custom roles.\n\nNo login required. View all available roles in <#1573557645728682114>."
  }],components:[{type:1,components:[{type:2,style:1,label:"Link Roblox",emoji:{name:"🎮"},custom_id:"roblox_public_link_open"}]}],allowed_mentions:{parse:[]}};
  const storedLink=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='roblox_panel_id'").first();
  const storedRevision=await env.DB.prepare("SELECT value FROM community_intro_setup WHERE key='roblox_panel_revision'").first();
@@ -3778,11 +3810,14 @@ async function ensureRobloxRoleReferenceChannel(env){
  const badges=roles.filter(item=>item.kind==="badge");
  const passes=roles.filter(item=>item.kind==="gamepass");
  const payload={embeds:[
-  {title:"📚 Grand Archivist",color:0xB58AF0,description:"Complete all 13 mapped index badges to earn this mastery role. It replaces the individual index roles while leaving all other badge and gamepass roles unchanged."},
+  {title:"📚 Grand Archivist",color:0xB58AF0,description:"Complete all 13 index badges to unlock Grand Archivist. Choose whether to swap your individual index roles for this mastery role or keep them. Other roles are unaffected."},
   ...buildEmbeds(badges,"badge","🏅 Badge Roles ("+badges.length+")",0x8555D9),
   ...buildEmbeds(passes,"gamepass","🎟️ Game Pass Roles ("+passes.length+")",0xA27A3F)
- ],allowed_mentions:{parse:[]}};
- const revision="roblox-role-reference-v4-index-mastery";
+ ],components:[{type:1,components:[
+  {type:2,style:1,label:"Equip Grand Archivist",emoji:{name:"📚"},custom_id:"roblox_index_compact"},
+  {type:2,style:2,label:"Keep Individual Roles",custom_id:"roblox_index_individual"}
+ ]}],allowed_mentions:{parse:[]}};
+ const revision="roblox-role-reference-v5-optional-mastery";
  let message=null;
  if(state?.channel_id===String(channel.id)&&state?.message_id){
   const existing=await discordApi(env,"/channels/"+channel.id+"/messages/"+state.message_id);
@@ -4353,6 +4388,7 @@ async scheduled(event,env,ctx){
   if(i.type===3&&birthdayId==="syndicate_birthday_remove")return delayedReply(i,env,ctx,()=>birthdayRemoveButton(i,env));
   if(i.type===5&&birthdayId==="syndicate_birthday_modal")return delayedReply(i,env,ctx,()=>birthdayModalSubmit(i,env));
   if(i.type===3&&i.data?.custom_id==="roblox_public_link_open")return robloxPublicLinkModal();
+  if(i.type===3&&["roblox_index_compact","roblox_index_individual"].includes(i.data?.custom_id))return delayedReply(i,env,ctx,()=>indexRoleChoice(i,env,i.data.custom_id==="roblox_index_compact"));
    if(i.type===5&&i.data?.custom_id==="roblox_public_link_modal"){
     const accountInput=String(i.data.components?.flatMap(row=>row.components||[]).find(component=>component.custom_id==="roblox_username_or_id")?.value||"").trim();
     if(!accountInput||accountInput.length>50)return reply("Enter a Roblox username or user ID (up to 50 characters).");
